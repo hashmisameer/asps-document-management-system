@@ -1,0 +1,15 @@
+# Normalise to LF in the repository so that migration checksums stay stable
+# across Windows and Unix checkouts (see backend/src/database/migrate.ts).
+* text=auto eol=lf
+
+*.sql   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.pdf   binary
+*.ico   binary

@@ -1,0 +1,43 @@
+{
+  "name": "asps-dms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASPS Document Management System — internal employee document management for ASPS International",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,magenta \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace shared && npm run build --workspace backend && npm run build --workspace frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "test": "npm run test --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspace backend",
+    "test:integration": "npm run test:integration --workspace backend",
+    "db:migrate": "npm run db:migrate --workspace backend",
+    "db:seed": "npm run db:seed --workspace backend",
+    "db:status": "npm run db:status --workspace backend",
+    "check:sql-safety": "node scripts/check-sql-safety.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "verify": "npm run lint && npm run typecheck && npm run check:sql-safety && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.15.0",
+    "globals": "^15.12.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.16.0"
+  }
+}

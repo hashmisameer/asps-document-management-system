@@ -1,0 +1,73 @@
+/**
+ * Auditable actions (Section 48).
+ * Values are stored verbatim in dbo.AuditLogs.Action.
+ */
+export const AUDIT_ACTIONS = {
+  LOGIN_SUCCESS: 'LOGIN_SUCCESS',
+  LOGIN_FAILED: 'LOGIN_FAILED',
+  LOGOUT: 'LOGOUT',
+
+  EMPLOYEE_CREATED: 'EMPLOYEE_CREATED',
+  EMPLOYEE_UPDATED: 'EMPLOYEE_UPDATED',
+  EMPLOYEE_ARCHIVED: 'EMPLOYEE_ARCHIVED',
+
+  DOCUMENT_UPLOADED: 'DOCUMENT_UPLOADED',
+  DOCUMENT_REPLACED: 'DOCUMENT_REPLACED',
+  DOCUMENT_VIEWED: 'DOCUMENT_VIEWED',
+  DOCUMENT_DOWNLOADED: 'DOCUMENT_DOWNLOADED',
+  DOCUMENT_VERIFIED: 'DOCUMENT_VERIFIED',
+  DOCUMENT_REJECTED: 'DOCUMENT_REJECTED',
+  DOCUMENT_ARCHIVED: 'DOCUMENT_ARCHIVED',
+  DEADLINE_CHANGED: 'DEADLINE_CHANGED',
+
+  SIGNATURE_UPLOADED: 'SIGNATURE_UPLOADED',
+  SIGNATURE_REPLACED: 'SIGNATURE_REPLACED',
+  SIGNATURE_DETECTION_RUN: 'SIGNATURE_DETECTION_RUN',
+  SIGNATURE_ACCEPTED: 'SIGNATURE_ACCEPTED',
+  SIGNATURE_ADJUSTED: 'SIGNATURE_ADJUSTED',
+  SIGNATURE_PLACED_MANUALLY: 'SIGNATURE_PLACED_MANUALLY',
+  SIGNATURE_REMOVED: 'SIGNATURE_REMOVED',
+  SIGNATURE_SKIPPED: 'SIGNATURE_SKIPPED',
+  PROCESSED_PDF_GENERATED: 'PROCESSED_PDF_GENERATED',
+
+  DOCUMENT_TYPE_CREATED: 'DOCUMENT_TYPE_CREATED',
+  DOCUMENT_TYPE_UPDATED: 'DOCUMENT_TYPE_UPDATED',
+  USER_CREATED: 'USER_CREATED',
+  USER_UPDATED: 'USER_UPDATED',
+} as const
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
+
+export const AUDIT_ENTITY_TYPES = {
+  USER: 'User',
+  EMPLOYEE: 'Employee',
+  DOCUMENT: 'EmployeeDocument',
+  DOCUMENT_TYPE: 'DocumentType',
+  SIGNATURE: 'EmployeeSignature',
+  SIGNATURE_PLACEMENT: 'SignaturePlacement',
+} as const
+
+export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[keyof typeof AUDIT_ENTITY_TYPES]
+
+/**
+ * Keys that must NEVER appear in AuditLogs.Metadata or application logs
+ * (Section 59). The audit service strips these before insert.
+ */
+export const AUDIT_REDACTED_KEYS: readonly string[] = [
+  'password',
+  'passwordHash',
+  'passwordSalt',
+  'currentPassword',
+  'newPassword',
+  'token',
+  'tokenHash',
+  'sessionToken',
+  'cookie',
+  'authorization',
+  'connectionString',
+  'dbPassword',
+  'secret',
+  'apiKey',
+  'fileBuffer',
+  'fileContent',
+]

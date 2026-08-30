@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------
+# ASPS-DMS — secrets, employee data and generated artefacts
+# NOTE: source code must never be ignored. Keep patterns specific.
+# ---------------------------------------------------------------
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+
+# Dependencies
+node_modules/
+.npm/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Employee documents & signatures — NEVER commit
+# Anchored to the repo root ONLY, so that source folders named
+# 'signatures', 'processed' or 'temp' are never accidentally ignored.
+/document-storage/
+/DOCUMENT_STORAGE/
+/storage/
+/uploads/
+/private/
+/temp/
+/tmp/
+**/storage/documents/
+**/storage/processed/
+**/storage/signatures/
+
+# Real document/scan formats anywhere outside curated assets
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+*.heic
+!frontend/src/assets/**
+!docs/assets/**
+!backend/tests/fixtures/**
+
+# SQL backups / data dumps
+*.bak
+*.mdf
+*.ldf
+*.trn
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS / editor
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.sample.json
+
+# Playwright
+test-results/
+playwright-report/

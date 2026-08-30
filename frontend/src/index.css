@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+
+/**
+ * ASPS-DMS design tokens.
+ *
+ * A restrained corporate palette: one blue for interaction, neutral greys for
+ * structure, and status colours that stay legible as small badge text. No
+ * gradients, no decorative colour.
+ */
+@theme {
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
+  --color-brand-900: #1e3a8a;
+
+  /* Document and deadline status colours. */
+  --color-status-pending: #b45309;
+  --color-status-uploaded: #1d4ed8;
+  --color-status-review: #6d28d9;
+  --color-status-verified: #15803d;
+  --color-status-rejected: #b91c1c;
+  --color-status-overdue: #b91c1c;
+  --color-status-duesoon: #b45309;
+
+  --radius-card: 0.75rem;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus for keyboard users - the app is form-heavy and must stay
+   fully operable without a mouse. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-600);
+  outline-offset: 2px;
+}

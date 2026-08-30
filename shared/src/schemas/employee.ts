@@ -1,0 +1,46 @@
+import { z } from 'zod'
+import { dateOnlySchema, optionalShortText, paginationQuerySchema } from './common.js'
+
+/**
+ * Employee creation.
+ *
+ * Business rules, Section 89 items 1-5, enforced identically here (browser)
+ * and by the NOT NULL / NULL columns in dbo.Employees (server):
+ *
+ *   EmployeeCode  AUTO-GENERATED  - never accepted from the client
+ *   EmployeeName  REQUIRED
+ *   JoiningDate   REQUIRED
+ *   Department    OPTIONAL
+ *   Designation   OPTIONAL
+ */
+export const createEmployeeSchema = z.object({
+  employeeName: z
+    .string()
+    .trim()
+    .min(1, 'Employee name is required')
+    .max(150, 'Employee name must be 150 characters or fewer'),
+  joiningDate: dateOnlySchema,
+  department: optionalShortText(100),
+  designation: optionalShortText(100),
+})
+
+export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>
+
+/**
+ * Employee update. EmployeeCode is absent by design: it is immutable after
+ * creation (Section 11) and there is no route that can change it.
+ */
+export const updateEmployeeSchema = createEmployeeSchema.partial().refine(
+  (v) => Object.keys(v).length > 0,
+  { message: 'At least one field must be provided' },
+)
+
+export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>
+
+export const employeeListQuerySchema = paginationQuerySchema.extend({
+  department: z.string().trim().max(100).optional(),
+  designation: z.string().trim().max(100).optional(),
+  includeArchived: z.coerce.boolean().default(false),
+})
+
+export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>
