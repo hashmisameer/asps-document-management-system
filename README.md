@@ -7,8 +7,8 @@ deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
 > **Status: Milestone 1 complete in code; Milestone 2 (authentication) landed.**
-> The API process, authentication, shared business rules and safety checks run
-> and are unit-tested. The schema, migration runner and every SQL query are
+> The API process, authentication, the signed-in SPA shell, shared business
+> rules and safety checks run and are unit-tested. The schema, migration runner and every SQL query are
 > written and typechecked but have **not yet been run against a real database**,
 > because no SQL Server instance is available yet - so nothing that reads or
 > writes a table has been exercised end to end.
@@ -99,6 +99,27 @@ trusted, so a caller cannot choose its own log correlation id.
 | `POST /api/auth/logout` | Revokes the session and clears the cookie. |
 | `GET /api/auth/me` | The signed-in user. |
 | `POST /api/auth/change-password` | Changes own password; ends every other session. |
+
+## Frontend
+
+A single-page React app. `/login` is the only route outside the gate;
+everything else goes through `ProtectedRoute`, which sends a signed-out user to
+the login form and an account with `MustChangePassword` to the one page that
+lets it set a password.
+
+- **No token is ever held in JavaScript.** The session lives in an httpOnly
+  cookie the browser sends because the API client sets `withCredentials`. There
+  is nothing in `localStorage`, so closing the tab leaves nothing behind on a
+  shared office machine, and signing out clears the whole query cache so the
+  next person sees none of the previous user's data.
+- **Forms validate with the same Zod schemas as the API**, so the two cannot
+  disagree about what is acceptable. The client check saves a round trip; the
+  server rejects the same input again regardless.
+- **Navigation is built from permissions**, not roles, so an Admin and a Viewer
+  get different menus from the same code.
+- **Every failure becomes one `ApiError`**, so a component never sees an axios
+  error. A request that never reached the server says so rather than reporting a
+  generic failure.
 
 ## Authentication
 
