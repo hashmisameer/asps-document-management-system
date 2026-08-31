@@ -165,10 +165,33 @@ function fullYear(value: number): number {
  * the form was printed in American order is a worse failure than accepting one
  * whose date could be read two ways.
  */
+/**
+ * The same text with the gaps a scanner leaves inside a date closed up.
+ *
+ * A printed form puts each character of a date in its own box, and OCR reads
+ * those boxes as separate tokens: '01 - 04 - 2026', or '0 1 / 0 4 / 2 0 2 6'.
+ * Both are the date a person reads at a glance, and neither matched - which
+ * made the identity check refuse service cards that were perfectly correct.
+ *
+ * Only whitespace touching a digit or a date separator is closed, so two words
+ * are never joined and nothing outside a number is affected.
+ */
+function closeDateGaps(text: string): string {
+  return text
+    .replace(/(?<=\d)[ \t]+(?=[\d/\-.])/g, '')
+    .replace(/(?<=[/\-.])[ \t]+(?=\d)/g, '')
+}
+
 export function extractDates(text: string): Set<string> {
   const found = new Set<string>()
-  const upper = text.toUpperCase()
+  const original = text.toUpperCase()
+  const closed = closeDateGaps(original)
 
+  // Both readings are searched. The closed-up one finds a date OCR spaced out;
+  // the original is still read because closing gaps can run two separate
+  // numbers together, and a date invented that way would pass a document that
+  // should have been refused.
+  for (const upper of closed === original ? [original] : [original, closed]) {
   // 2024-04-01, 2024/04/01
   for (const match of upper.matchAll(/\b(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})\b/g)) {
     const [, y, m, d] = match
@@ -208,6 +231,8 @@ export function extractDates(text: string): Set<string> {
     const day = Number(d)
     const year = fullYear(Number(y))
     if (month !== undefined && isRealDate(year, month, day)) found.add(iso(year, month, day))
+  }
+
   }
 
   return found

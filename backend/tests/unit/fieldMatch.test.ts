@@ -90,6 +90,39 @@ describe('matchDigits', () => {
 })
 
 // asps-dms:allow-secret - the documented placeholder PAN, not anyone's.
+describe('matchDate, as a scanner reads a printed form', () => {
+  // A form prints each part of a date in its own box, and OCR reads the boxes
+  // as separate tokens. These are the readings that made the identity check
+  // refuse service cards that were perfectly correct.
+  it('matches a date spaced around its separators', () => {
+    expect(matchDate('2026-04-01', 'Date of Joining: 01 - 04 - 2026')).toBe(true)
+  })
+
+  it('matches a date whose digits are spaced apart, box by box', () => {
+    expect(matchDate('2026-04-01', 'Date of Joining: 0 1 / 0 4 / 2 0 2 6')).toBe(true)
+  })
+
+  it('still matches the ordinary printings', () => {
+    for (const text of [
+      'DOJ 01/04/2026',
+      'Date of Joining 1 April 2026',
+      'Joining Date: April 1, 2026',
+      'Date of Joining 2026-04-01',
+      'DATE OF JOINING 01 APR 2026',
+    ]) {
+      expect(matchDate('2026-04-01', text), text).toBe(true)
+    }
+  })
+
+  it('does not invent a date by running two separate numbers together', () => {
+    // Closing the gaps must not turn neighbouring numbers into a date that is
+    // not on the page: a false match passes a document that should have been
+    // refused, which is worse than a refusal somebody can override.
+    expect(matchDate('2026-04-01', 'Ref 1 Page 04 of 2026 copies')).toBe(false)
+    expect(matchDate('2026-04-01', 'Invoice 3390 4 2026')).toBe(false)
+  })
+})
+
 describe('matchPan', () => {
   it('matches the PAN exactly, in any case', () => {
     // asps-dms:allow-secret
