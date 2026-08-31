@@ -66,10 +66,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await logout()
-    // Everything cached was fetched as this user, and this is a shared office
-    // machine: the next person to sign in must not see any of it.
-    queryClient.clear()
+
+    // ORDER MATTERS, and getting it wrong is not visible in the code.
+    //
+    // The signed-out answer is written FIRST, onto the live query, so the
+    // component watching it re-renders and the app drops to signed-out at once.
     queryClient.setQueryData(AUTH_QUERY_KEY, null)
+
+    // Then everything that was fetched as this user goes, because this is a
+    // shared office machine and the next person must not see any of it.
+    //
+    // removeQueries rather than clear(). clear() empties the whole cache
+    // INCLUDING the auth query, which leaves the mounted observer bound to a
+    // query object that no longer exists: it stops being told about anything,
+    // so a later setQueryData writes somewhere nothing is watching. The session
+    // really does end on the server, and the browser carries on showing a
+    // signed-in header until the page is reloaded.
+    queryClient.removeQueries({
+      predicate: (query) => query.queryKey[0] !== AUTH_QUERY_KEY[0],
+    })
   }, [queryClient])
 
   const can = useCallback(

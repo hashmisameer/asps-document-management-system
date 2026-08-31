@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
+import { RequiredDocuments } from './RequiredDocuments.js'
 
 type Field = 'employeeName' | 'joiningDate' | 'department' | 'designation'
 
@@ -123,7 +124,7 @@ export function EmployeeFormPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-2xl">
+    <main className={isEdit ? 'mx-auto w-full max-w-2xl' : 'mx-auto w-full max-w-5xl'}>
       <h1 className="text-xl font-semibold text-slate-900">
         {isEdit ? `Edit ${existing.data?.employeeName ?? 'employee'}` : 'Add employee'}
       </h1>
@@ -136,10 +137,11 @@ export function EmployeeFormPage() {
         </p>
       )}
 
+      <div className={isEdit ? 'mt-4' : 'mt-4 grid gap-6 lg:grid-cols-2 lg:items-start'}>
       <form
         onSubmit={handleSubmit}
         noValidate
-        className="mt-4 flex flex-col gap-4 rounded-card border border-slate-200 bg-white p-6 shadow-sm"
+        className="flex flex-col gap-4 rounded-card border border-slate-200 bg-white p-6 shadow-sm"
       >
         {failure ? (
           <Alert title="Could not save" referenceId={failure.referenceId}>
@@ -198,6 +200,11 @@ export function EmployeeFormPage() {
           </Link>
         </div>
       </form>
+
+      {/* Only when adding. On edit the checklist already exists, and the
+          employee's own page shows it with what has actually come in. */}
+      {isEdit ? null : <RequiredDocuments joiningDate={values.joiningDate} />}
+      </div>
     </main>
   )
 }
