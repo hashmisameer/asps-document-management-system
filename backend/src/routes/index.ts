@@ -5,6 +5,7 @@ import { documentTypeRouter } from './documentType.routes.js'
 import { employeeRouter } from './employee.routes.js'
 import { healthRouter } from './health.routes.js'
 import { meRouter } from './me.routes.js'
+import { reminderRouter } from './reminder.routes.js'
 import { requireAuth, requirePasswordChanged } from '../middleware/requireAuth.js'
 
 /**
@@ -29,6 +30,7 @@ apiRouter.use(authRouter)
 const authenticated: RequestHandler[] = [requireAuth, requirePasswordChanged]
 
 apiRouter.use('/me', ...authenticated, meRouter)
+apiRouter.use('/reminders', ...authenticated, reminderRouter)
 apiRouter.use('/employees', ...authenticated, employeeRouter)
 apiRouter.use('/documents', ...authenticated, documentRouter)
 apiRouter.use('/document-types', ...authenticated, documentTypeRouter)

@@ -122,6 +122,7 @@ trusted, so a caller cannot choose its own log correlation id.
 | `GET /api/me/signature` | The signed-in user's own authorising signature. |
 | `POST /api/me/signature` | Saves it, as drawn on the pad (multipart). |
 | `GET /api/me/signature/image` | Streams it. |
+| `POST /api/reminders/send` | Emails the pending-documents digest now. `?dryRun=true` renders it without sending. |
 | `GET /api/employees/:id/signature` | Whether a signature is on file, and its size. |
 | `POST /api/employees/:id/signature` | Uploads or replaces it (multipart). |
 | `GET /api/employees/:id/signature/image` | Streams the signature image. |
@@ -352,7 +353,38 @@ stamper, not in the shared module, because the browser editor has no use for it;
 both its four rotations and the shared transform are pinned to absolute values
 in the tests rather than round-tripped.
 
+## Reminders
+
+- **One email, to several people, listing who still owes what.** Each entry is
+  the employee's code and name and the documents with no file against them,
+  worst deadline first. `REMINDER_RECIPIENTS` is a comma-separated list, because
+  who gets chased is an office decision rather than a code change.
+- **It repeats until the file is uploaded.** The digest is rebuilt from the
+  current state on every run and nothing is stored about a reminder having been
+  sent, so there is no record to drift out of step with the checklist. A
+  document stops appearing the moment its file arrives, and not before.
+- **Pending means no file, not a status.** A rejected document still has no
+  acceptable file against it, and a reminder that stopped at `Rejected` would
+  drop exactly the documents most in need of chasing.
+- **A document that is not due yet is left out**, unless
+  `REMINDER_INCLUDE_NOT_YET_DUE` says otherwise. Every new employee starts with
+  ten future documents, and listing them from day one makes the digest a copy of
+  the checklist that nobody reads. A document with no deadline at all is still
+  included: it is genuinely outstanding.
+- **Nothing is sent when nothing is outstanding.** A daily email saying all is
+  well teaches people to delete it unread, and takes the one that mattered with
+  it.
+- **The daily run is a separate process**, `npm run send-reminders`, scheduled
+  by Windows Task Scheduler - not a timer inside the API, which would stop at
+  the next restart and would send twice if the API were ever run as two
+  processes. A hung mail server cannot wedge the API either. `-- --dry-run`
+  prints what would go out and sends nothing.
+- **Sending is off until `REMINDER_ENABLED` is set**, so a freshly deployed
+  server cannot start emailing the office by itself. A dry run works regardless,
+  which is how the wording gets checked before anyone is on the receiving end.
+
 ## Checks
+
 
 ```bash
 npm run verify              # lint + typecheck + SQL safety + secrets + tests

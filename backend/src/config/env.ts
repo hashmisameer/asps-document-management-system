@@ -71,6 +71,38 @@ const envSchema = z
     TESSERACT_LANG_PATH: z.string().min(1).optional(),
     TESSERACT_CORE_PATH: z.string().min(1).optional(),
     TESSERACT_CACHE_PATH: z.string().min(1).optional(),
+    /**
+     * Reminder email.
+     *
+     * REMINDER_RECIPIENTS is a comma-separated list, because the digest goes to
+     * several people at once and a list in configuration is the whole feature:
+     * who is chased is an office decision, not a code change.
+     */
+    REMINDER_ENABLED: booleanish.default('false'),
+    REMINDER_RECIPIENTS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((address) => address.trim())
+          .filter((address) => address.length > 0),
+      ),
+    /**
+     * Whether a document that is not due yet is worth an email.
+     *
+     * Off by default. Every new employee starts with ten undated-but-future
+     * documents, and listing all of them from day one turns the digest into a
+     * copy of the checklist that nobody reads. A reminder starts when the
+     * document's own date arrives, and repeats until the file is uploaded.
+     */
+    REMINDER_INCLUDE_NOT_YET_DUE: booleanish.default('false'),
+    SMTP_HOST: z.string().min(1).optional(),
+    SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(25),
+    SMTP_SECURE: booleanish.default('false'),
+    SMTP_USER: z.string().min(1).optional(),
+    SMTP_PASSWORD: z.string().min(1).optional(),
+    SMTP_FROM: z.string().min(1).optional(),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     LOG_DIR: z.string().default('./logs'),
   })
@@ -82,6 +114,20 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['DB_INSTANCE'],
         message: 'Set either DB_INSTANCE or DB_PORT, not both',
+      })
+    }
+    if (v.REMINDER_ENABLED && !v.SMTP_HOST) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SMTP_HOST'],
+        message: 'REMINDER_ENABLED needs SMTP_HOST; reminders have nowhere to go without it',
+      })
+    }
+    if (v.REMINDER_ENABLED && v.REMINDER_RECIPIENTS.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['REMINDER_RECIPIENTS'],
+        message: 'REMINDER_ENABLED needs at least one address in REMINDER_RECIPIENTS',
       })
     }
     if (v.NODE_ENV === 'production' && !v.COOKIE_SECURE && v.COOKIE_SAME_SITE === 'none') {

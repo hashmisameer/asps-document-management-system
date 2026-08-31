@@ -46,6 +46,9 @@ export const PERMISSIONS = {
   DOCUMENT_TYPE_READ: 'documentType:read',
   DOCUMENT_TYPE_MANAGE: 'documentType:manage',
 
+  /** Sending the pending-documents digest by email, now rather than on schedule. */
+  REMINDER_SEND: 'reminder:send',
+
   REPORT_READ: 'report:read',
   AUDIT_READ: 'audit:read',
   USER_MANAGE: 'user:manage',
@@ -75,6 +78,7 @@ const HR_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.SIGNATURE_SKIP,
   PERMISSIONS.DOCUMENT_TYPE_READ,
   PERMISSIONS.DOCUMENT_TYPE_MANAGE,
+  PERMISSIONS.REMINDER_SEND,
   PERMISSIONS.REPORT_READ,
   PERMISSIONS.AUDIT_READ,
   PERMISSIONS.SETTINGS_MANAGE,

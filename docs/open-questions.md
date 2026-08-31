@@ -89,6 +89,8 @@ conservatively. Development is on Node 24.20.0.
 | Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords.** Accounts are created with `npm run db:create-user`, which prints a temporary password once and always sets `MustChangePassword`, so the first login forces a change. |
 | Q12 | Backup policy for the database and the storage folder: owner and schedule | M6 | Not assumed. |
 | Q13 | Somewhere on the company server to put the Tesseract language data, and who puts it there | **NOW** | Not assumed. The server has no route to the internet, so `tesseract.js` cannot fetch `eng.traineddata` on first use and **every OCR pass fails** - which means every scanned document reaches HR as an identity check that could not be read. The files are vendored into a folder and pointed at with `TESSERACT_LANG_PATH`, `TESSERACT_CORE_PATH` and `TESSERACT_CACHE_PATH` (see `backend/.env.example`). PDFs carrying their own text layer are unaffected. |
+| Q15 | The company's mail relay: host, port, whether it needs credentials, and the address reminders should come FROM | **NOW** | Not assumed. `SMTP_HOST` is unset, so reminders can be built and previewed (`npm run send-reminders -- --dry-run`) but not sent. An internal relay usually accepts mail from a server on the LAN with no credentials, which is why `SMTP_USER` and `SMTP_PASSWORD` are optional. Also needed: **who receives the digest** - `REMINDER_RECIPIENTS` is a comma-separated list. |
+| Q16 | How often should the reminder go out, and at what time? | **NOW** | **Daily** is assumed. The send is one command (`npm run send-reminders`) run by Windows Task Scheduler, so the frequency is a scheduler setting and not a code change. |
 | Q14 | May any HR user override a failed identity check, or only an Admin? | **NOW** | **Any user who may upload.** The person holding the document is the one who can see whether a poor scan is genuine, and a refusal that only an Admin can clear would stop the day's filing. Every override is stored on the document with its reason and its author, so the control is accountability rather than gatekeeping. To change: require `DOCUMENT_REPLACE` or a new permission in `runIdentityCheck` in document.service.ts. |
 
 ---
@@ -108,7 +110,12 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    it is correct the moment it is looked at and needs no scheduled job.
 5. **`DocumentStatus` and `SignatureStatus` are separate columns.** A document can
    legitimately be `Verified` + `Skipped`.
-6. **In-app notifications only.** No email, SMS or WhatsApp (Section 81).
+6. **Email reminders, and otherwise in-app only.** Section 81 said no email,
+   SMS or WhatsApp; email reminders were asked for on 2026-08-31 and now exist -
+   one digest to a configured list of addresses, listing the employees who still
+   owe documents, repeating until the file is uploaded. No SMS and no WhatsApp.
+   Sending is off until `REMINDER_ENABLED` is set, so a deployed server cannot
+   start emailing the office by itself.
 7. **No Active Directory / LDAP / Entra ID.** Local `Users` table only (Section 84).
 8. **Detection is advisory.** No code path applies a signature from an OCR/CV
    result without an explicit HR confirmation.

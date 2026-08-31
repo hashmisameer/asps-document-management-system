@@ -26,6 +26,8 @@ export const AUDIT_ACTIONS = {
   /** An upload the identity check refused, and which was not overridden. */
   DOCUMENT_IDENTITY_REFUSED: 'DOCUMENT_IDENTITY_REFUSED',
   DEADLINE_CHANGED: 'DEADLINE_CHANGED',
+  /** A pending-documents digest was emailed, and to how many addresses. */
+  REMINDER_SENT: 'REMINDER_SENT',
 
   SIGNATURE_UPLOADED: 'SIGNATURE_UPLOADED',
   SIGNATURE_REPLACED: 'SIGNATURE_REPLACED',
@@ -59,6 +61,7 @@ export const AUDIT_ENTITY_TYPES = {
   SIGNATURE: 'EmployeeSignature',
   USER_SIGNATURE: 'UserSignature',
   SIGNATURE_PLACEMENT: 'SignaturePlacement',
+  REMINDER: 'Reminder',
 } as const
 
 export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[keyof typeof AUDIT_ENTITY_TYPES]

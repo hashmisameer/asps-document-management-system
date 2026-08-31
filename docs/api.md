@@ -311,7 +311,60 @@ original. There is no partial update; an empty array removes the signature.
 
 ---
 
+## Reminders
+
+| Method | URL | Permission | Roles |
+|---|---|---|---|
+| POST | `/reminders/send` | `reminder:send` | Admin, HR |
+
+One email to everyone in `REMINDER_RECIPIENTS`, listing the employees who still
+owe documents and naming those documents. It goes out again on every run until
+the file is uploaded.
+
+`?dryRun=true` builds and renders the digest and sends nothing, returning the
+text body as `preview`. Use it to see exactly what would go out - to real
+colleagues - before it does. A dry run works even when sending is switched off.
+
+```bash
+# See what would be sent
+curl -b jar.txt -X POST 'http://127.0.0.1:4000/api/reminders/send?dryRun=true'
+
+# Actually send it
+curl -b jar.txt -X POST http://127.0.0.1:4000/api/reminders/send
+```
+
+```jsonc
+// Response
+{
+  "reminder": {
+    "sent": false,
+    "dryRun": true,
+    "recipientCount": 2,
+    "employeeCount": 5,
+    "documentCount": 44,
+    "overdueCount": 44,
+    "subject": "ASPS-DMS: 5 employees with pending documents (44 overdue)",
+    "preview": "5 employees have documents that have not been uploaded. ..."
+  }
+}
+```
+
+Two 409s are expected rather than faults: `REMINDER_ENABLED` is not set, or
+`REMINDER_RECIPIENTS` is empty. Nothing is sent when nothing is outstanding -
+`sent` is false and the counts are zero.
+
+The scheduled run is the same code as a command, meant for Windows Task
+Scheduler:
+
+```bash
+npm run send-reminders                 # send
+npm run send-reminders -- --dry-run    # print it, send nothing
+```
+
+---
+
 ## Error envelope
+
 
 Every failure has the same shape:
 
