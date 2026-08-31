@@ -9,7 +9,7 @@ import {
 } from '@asps-dms/shared'
 import * as employeeService from '../services/employee.service.js'
 import { requestContext } from '../services/audit.service.js'
-import { UnauthenticatedError } from '../utils/errors.js'
+import { BadRequestError, UnauthenticatedError } from '../utils/errors.js'
 import { parseBody, parseParams, parseQuery } from '../utils/validation.js'
 
 /**
@@ -90,4 +90,39 @@ export const restore: RequestHandler = async (req, res) => {
 export const listDocuments: RequestHandler = async (req, res) => {
   const { employeeId } = parseParams(req, employeeParamsSchema)
   res.json({ documents: await employeeService.listDocuments(employeeId) })
+}
+
+/**
+ * Uploads or replaces the employee's photograph.
+ *
+ * Multipart, in a field named 'file', like every other upload here.
+ */
+export const uploadPhoto: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  if (!req.file) {
+    throw new BadRequestError("Attach the photograph in a form field named 'file'.")
+  }
+  const employee = await employeeService.uploadPhoto(
+    employeeId,
+    req.file,
+    actorOf(req),
+    requestContext(req),
+  )
+  res.json({ employee })
+}
+
+/**
+ * Streams the photograph.
+ *
+ * `no-store`, like a document and a signature: a photograph of a member of
+ * staff must not sit in a shared cache.
+ */
+export const downloadPhoto: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  const { stream, mimeType } = await employeeService.openPhoto(employeeId)
+
+  res.setHeader('Content-Type', mimeType)
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  stream.pipe(res)
 }

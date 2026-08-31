@@ -24,6 +24,8 @@ async function pdfFor(name: string, code: string): Promise<Buffer> {
   return Buffer.from(await pdf.save())
 }
 
+let codeSeq = 0
+
 describe('the pending-documents reminder', () => {
   beforeAll(async () => {
     await ensureSchema()
@@ -42,7 +44,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
     const employee = created.body.employee
 
     const before = await reminderRepository.findPendingDocuments()
@@ -80,7 +82,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Departed Person', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Departed Person', joiningDate: '2026-04-01' })
     const employeeId = created.body.employee.employeeId
 
     expect(
@@ -103,7 +105,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
     const employee = created.body.employee
 
     const rows = await reminderRepository.findPendingDocuments()

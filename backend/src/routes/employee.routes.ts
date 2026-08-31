@@ -63,6 +63,22 @@ employeeRouter.get(
 
 /* The signature belongs to the employee, not to any one document: it is
    uploaded once and reused on everything they sign (Section 24). */
+/* The photograph. Reading it needs only EMPLOYEE_READ - it is part of the
+   record - while replacing it is an edit of the record, so it takes
+   EMPLOYEE_UPDATE rather than a permission of its own. */
+employeeRouter.post(
+  '/:employeeId/photo',
+  requirePermission(PERMISSIONS.EMPLOYEE_UPDATE),
+  uploadSingleDocument,
+  employeeController.uploadPhoto,
+)
+
+employeeRouter.get(
+  '/:employeeId/photo/image',
+  requirePermission(PERMISSIONS.EMPLOYEE_READ),
+  employeeController.downloadPhoto,
+)
+
 employeeRouter.get(
   '/:employeeId/signature',
   requirePermission(PERMISSIONS.SIGNATURE_READ),

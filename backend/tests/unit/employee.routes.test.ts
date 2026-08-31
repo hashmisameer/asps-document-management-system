@@ -154,7 +154,7 @@ describe('permissions', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.VIEWER))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
+      .send({ employeeCode: 'EMP001', employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
 
     expect(response.status).toBe(403)
     expect(db.createEmployee).not.toHaveBeenCalled()
@@ -173,7 +173,12 @@ describe('permissions', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01', department: 'Accounts' })
+      .send({
+        employeeCode: 'EMP001',
+        employeeName: 'Ravi Kumar',
+        joiningDate: '2026-09-01',
+        department: 'Accounts',
+      })
 
     expect(response.status).toBe(201)
     expect(response.body.employee.employeeCode).toBe('EMP001')
@@ -185,7 +190,7 @@ describe('validation', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar' })
+      .send({ employeeCode: 'EMP001', employeeName: 'Ravi Kumar' })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe(API_ERROR_CODES.VALIDATION_FAILED)
@@ -203,18 +208,31 @@ describe('validation', () => {
     expect(db.createEmployee).not.toHaveBeenCalled()
   })
 
-  it('never lets a client choose the employee code', async () => {
+  it('takes the employee code from the client, upper-cased', async () => {
+    // Changed deliberately on 2026-08-31. The code used to be generated and
+    // stripped from the request; it is now typed by HR, because the identity
+    // check compares it with the code printed ON the document, and a generated
+    // EMP003 would never match a real service card.
     await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
       .send({
         employeeName: 'Ravi Kumar',
         joiningDate: '2026-09-01',
-        employeeCode: 'EMP999',
+        employeeCode: 'asps/4471',
       })
 
-    // The schema strips it, so it never reaches the repository at all.
-    expect(db.createEmployee.mock.calls[0]?.[0]).not.toHaveProperty('employeeCode')
+    expect(db.createEmployee.mock.calls[0]?.[0]).toHaveProperty('employeeCode', 'ASPS/4471')
+  })
+
+  it('refuses an employee without a code', async () => {
+    const response = await request(app)
+      .post('/api/employees')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
+
+    expect(response.status).toBe(400)
+    expect(db.createEmployee).not.toHaveBeenCalled()
   })
 
   it('rejects an id that is not a positive integer', async () => {

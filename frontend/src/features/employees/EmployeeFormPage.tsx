@@ -12,9 +12,9 @@ import { DocumentChecklist } from '../documents/DocumentChecklist.js'
 import { updateDocumentDeadline } from '../documents/api.js'
 import { fetchEmployeeDocuments, listDocumentTypes, documentTypeKeys } from './api.js'
 
-type Field = 'employeeName' | 'joiningDate' | 'department' | 'designation'
+type Field = 'employeeCode' | 'employeeName' | 'joiningDate' | 'department' | 'designation'
 
-const EMPTY = { employeeName: '', joiningDate: '', department: '', designation: '' }
+const EMPTY = { employeeCode: '', employeeName: '', joiningDate: '', department: '', designation: '' }
 
 /**
  * Add or edit an employee.
@@ -58,6 +58,7 @@ export function EmployeeFormPage() {
   useEffect(() => {
     if (!existing.data) return
     setValues({
+      employeeCode: existing.data.employeeCode,
       employeeName: existing.data.employeeName,
       joiningDate: existing.data.joiningDate,
       department: existing.data.department ?? '',
@@ -125,6 +126,7 @@ export function EmployeeFormPage() {
       const apiError = error instanceof ApiError ? error : null
       setFailure(apiError)
       setFieldErrors({
+        employeeCode: apiError?.issueFor('employeeCode'),
         employeeName: apiError?.issueFor('employeeName'),
         joiningDate: apiError?.issueFor('joiningDate'),
         department: apiError?.issueFor('department'),
@@ -213,6 +215,17 @@ export function EmployeeFormPage() {
             {failure.message}
           </Alert>
         ) : null}
+
+        {isEdit ? null : (
+          <TextField
+            label="Employee ID"
+            hint="Optional - leave blank and one is generated (EMP001, EMP002...). It cannot be changed later."
+            autoComplete="off"
+            value={values.employeeCode}
+            error={fieldErrors.employeeCode}
+            onChange={set('employeeCode')}
+          />
+        )}
 
         <TextField
           label="Employee name"

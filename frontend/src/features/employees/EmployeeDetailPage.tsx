@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
 import { SignatureCard } from '../signatures/SignatureCard.js'
+import { PhotoCard } from './PhotoCard.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDate } from '../../lib/format.js'
 import {
@@ -126,6 +127,9 @@ export function EmployeeDetailPage() {
         </div>
       )}
 
+      <div className="mt-4">
+        <PhotoCard employee={profile} />
+      </div>
       <Details profile={profile} />
       <Counts profile={profile} />
       <SignatureCard employeeId={employeeId} />

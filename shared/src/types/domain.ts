@@ -66,6 +66,11 @@ export interface Employee {
   esiNumber: string | null
   appointmentLetterDate: string | null
 
+  /** True once a photograph has been uploaded. The image itself is served by an
+      authenticated route, never embedded in this payload. */
+  hasPhoto: boolean
+  photoUpdatedAt: string | null
+
   isActive: boolean
   createdAt: string
   updatedAt: string

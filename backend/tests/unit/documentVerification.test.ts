@@ -36,6 +36,8 @@ function employee(overrides: Partial<Employee> = {}): Employee {
     uanNumber: null,
     esiNumber: null,
     appointmentLetterDate: null,
+    hasPhoto: false,
+    photoUpdatedAt: null,
     isActive: true,
     createdAt: '2026-04-01T00:00:00.000Z',
     updatedAt: '2026-04-01T00:00:00.000Z',

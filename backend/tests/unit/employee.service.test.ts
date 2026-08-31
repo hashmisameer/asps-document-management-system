@@ -108,6 +108,8 @@ function profile(overrides: Partial<EmployeeProfile> = {}): EmployeeProfile {
     uanNumber: null,
     esiNumber: null,
     appointmentLetterDate: null,
+    hasPhoto: false,
+    photoUpdatedAt: null,
     isActive: true,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
@@ -160,6 +162,7 @@ beforeEach(() => {
 
 describe('create', () => {
   const input = {
+    employeeCode: 'EMP001',
     employeeName: 'Ravi Kumar',
     joiningDate: '2026-09-01',
     department: 'Accounts',

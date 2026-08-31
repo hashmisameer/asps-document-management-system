@@ -88,6 +88,27 @@ export const employeeIdentitySchema = z.object({
  *   Designation   OPTIONAL
  */
 export const createEmployeeSchema = employeeIdentitySchema.extend({
+  /**
+   * The company's own employee number. REQUIRED.
+   *
+   * Typed rather than generated, because the identity check compares the code
+   * ON THE DOCUMENT with the code on the record: a service card printed with
+   * 4471 would never match a record filed as EMP003, and every upload for that
+   * employee would need an override.
+   *
+   * Immutable once set (Section 13). Nothing edits it afterwards, so it is the
+   * one field on this form worth reading twice before saving.
+   */
+  employeeCode: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .min(1, 'Employee ID is required')
+    .max(20, 'Employee ID must be 20 characters or fewer')
+    .regex(
+      /^[A-Z0-9][A-Z0-9/_-]*$/,
+      'Employee ID may use letters, digits, a slash, a dash or an underscore',
+    ),
   employeeName: z
     .string()
     .trim()

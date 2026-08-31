@@ -27,6 +27,8 @@ async function documentFor(
   return Buffer.from(await pdf.save())
 }
 
+let codeSeq = 0
+
 describe('employee documents, end to end', () => {
   beforeAll(async () => {
     await ensureSchema()
@@ -43,11 +45,13 @@ describe('employee documents, end to end', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01', department: 'Accounts' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01', department: 'Accounts' })
 
     expect(created.status).toBe(201)
-    // The code is assigned by the server and is not something a caller may pick.
-    expect(created.body.employee.employeeCode).toMatch(/^EMP\d+$/)
+    // The code is the one that was sent. HR types the company's own number,
+    // because the identity check compares it with what is printed on the
+    // document - a generated EMP003 would never match a real service card.
+    expect(created.body.employee.employeeCode).toBe(`E${codeSeq}`)
 
     const checklist = await agent.get(`/api/employees/${created.body.employee.employeeId}/documents`)
     expect(checklist.status).toBe(200)
@@ -74,7 +78,7 @@ describe('employee documents, end to end', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
     const employee = created.body.employee
 
     const checklist = await agent.get(`/api/employees/${employee.employeeId}/documents`)
@@ -126,7 +130,7 @@ describe('employee documents, end to end', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
     const checklist = await agent.get(
       `/api/employees/${created.body.employee.employeeId}/documents`,
     )
@@ -155,7 +159,7 @@ describe('employee documents, end to end', () => {
     const hr = await signIn(express, await createUser('hr.reader', 'HR'))
     const created = await hr
       .post('/api/employees')
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
 
     const viewer = await signIn(express, await createUser('viewer.reader', 'VIEWER'))
 
@@ -164,7 +168,7 @@ describe('employee documents, end to end', () => {
       (
         await viewer
           .post('/api/employees')
-          .send({ employeeName: 'Nope', joiningDate: '2026-04-01' })
+          .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Nope', joiningDate: '2026-04-01' })
       ).status,
     ).toBe(403)
 

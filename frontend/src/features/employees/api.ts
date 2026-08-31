@@ -4,6 +4,7 @@ import type {
   EmployeeDocument,
   EmployeeListItem,
   EmployeeListQuery,
+  Employee,
   EmployeeProfile,
   Paginated,
   UpdateEmployeeInput,
@@ -103,4 +104,29 @@ export const employeeKeys = {
 
 export const documentTypeKeys = {
   all: ['documentTypes'] as const,
+}
+
+/**
+ * The photograph URL.
+ *
+ * An ordinary same-origin link, so the session cookie goes with it: there is no
+ * token in the URL to end up in a history or a proxy log. The version string
+ * busts the browser cache when a new photo replaces the old one - without it a
+ * replaced photograph keeps showing the previous face.
+ */
+export function employeePhotoUrl(employeeId: number, version: string | null): string {
+  const base = `/api/employees/${employeeId}/photo/image`
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base
+}
+
+export async function uploadEmployeePhoto(employeeId: number, file: File): Promise<Employee> {
+  const form = new FormData()
+  form.append('file', file)
+  // Content-Type is left alone: the browser adds it with the multipart
+  // boundary, and setting it by hand removes the boundary.
+  const response = await api.post<{ employee: Employee }>(
+    `/employees/${employeeId}/photo`,
+    form,
+  )
+  return response.data.employee
 }

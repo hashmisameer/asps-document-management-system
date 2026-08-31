@@ -18,6 +18,8 @@ import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
 import { ConflictError, NotFoundError } from '../utils/errors.js'
 import * as audit from './audit.service.js'
+import * as storage from './storage.service.js'
+import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
 import type { RequestContext } from './auth.service.js'
 
 /**
@@ -86,11 +88,16 @@ export async function create(
     })
   } catch (error) {
     if (isUniqueViolation(error)) {
-      // dbo.EmployeeCodeSeq cannot repeat itself, so this means a code was
-      // inserted by hand at a value the sequence has yet to reach. Saying so is
-      // the only way anyone will find that.
+      // Two ways to arrive here, and they need different things said. A code
+      // that was typed is simply taken. A code that was GENERATED colliding
+      // means the sequence has reached a number somebody entered by hand
+      // earlier - which nobody would ever find without being told.
       throw new ConflictError(
-        'That employee code is already in use. The employee code sequence may need to be reset.',
+        input.employeeCode
+          ? `Employee ID ${input.employeeCode} is already in use.`
+          : 'The generated employee code is already in use, which means one was ' +
+            'entered by hand at a value the sequence has now reached. Enter the ' +
+            'ID for this employee, or reset dbo.EmployeeCodeSeq past it.',
         undefined,
         { cause: error },
       )
@@ -199,4 +206,65 @@ export async function listDocuments(employeeId: number): Promise<EmployeeDocumen
   await getById(employeeId)
   const records = await employeeDocumentRepository.listForEmployee(employeeId)
   return records.map(withDeadline)
+}
+
+/**
+ * Uploads or replaces an employee's photograph.
+ *
+ * Validated exactly as a signature image is - PNG or JPEG by CONTENT, size
+ * capped, and a PNG proved whole before any decoder sees it - because the same
+ * two upload paths reach the same libraries, and a photograph is no more
+ * trustworthy than any other file somebody chose.
+ *
+ * The file is written before the row is updated. An orphaned file is
+ * housekeeping; a row pointing at a file that was never written is a broken
+ * image on somebody's record.
+ */
+export async function uploadPhoto(
+  employeeId: number,
+  file: UploadedFile,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<EmployeeProfile> {
+  await getById(employeeId)
+
+  const inspected = await inspectSignatureUpload(file)
+  const stored = await storage.storePhoto(employeeId, file.buffer, inspected.extension)
+
+  await employeeRepository.setPhoto(employeeId, {
+    filePath: stored.relativePath,
+    mimeType: inspected.mimeType,
+    sizeBytes: stored.sizeBytes,
+  })
+
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.EMPLOYEE_UPDATED,
+    entityType: AUDIT_ENTITY_TYPES.EMPLOYEE,
+    entityId: employeeId,
+    ipAddress: context.ipAddress,
+    // The file name is not recorded: it is chosen by whoever uploaded it and
+    // can carry a person's name, which the audit trail keeps for longer than
+    // the record does.
+    metadata: { change: 'photo', sizeBytes: stored.sizeBytes, mimeType: inspected.mimeType },
+  })
+
+  return getById(employeeId)
+}
+
+/** Streams an employee's photograph. */
+export async function openPhoto(
+  employeeId: number,
+): Promise<{ stream: NodeJS.ReadableStream; mimeType: string }> {
+  const photo = await employeeRepository.findPhoto(employeeId)
+  if (!photo) throw new NotFoundError('No photograph has been uploaded for this employee.')
+
+  if (!(await storage.storedFileExists(photo.filePath))) {
+    throw new ConflictError(
+      'The photograph is recorded but its file is missing from the document store. ' +
+        'Tell your administrator.',
+    )
+  }
+
+  return { stream: storage.openStoredFile(photo.filePath), mimeType: photo.mimeType }
 }

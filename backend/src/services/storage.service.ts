@@ -41,6 +41,10 @@ const SIGNATURES_FOLDER = 'signatures'
    or user 7's signature and employee 7's would land in the same place. */
 const USER_SIGNATURES_FOLDER = 'user-signatures'
 const PROCESSED_FOLDER = 'processed'
+/* Employee photographs. Their own folder for the same reason as everything
+   else here: a photograph is personal data with a different retention life
+   from a document, and mixing them makes either one harder to reason about. */
+const PHOTOS_FOLDER = 'photos'
 
 export interface StoredFile {
   /** UUID plus extension. Unique, and reveals nothing about the employee. */
@@ -64,6 +68,7 @@ export async function ensureStorageReady(): Promise<void> {
     SIGNATURES_FOLDER,
     USER_SIGNATURES_FOLDER,
     PROCESSED_FOLDER,
+    PHOTOS_FOLDER,
   ]) {
     await fs.mkdir(path.join(env.storageRoot, folder), { recursive: true })
   }
@@ -128,6 +133,15 @@ export async function storeSignature(
   extension: string,
 ): Promise<StoredFile> {
   return store(SIGNATURES_FOLDER, employeeId, buffer, extension)
+}
+
+/** An employee's photograph. */
+export async function storePhoto(
+  employeeId: number,
+  buffer: Buffer,
+  extension: string,
+): Promise<StoredFile> {
+  return store(PHOTOS_FOLDER, employeeId, buffer, extension)
 }
 
 /** The authorising signature of an HR or Admin user, keyed by their user id. */

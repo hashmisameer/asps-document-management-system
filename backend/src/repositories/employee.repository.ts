@@ -55,6 +55,8 @@ interface EmployeeRow extends EmployeeCountsRow {
   UanNumber: string | null
   EsiNumber: string | null
   AppointmentLetterDate: Date | null
+  PhotoMimeType: string | null
+  PhotoUploadedAt: Date | null
   IsActive: boolean
   CreatedAt: Date
   UpdatedAt: Date
@@ -69,6 +71,7 @@ const SELECT_EMPLOYEE_COLUMNS = `
              e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
              e.PostAppliedFor, e.CategoryOfWorkmen, e.AadhaarNumber, e.PanNumber,
              e.UanNumber, e.EsiNumber, e.AppointmentLetterDate,
+             e.PhotoMimeType, e.PhotoUploadedAt,
              e.IsActive, e.CreatedAt, e.UpdatedAt`
 
 /**
@@ -86,6 +89,7 @@ const SELECT_EMPLOYEE_LIST_COLUMNS = `
              CAST(NULL AS VARCHAR(20)) AS UanNumber,
              CAST(NULL AS VARCHAR(25)) AS EsiNumber,
              e.AppointmentLetterDate,
+             e.PhotoMimeType, e.PhotoUploadedAt,
              e.IsActive, e.CreatedAt, e.UpdatedAt`
 
 /**
@@ -158,6 +162,8 @@ function toEmployee(row: EmployeeRow): Employee {
     esiNumber: row.EsiNumber,
     appointmentLetterDate:
       row.AppointmentLetterDate === null ? null : formatDateOnly(row.AppointmentLetterDate),
+    hasPhoto: row.PhotoUploadedAt !== null,
+    photoUpdatedAt: row.PhotoUploadedAt?.toISOString() ?? null,
     isActive: row.IsActive,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
@@ -281,10 +287,15 @@ export async function findById(employeeId: number): Promise<EmployeeProfile | nu
 /**
  * Inserts an employee and returns the code that was generated for it.
  *
- * EmployeeCode is never accepted from the client (Sections 11 and 13): it comes
- * from dbo.EmployeeCodeSeq inside this statement, formatted EMP001..EMP999 and
- * then EMP1000 onwards so it keeps working past 999 without renumbering. The
- * UNIQUE constraint on the column is the final guarantee.
+ * EmployeeCode is supplied by the caller when the company already numbers its
+ * staff, and generated when it does not: dbo.EmployeeCodeSeq, formatted
+ * EMP001..EMP999 and then EMP1000 onwards so it keeps working past 999 without
+ * renumbering. The sequence is drawn from ONLY when no code was given, so
+ * typing one does not silently burn a number.
+ *
+ * The UNIQUE constraint on the column is the final guarantee either way, and is
+ * what catches a hand-typed code colliding with one already in use - or with
+ * one the sequence reaches later.
  */
 export async function create(
   input: CreateEmployeeInput,
@@ -310,16 +321,22 @@ export async function create(
       sql.Date,
       input.appointmentLetterDate ? parseDateOnly(input.appointmentLetterDate) : null,
     )
+    .input('suppliedCode', sql.VarChar(20), input.employeeCode ?? null)
     .input('createdBy', sql.Int, createdBy).query<{
       EmployeeId: number
       EmployeeCode: string
     }>(`
-      DECLARE @sequenceValue INT = NEXT VALUE FOR dbo.EmployeeCodeSeq;
-      DECLARE @employeeCode VARCHAR(20) =
-          'EMP' + CASE WHEN @sequenceValue < 1000
-                       THEN RIGHT('000' + CAST(@sequenceValue AS VARCHAR(10)), 3)
-                       ELSE CAST(@sequenceValue AS VARCHAR(10))
-                  END;
+      DECLARE @employeeCode VARCHAR(20) = @suppliedCode;
+
+      IF @employeeCode IS NULL
+      BEGIN
+          DECLARE @sequenceValue INT = NEXT VALUE FOR dbo.EmployeeCodeSeq;
+          SET @employeeCode =
+              'EMP' + CASE WHEN @sequenceValue < 1000
+                           THEN RIGHT('000' + CAST(@sequenceValue AS VARCHAR(10)), 3)
+                           ELSE CAST(@sequenceValue AS VARCHAR(10))
+                      END;
+      END
 
       INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, JoiningDate,
                                  Department, Designation, PhoneNumber, DateOfBirth,
@@ -466,4 +483,48 @@ export async function listFacets(): Promise<{ departments: string[]; designation
       .filter((row) => row.Kind === 'designation')
       .map((row) => row.Value),
   }
+}
+
+export interface StoredPhoto {
+  filePath: string
+  mimeType: string
+  sizeBytes: number
+}
+
+/**
+ * Replaces the employee's photograph.
+ *
+ * The previous file is left on disk, like a replaced document: only the current
+ * one is ever served, and the earlier copy is there if a replacement turns out
+ * to have been the wrong picture.
+ */
+export async function setPhoto(employeeId: number, photo: StoredPhoto): Promise<void> {
+  const request = await createRequest()
+  await request
+    .input('employeeId', sql.Int, employeeId)
+    .input('filePath', sql.NVarChar(500), photo.filePath)
+    .input('mimeType', sql.VarChar(100), photo.mimeType)
+    .input('sizeBytes', sql.BigInt, photo.sizeBytes).query(`
+      UPDATE dbo.Employees
+         SET PhotoFilePath      = @filePath,
+             PhotoMimeType      = @mimeType,
+             PhotoFileSizeBytes = @sizeBytes,
+             PhotoUploadedAt    = SYSUTCDATETIME(),
+             UpdatedAt          = SYSUTCDATETIME()
+       WHERE EmployeeId = @employeeId`)
+}
+
+/** Where the photograph is, for the route that streams it. Null when there is none. */
+export async function findPhoto(
+  employeeId: number,
+): Promise<{ filePath: string; mimeType: string } | null> {
+  const request = await createRequest()
+  const result = await request
+    .input('employeeId', sql.Int, employeeId)
+    .query<{ PhotoFilePath: string | null; PhotoMimeType: string | null }>(
+      'SELECT PhotoFilePath, PhotoMimeType FROM dbo.Employees WHERE EmployeeId = @employeeId',
+    )
+  const row = result.recordset[0]
+  if (!row?.PhotoFilePath) return null
+  return { filePath: row.PhotoFilePath, mimeType: row.PhotoMimeType ?? 'application/octet-stream' }
 }
