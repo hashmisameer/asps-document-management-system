@@ -60,10 +60,19 @@ export function matchCode(expected: string, documentText: string): boolean {
   const wanted = normalizeText(expected).replace(/ /g, '')
   if (wanted.length === 0) return false
 
+  // A number printed with leading zeros is the same number. Service cards carry
+  // '00006016' where the office says '6016', and refusing that would send
+  // someone to override a card that is entirely correct. Applied only when BOTH
+  // sides are all digits: 'EMP007' and 'EMP7' are different codes.
+  const numeric = (value: string): string =>
+    /^\d+$/.test(value) ? value.replace(/^0+(?=\d)/, '') : value
+  const wantedNumeric = numeric(wanted)
+
   const found = words(documentText)
   for (let i = 0; i < found.length; i += 1) {
     const word = found[i]
     if (word === wanted) return true
+    if (word !== undefined && numeric(word) === wantedNumeric) return true
 
     const next = found[i + 1]
     if (next !== undefined && word !== undefined && word + next === wanted) return true
@@ -201,14 +210,26 @@ export function extractDates(text: string): Set<string> {
     if (isRealDate(year, month, day)) found.add(iso(year, month, day))
   }
 
-  // 01/04/2024, 1-4-24, 01.04.2024 - in either order
+  // 01/04/2024, 1-4-24, 01.04.2024 - read DAY first.
+  //
+  // The company's forms are DD/MM/YYYY, so 01/08/2026 is the 1st of August.
+  // Both readings used to be added, which quietly turned the check into a hole:
+  // a service card printed 01/08 also matched an employee who joined on the 8th
+  // of January, which is exactly the mistake this exists to catch.
+  //
+  // MM/DD is tried only when DD/MM is not a real date at all - 04/25/2024 has
+  // no 25th month, so it can only be American. A document genuinely in that
+  // format still matches, rather than failing for a reason nobody could see.
   for (const match of upper.matchAll(/\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b/g)) {
     const [, a, b, y] = match
     const first = Number(a)
     const second = Number(b)
     const year = fullYear(Number(y))
-    if (isRealDate(year, second, first)) found.add(iso(year, second, first))
-    if (isRealDate(year, first, second)) found.add(iso(year, first, second))
+    if (isRealDate(year, second, first)) {
+      found.add(iso(year, second, first))
+    } else if (isRealDate(year, first, second)) {
+      found.add(iso(year, first, second))
+    }
   }
 
   // 1 April 2024, 01ST APR, 2024

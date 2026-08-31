@@ -90,6 +90,38 @@ describe('matchDigits', () => {
 })
 
 // asps-dms:allow-secret - the documented placeholder PAN, not anyone's.
+describe('the company writes dates DD/MM/YYYY', () => {
+  it('reads 01/08/2026 as the 1st of August', () => {
+    expect(matchDate('2026-08-01', 'DATE OF JOINING 01/08/2026')).toBe(true)
+  })
+
+  it('does NOT also read it as the 8th of January', () => {
+    // Both readings were accepted once, which made a service card printed
+    // 01/08 match an employee who joined on the 8th of January - the exact
+    // mistake this check exists to catch, waved through silently.
+    expect(matchDate('2026-01-08', 'DATE OF JOINING 01/08/2026')).toBe(false)
+  })
+
+  it('still reads a date that can only be month-first', () => {
+    // No 25th month, so 04/25 is unambiguously American and matching it costs
+    // nothing.
+    expect(matchDate('2024-04-25', 'Dated 04/25/2024')).toBe(true)
+  })
+})
+
+describe('a code printed with leading zeros', () => {
+  it('matches the same number without them', () => {
+    // Service cards carry '00006016' where the office says '6016'.
+    expect(matchCode('6016', 'Employee Code No. 00006016')).toBe(true)
+    expect(matchCode('00006016', 'Employee Code No. 6016')).toBe(true)
+  })
+
+  it('does not treat two different codes as one', () => {
+    expect(matchCode('6016', 'Employee Code No. 60160')).toBe(false)
+    expect(matchCode('EMP007', 'Code EMP7')).toBe(false)
+  })
+})
+
 describe('matchDate, as a scanner reads a printed form', () => {
   // A form prints each part of a date in its own box, and OCR reads the boxes
   // as separate tokens. These are the readings that made the identity check
@@ -145,13 +177,15 @@ describe('extractDates', () => {
     expect(extractDates('Joined 1ST APRIL 2024')).toContain('2024-04-01')
   })
 
-  it('reads an ambiguous numeric date both ways', () => {
-    // 04/03/2024 is the 4th of March here and the 3rd of April elsewhere. Both
-    // are offered, because refusing a real document over the form's print
-    // convention is the worse mistake.
+  it('reads an ambiguous numeric date as DAY first, and only that way', () => {
+    // Changed on 2026-08-31, having seen a real service card. 04/03/2024 is the
+    // 4th of March on the company's forms. Offering the 3rd of April as well
+    // looked generous but made the check accept a document belonging to a
+    // different employee - and a false match is silent, where a refusal can be
+    // overridden by a person who can see the page.
     const dates = extractDates('Dated 04/03/2024')
     expect(dates).toContain('2024-03-04')
-    expect(dates).toContain('2024-04-03')
+    expect(dates).not.toContain('2024-04-03')
   })
 
   it('ignores a date that is not a real day', () => {
