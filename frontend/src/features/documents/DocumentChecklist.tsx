@@ -231,9 +231,18 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
         </td>
 
         <td className="px-4 py-2 align-top">
-          <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>
-            {DOCUMENT_STATUS_LABEL[item.status]}
-          </Badge>
+          {/* A tick for anything with a file against it, so 'in' or 'not in' is
+              readable down the column without parsing every status word. */}
+          <span className="inline-flex items-center gap-1.5">
+            {hasFile ? (
+              <span aria-hidden="true" className="font-semibold text-status-verified">
+                &#10003;
+              </span>
+            ) : null}
+            <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>
+              {DOCUMENT_STATUS_LABEL[item.status]}
+            </Badge>
+          </span>
           {item.status === DOCUMENT_STATUS.REJECTED && item.rejectionReason ? (
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>
           ) : null}

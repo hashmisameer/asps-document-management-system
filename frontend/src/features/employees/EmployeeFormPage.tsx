@@ -1,13 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createEmployeeSchema } from '@asps-dms/shared'
+import { computeDueDate, createEmployeeSchema, type Employee } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
-import { RequiredDocuments } from './RequiredDocuments.js'
+import { RequiredDocuments, type DueDateOverrides } from './RequiredDocuments.js'
+import { DocumentChecklist } from '../documents/DocumentChecklist.js'
+import { updateDocumentDeadline } from '../documents/api.js'
+import { fetchEmployeeDocuments, listDocumentTypes, documentTypeKeys } from './api.js'
 
 type Field = 'employeeName' | 'joiningDate' | 'department' | 'designation'
 
@@ -34,6 +37,17 @@ export function EmployeeFormPage() {
   const [values, setValues] = useState(EMPTY)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string>>>({})
   const [failure, setFailure] = useState<ApiError | null>(null)
+  const [overrides, setOverrides] = useState<DueDateOverrides>({})
+  // Set once the record exists. Until then there are no document rows to
+  // upload into, which is why this is two steps rather than one form.
+  const [created, setCreated] = useState<Employee | null>(null)
+
+  const typesQuery = useQuery({
+    queryKey: documentTypeKeys.all,
+    queryFn: listDocumentTypes,
+    staleTime: 5 * 60 * 1000,
+    enabled: !isEdit,
+  })
 
   const existing = useQuery({
     queryKey: employeeKeys.detail(employeeId ?? 0),
@@ -51,14 +65,61 @@ export function EmployeeFormPage() {
     })
   }, [existing.data])
 
+  /**
+   * Applies any deadline the person changed on the form.
+   *
+   * Only the rows they actually changed: a date left at its default is already
+   * exactly what the server computed, and PATCHing it would write a deliberate
+   * override into the audit trail for a decision nobody made.
+   *
+   * A failure here does not fail the creation. The employee exists and the
+   * dates are the standard ones, which is recoverable from the checklist;
+   * throwing away a saved record over a deadline would not be.
+   */
+  const applyDueDateOverrides = async (employee: Employee) => {
+    const changed = Object.entries(overrides).filter(([typeId, dueDate]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return false
+      const type = typesQuery.data?.find((t) => t.documentTypeId === Number(typeId))
+      if (!type) return false
+      const standard = computeDueDate(employee.joiningDate, type.deadlineValue, type.deadlineUnit)
+      return dueDate !== standard
+    })
+    if (changed.length === 0) return
+
+    try {
+      const documents = await fetchEmployeeDocuments(employee.employeeId)
+      await Promise.all(
+        changed.map(([typeId, dueDate]) => {
+          const document = documents.find((d) => d.documentTypeId === Number(typeId))
+          if (!document) return Promise.resolve()
+          return updateDocumentDeadline(document.documentId, dueDate, 'Set when the employee was added')
+        }),
+      )
+    } catch {
+      // Left deliberately quiet, for the reason above. The checklist shows the
+      // dates that were actually stored.
+    }
+  }
+
   const save = useMutation({
     mutationFn: async (input: ReturnType<typeof createEmployeeSchema.parse>) =>
       isEdit ? updateEmployee(employeeId, input) : createEmployee(input),
     onSuccess: async (employee) => {
+      if (!isEdit) {
+        await applyDueDateOverrides(employee)
+      }
       // The list counts and the detail both change on a save, so the whole
       // 'employees' prefix goes rather than only the row that was edited.
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
-      void navigate(`/employees/${employee.employeeId}`, { replace: true })
+
+      if (isEdit) {
+        void navigate(`/employees/${employee.employeeId}`, { replace: true })
+        return
+      }
+      // Stay here. The documents can only be uploaded now that the checklist
+      // rows exist, and sending someone to another screen to do the obvious
+      // next thing is how half-filled records happen.
+      setCreated(employee)
     },
     onError: (error) => {
       const apiError = error instanceof ApiError ? error : null
@@ -121,6 +182,10 @@ export function EmployeeFormPage() {
         </Alert>
       </main>
     )
+  }
+
+  if (created) {
+    return <UploadStep employee={created} />
   }
 
   return (
@@ -203,7 +268,62 @@ export function EmployeeFormPage() {
 
       {/* Only when adding. On edit the checklist already exists, and the
           employee's own page shows it with what has actually come in. */}
-      {isEdit ? null : <RequiredDocuments joiningDate={values.joiningDate} />}
+      {isEdit ? null : (
+        <RequiredDocuments
+          joiningDate={values.joiningDate}
+          overrides={overrides}
+          onOverride={(documentTypeId, dueDate) =>
+            setOverrides((current) => ({ ...current, [documentTypeId]: dueDate }))
+          }
+        />
+      )}
+      </div>
+    </main>
+  )
+}
+
+/**
+ * Step two: the record exists, so the documents can go in.
+ *
+ * The same checklist the employee's own page uses, rather than a second upload
+ * screen that would drift from it: one row per document, a tick once a file is
+ * in, and Pending with its date until then.
+ */
+function UploadStep({ employee }: { employee: Employee }) {
+  const documents = useQuery({
+    queryKey: employeeKeys.documents(employee.employeeId),
+    queryFn: () => fetchEmployeeDocuments(employee.employeeId),
+  })
+
+  const done = (documents.data ?? []).filter((d) => d.originalFileName !== null).length
+  const total = documents.data?.length ?? 0
+
+  return (
+    <main>
+      <div className="rounded-card border border-status-verified/30 bg-green-50 p-4">
+        <h1 className="text-base font-semibold text-slate-900">
+          {employee.employeeName} added as {employee.employeeCode}
+        </h1>
+        <p className="mt-1 text-sm text-slate-700">
+          Upload whatever you have now - the rest stays Pending and is chased by the reminder.
+          {total > 0 ? ` ${done} of ${total} in.` : ''}
+        </p>
+        <div className="mt-3 flex items-center gap-3">
+          <Link
+            to={`/employees/${employee.employeeId}`}
+            className="text-sm font-medium text-brand-700 hover:text-brand-800"
+          >
+            Open the employee record
+          </Link>
+          <Link to="/employees/new" className="text-sm text-slate-600 hover:text-slate-900">
+            Add another employee
+          </Link>
+        </div>
+      </div>
+
+      <h2 className="mt-6 text-sm font-semibold text-slate-900">Document checklist</h2>
+      <div className="mt-2">
+        <DocumentChecklist documents={documents.data} isLoading={documents.isLoading} />
       </div>
     </main>
   )
