@@ -3,7 +3,6 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": ".",
     "types": ["node"],
     "paths": {
       "@asps-dms/shared": ["../shared/src/index.ts"]
