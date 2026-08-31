@@ -10,6 +10,7 @@ import {
 } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { BadRequestError, PayloadTooLargeError, UnsupportedMediaTypeError } from '../utils/errors.js'
+import { MalformedImageError, assertDecodablePng } from './pngIntegrity.service.js'
 
 /**
  * What an uploaded file is actually allowed to be.
@@ -102,6 +103,20 @@ export async function inspectDocumentUpload(file: UploadedFile): Promise<Inspect
     )
   }
 
+  // The same proof as a signature image, and for the same reason: an image
+  // document is rasterised for the identity check and embedded whole by the
+  // stamper, so a PNG that ends early would reach the same looping decoder.
+  if (detected.mime === 'image/png') {
+    try {
+      assertDecodablePng(file.buffer)
+    } catch (error) {
+      if (error instanceof MalformedImageError) {
+        throw new BadRequestError(`${error.message} Try exporting or scanning it again.`)
+      }
+      throw error
+    }
+  }
+
   return { extension, mimeType: detected.mime, safeOriginalName }
 }
 
@@ -128,6 +143,22 @@ export async function inspectSignatureUpload(file: UploadedFile): Promise<Inspec
     throw new UnsupportedMediaTypeError(
       'A signature must be a PNG or JPEG image. A PNG with a transparent background works best.',
     )
+  }
+
+  // A PNG is proved whole before anything tries to decode it. pdf-lib decodes
+  // a PNG's pixels to embed it, and a file whose image data ends early sends it
+  // into a loop on the one thread that serves every request - so a single bad
+  // upload would take the API down for everyone. A JPEG needs no equivalent
+  // check: pdf-lib reads its header for the dimensions and never decodes it.
+  if (detected.mime === 'image/png') {
+    try {
+      assertDecodablePng(file.buffer)
+    } catch (error) {
+      if (error instanceof MalformedImageError) {
+        throw new BadRequestError(`${error.message} Try exporting or scanning it again.`)
+      }
+      throw error
+    }
   }
 
   const safeOriginalName = safeFileName(file.originalname)
