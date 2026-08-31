@@ -29,6 +29,9 @@ const db = vi.hoisted(() => ({
   discardStoredFile: vi.fn(),
   openStoredFile: vi.fn(),
   storedFileExists: vi.fn(),
+  findDocumentType: vi.fn(),
+  findEmployee: vi.fn(),
+  extractText: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
@@ -53,6 +56,32 @@ vi.mock('../../src/services/storage.service.js', () => ({
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
+
+// The identity check reads the document type's field list and the employee's
+// record. Both are stubbed to the uninteresting answer by default - a type that
+// asks for nothing - so the tests here stay about upload, and the check itself
+// is pinned in documentVerification.test.ts.
+vi.mock('../../src/repositories/documentType.repository.js', () => ({
+  findById: db.findDocumentType,
+  listActive: vi.fn(),
+  listAll: vi.fn(),
+}))
+
+vi.mock('../../src/repositories/employee.repository.js', () => ({
+  findById: db.findEmployee,
+  list: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  setActive: vi.fn(),
+  listFacets: vi.fn(),
+}))
+
+// Reading a PDF is pdf.js's job and is not what these tests are about; what
+// they are about is what the service does with the words that come back.
+vi.mock('../../src/services/documentText.service.js', () => ({
+  extractText: db.extractText,
+  closeOcrWorker: vi.fn(),
+}))
 
 const documentService = await import('../../src/services/document.service.js')
 
@@ -105,6 +134,7 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     verifiedByName: null,
     verifiedAt: null,
     rejectionReason: null,
+    identityCheck: null,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
     ...overrides,
@@ -120,6 +150,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.insertAudit.mockResolvedValue(undefined)
   db.findById.mockResolvedValue(record())
+  db.findDocumentType.mockResolvedValue({ documentTypeId: 1, requiredFields: [] })
+  db.findEmployee.mockResolvedValue(null)
+  db.extractText.mockResolvedValue({ text: '', source: 'None', pagesRead: 0 })
   db.attachFile.mockResolvedValue(undefined)
   db.setStatus.mockResolvedValue(true)
   db.setDueDate.mockResolvedValue(true)
@@ -185,6 +218,120 @@ describe('uploadFile', () => {
     // open; an orphaned file is only housekeeping.
     expect(db.discardStoredFile).toHaveBeenCalledWith('documents/42/uuid.pdf')
     expect(db.insertAudit).not.toHaveBeenCalled()
+  })
+
+  describe('the identity check', () => {
+    /** A document type that asks for the two details every form carries. */
+    function checkedType() {
+      db.findDocumentType.mockResolvedValue({
+        documentTypeId: 1,
+        requiredFields: ['EmployeeName', 'EmployeeCode'],
+      })
+      db.findEmployee.mockResolvedValue({
+        employeeId: 42,
+        employeeCode: 'EMP007',
+        employeeName: 'Ravi Kumar',
+        joiningDate: '2026-04-01',
+        department: null,
+        designation: null,
+        phoneNumber: null,
+        dateOfBirth: null,
+        postAppliedFor: null,
+        categoryOfWorkmen: null,
+        aadhaarNumber: null,
+        panNumber: null,
+        uanNumber: null,
+        esiNumber: null,
+        appointmentLetterDate: null,
+        isActive: true,
+        createdAt: '2026-04-01T00:00:00.000Z',
+        updatedAt: '2026-04-01T00:00:00.000Z',
+      })
+    }
+
+    it('refuses a document that names somebody else, before it reaches the store', async () => {
+      checkedType()
+      db.extractText.mockResolvedValue({
+        text: 'PAN CARD - ANITA DESAI - EMP113',
+        source: 'PdfText',
+        pagesRead: 1,
+      })
+
+      await expect(
+        documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: API_ERROR_CODES.IDENTITY_CHECK_FAILED,
+      })
+
+      expect(db.storeDocument).not.toHaveBeenCalled()
+      expect(db.attachFile).not.toHaveBeenCalled()
+      // The refusal leaves no document behind, so the trail is the only record
+      // that it happened at all.
+      expect(db.insertAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_REFUSED }),
+      )
+    })
+
+    it('records the check on the document when it passes', async () => {
+      checkedType()
+      db.extractText.mockResolvedValue({
+        text: 'PAN CARD - RAVI KUMAR - EMP 007',
+        source: 'PdfText',
+        pagesRead: 1,
+      })
+
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      expect(db.attachFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identity: expect.objectContaining({
+            status: 'Passed',
+            source: 'PdfText',
+            overrideBy: null,
+          }),
+        }),
+      )
+    })
+
+    it('accepts a failed check with a reason, and records who accepted it', async () => {
+      checkedType()
+      db.extractText.mockResolvedValue({
+        text: 'a scan so poor that nothing legible came off it',
+        source: 'Ocr',
+        pagesRead: 1,
+      })
+
+      await documentService.uploadFile(
+        5,
+        uploadedFile(),
+        { ...uploadInput, identityOverrideReason: 'Scan is faint; verified against the original' },
+        hr,
+        context,
+      )
+
+      expect(db.attachFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identity: expect.objectContaining({
+            status: 'Overridden',
+            overrideBy: hr.userId,
+            overrideReason: 'Scan is faint; verified against the original',
+          }),
+        }),
+      )
+      expect(db.insertAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_OVERRIDDEN }),
+      )
+    })
+
+    it('does not read a document whose type asks for nothing', async () => {
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      expect(db.extractText).not.toHaveBeenCalled()
+      expect(db.attachFile).toHaveBeenCalledWith(
+        expect.objectContaining({ identity: expect.objectContaining({ status: 'NotChecked' }) }),
+      )
+    })
   })
 
   it('lets HR record a document already held on paper as Verified with no deadline', async () => {

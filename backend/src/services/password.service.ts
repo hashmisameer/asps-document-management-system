@@ -121,3 +121,36 @@ export function needsRehash(algorithm: string): boolean {
     params.parallelization < SCRYPT.parallelization
   )
 }
+
+/**
+ * Characters that are easily confused when read off a screen and typed by hand
+ * (l, I, 1, O, 0) are left out: a temporary password is read off a screen and
+ * typed by hand exactly once, before it is changed.
+ */
+const LOWER = 'abcdefghijkmnopqrstuvwxyz'
+const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+const DIGITS = '23456789'
+
+/**
+ * A temporary password that satisfies the shared password policy.
+ *
+ * Used by `db:create-user` and by the Users screen, from one definition: two
+ * generators would be two chances to produce something weaker than the policy.
+ */
+export function generateTemporaryPassword(): string {
+  const alphabet = LOWER + UPPER + DIGITS
+  const pick = (source: string): string => source[crypto.randomInt(source.length)] ?? ''
+
+  const characters = [pick(LOWER), pick(UPPER), pick(DIGITS)]
+  while (characters.length < 16) characters.push(pick(alphabet))
+
+  // Fisher-Yates, so the guaranteed lower/upper/digit are not always first.
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swap = crypto.randomInt(index + 1)
+    const current = characters[index] ?? ''
+    characters[index] = characters[swap] ?? ''
+    characters[swap] = current
+  }
+
+  return characters.join('')
+}

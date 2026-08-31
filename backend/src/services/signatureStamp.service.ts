@@ -1,9 +1,11 @@
 import { PDFDocument, degrees, type PDFImage, type PDFPage } from 'pdf-lib'
 import {
+  SIGNER_ROLES,
   normalizeRotation,
   toPdfUserSpace,
   type NormalizedRect,
   type PageRotation,
+  type SignerRole,
 } from '@asps-dms/shared'
 import { BadRequestError, ConflictError, UnsupportedMediaTypeError } from '../utils/errors.js'
 
@@ -26,14 +28,29 @@ export interface StampPlacement {
   rect: NormalizedRect
   /** The rotation the page had when HR positioned this - see below. */
   pageRotation: PageRotation
+  /** Whose signature goes in this box. Defaults to the employee's. */
+  signerRole?: SignerRole
+}
+
+export interface SignatureImage {
+  data: Buffer
+  /** 'image/png' or 'image/jpeg'. */
+  mimeType: string
 }
 
 export interface StampInput {
   source: Buffer
   /** 'application/pdf', 'image/png' or 'image/jpeg'. */
   sourceMimeType: string
-  signature: Buffer
-  signatureMimeType: string
+  /**
+   * One image per signer role.
+   *
+   * A map rather than a single image because a document carries two marks: the
+   * employee's, and the authorising HR user's. Each is embedded at most once
+   * however many boxes it fills - a signature embedded per placement would put
+   * the same bytes in the file several times over.
+   */
+  signatures: Partial<Record<SignerRole, SignatureImage>>
   placements: readonly StampPlacement[]
 }
 
@@ -164,7 +181,29 @@ async function loadSource(source: Buffer, mimeType: string): Promise<PDFDocument
 export async function stampSignature(input: StampInput): Promise<Buffer> {
   const pdf = await loadSource(input.source, input.sourceMimeType)
   const pages = pdf.getPages()
-  const signature = await embedSignature(pdf, input.signature, input.signatureMimeType)
+
+  // Embedded on first use and kept, so a document with six employee boxes
+  // carries one copy of that image rather than six.
+  const embedded = new Map<SignerRole, PDFImage>()
+  const imageFor = async (role: SignerRole): Promise<PDFImage> => {
+    const already = embedded.get(role)
+    if (already) return already
+
+    const image = input.signatures[role]
+    if (!image) {
+      // The service checks this before it starts, so reaching here means the
+      // two disagree - which must fail rather than draw the wrong person's mark.
+      throw new ConflictError(
+        role === SIGNER_ROLES.AUTHORISER
+          ? 'No authorising signature was supplied for this document.'
+          : 'No employee signature was supplied for this document.',
+      )
+    }
+
+    const drawable = await embedSignature(pdf, image.data, image.mimeType)
+    embedded.set(role, drawable)
+    return drawable
+  }
 
   for (const placement of input.placements) {
     const page: PDFPage | undefined = pages[placement.pageNumber - 1]
@@ -186,6 +225,7 @@ export async function stampSignature(input: StampInput): Promise<Buffer> {
       )
     }
 
+    const signature = await imageFor(placement.signerRole ?? SIGNER_ROLES.EMPLOYEE)
     const draw = toDrawParams(placement.rect, width, height, placement.pageRotation)
     page.drawImage(signature, {
       x: draw.x,

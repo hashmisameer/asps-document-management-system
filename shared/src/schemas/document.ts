@@ -3,6 +3,7 @@ import { booleanQueryParam, dateOnlySchema, paginationQuerySchema, shortText } f
 import { DEADLINE_UNITS } from '../constants/deadlines.js'
 import { DEADLINE_STATE } from '../constants/deadlines.js'
 import { DOCUMENT_STATUS, SIGNATURE_STATUS } from '../constants/documents.js'
+import { MIN_IDENTITY_OVERRIDE_REASON_LENGTH } from '../constants/documentFields.js'
 
 const documentStatusEnum = z.enum([
   DOCUMENT_STATUS.PENDING,
@@ -66,6 +67,24 @@ export const uploadDocumentSchema = z.object({
     .enum([DOCUMENT_STATUS.UPLOADED, DOCUMENT_STATUS.VERIFIED])
     .default(DOCUMENT_STATUS.UPLOADED),
   notes: shortText(500).optional(),
+  /**
+   * Accepts a document the identity check refused, and says why.
+   *
+   * A reason is REQUIRED to override, and it is written to the document row and
+   * to the audit trail under the name of whoever sent it. That is the whole
+   * point of the control: the check can always be gone around - a scan too poor
+   * for OCR to read a digit is a real document - but going around it leaves a
+   * mark that names a person.
+   */
+  identityOverrideReason: z
+    .string()
+    .trim()
+    .min(
+      MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
+      'Say why this document is being accepted, in a few words',
+    )
+    .max(500)
+    .optional(),
 })
 
 export type UploadDocumentInput = z.infer<typeof uploadDocumentSchema>

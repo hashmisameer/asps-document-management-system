@@ -55,6 +55,22 @@ const envSchema = z
     CORS_ORIGIN: z.string().default(''),
 
     MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(200).default(25),
+
+    /* The identity check: reading an uploaded document and comparing it with
+       the employee's record. */
+    IDENTITY_CHECK_ENABLED: booleanish.default('true'),
+    /* Pages read before the check gives up. A form's details are on its first
+       pages, and OCR over a long scan would hold the upload request open for
+       minutes. */
+    IDENTITY_CHECK_MAX_PAGES: z.coerce.number().int().min(1).max(50).default(5),
+    IDENTITY_CHECK_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(600_000).default(90_000),
+    /* Where tesseract.js finds eng.traineddata and its WASM core.
+       LEAVE THESE UNSET IN DEVELOPMENT and it downloads them from a CDN. On the
+       company server, which has no route to the internet, they must be vendored
+       locally and these must point at them, or every OCR pass fails. */
+    TESSERACT_LANG_PATH: z.string().min(1).optional(),
+    TESSERACT_CORE_PATH: z.string().min(1).optional(),
+    TESSERACT_CACHE_PATH: z.string().min(1).optional(),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     LOG_DIR: z.string().default('./logs'),
   })

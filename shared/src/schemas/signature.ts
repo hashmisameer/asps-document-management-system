@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { SIGNER_ROLES } from '../constants/documents.js'
 import { MIN_PLACEMENT_SIZE } from '../utils/coordinates.js'
 
 /**
@@ -19,6 +20,17 @@ export const placementSchema = z
     pageRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).default(0),
     method: z.enum(['Automatic', 'Manual', 'Adjusted']),
     detectionMethod: z.enum(['OCR', 'CV', 'Combined', 'Manual']),
+    /**
+     * Whose signature goes in this box.
+     *
+     * Defaults to the employee, which is what a placement meant before there
+     * was a second signer. The client never names WHICH authoriser: an
+     * 'Authoriser' box is always stamped with the signature of the user saving
+     * it, so nobody can sign a document off in a colleague's name.
+     */
+    signerRole: z
+      .enum([SIGNER_ROLES.EMPLOYEE, SIGNER_ROLES.AUTHORISER])
+      .default(SIGNER_ROLES.EMPLOYEE),
     confidence: z.number().min(0).max(1).nullable().default(null),
   })
   .refine((v) => v.x + v.width <= 1.0001, {

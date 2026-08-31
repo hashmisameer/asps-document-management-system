@@ -4,18 +4,23 @@ Anything the company has not confirmed is recorded here rather than silently
 invented. Each item says what is blocked by it and what the code currently
 assumes, so the assumption is visible instead of buried.
 
-Last updated: 2026-08-31 (signatures, Milestone 5).
+Last updated: 2026-08-31 (signatures, the identity check, and B1 resolved).
 
 ---
 
 ## Blocking
 
 ### B1 - Development database
-**Status: OPEN. Blocks the rest of Milestone 1.**
+**Status: RESOLVED on 2026-08-31, by option (a).**
 
-No SQL Server instance is installed on the development laptop (no `MSSQL*`
-services, no `sqlcmd`). The schema and migration runner are written and
-typechecked, but nothing has been executed against a real server.
+SQL Server 2014 Express (12.0.2000.8 RTM) is installed locally as `.\SQLEXPRESS`
+with TCP/IP and mixed-mode authentication enabled. All three migrations and both
+seeds have been applied to it, and the signing path driven end to end. No 2014
+incompatibility was found.
+
+It is a NAMED instance on a DYNAMIC port, so `backend/.env` sets `DB_INSTANCE`
+and lets SQL Server Browser resolve the port; `DB_PORT` must stay unset, because
+setting both is ambiguous and `config/env.ts` rejects it.
 
 Options:
 
@@ -70,6 +75,8 @@ conservatively. Development is on Node 24.20.0.
 | Q10 | Server hostname/IP, bind port, HTTPS internally?, who administers firewall rules | M6 | Not assumed. |
 | Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords.** Accounts are created with `npm run db:create-user`, which prints a temporary password once and always sets `MustChangePassword`, so the first login forces a change. |
 | Q12 | Backup policy for the database and the storage folder: owner and schedule | M6 | Not assumed. |
+| Q13 | Somewhere on the company server to put the Tesseract language data, and who puts it there | **NOW** | Not assumed. The server has no route to the internet, so `tesseract.js` cannot fetch `eng.traineddata` on first use and **every OCR pass fails** - which means every scanned document reaches HR as an identity check that could not be read. The files are vendored into a folder and pointed at with `TESSERACT_LANG_PATH`, `TESSERACT_CORE_PATH` and `TESSERACT_CACHE_PATH` (see `backend/.env.example`). PDFs carrying their own text layer are unaffected. |
+| Q14 | May any HR user override a failed identity check, or only an Admin? | **NOW** | **Any user who may upload.** The person holding the document is the one who can see whether a poor scan is genuine, and a refusal that only an Admin can clear would stop the day's filing. Every override is stored on the document with its reason and its author, so the control is accountability rather than gatekeeping. To change: require `DOCUMENT_REPLACE` or a new permission in `runIdentityCheck` in document.service.ts. |
 
 ---
 
@@ -127,3 +134,8 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    A browser displaying the old copy keeps a valid file underneath it, and the
    earlier output stays inspectable if a placement turns out to have been wrong.
    Like replaced originals (13), nothing prunes them yet.
+17. **A document type with no required fields is not identity-checked.** The
+   fields a document must confirm are configuration, so a type nobody has
+   configured is filed as it always was rather than being refused for details
+   nobody asked for. A check that did not run is stored as `NotChecked`, which
+   is deliberately a different answer from one that ran and passed.

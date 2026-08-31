@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
@@ -6,6 +7,7 @@ import {
   DOCUMENT_STATUS,
   DOCUMENT_STATUS_LABEL,
   MAX_DOCUMENT_SIZE_BYTES,
+  MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
   PERMISSIONS,
   SIGNATURE_STATUS,
   SIGNATURE_STATUS_LABEL,
@@ -23,6 +25,7 @@ import { skipSignature } from '../signatures/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
 import { documentFileUrl, rejectDocument, uploadDocument, verifyDocument } from './api.js'
+import { identityFailureOf, unconfirmedLabels, type IdentityFailure } from './identityFailure.js'
 
 /**
  * The employee's checklist, with the actions each row currently allows.
@@ -96,6 +99,14 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
 
+  // An upload the identity check refused, held with the file that was refused
+  // so that accepting it re-sends the same bytes rather than asking the person
+  // to find the file again.
+  const [refused, setRefused] = useState<
+    { file: File; message: string; failure: IdentityFailure } | null
+  >(null)
+  const [overrideReason, setOverrideReason] = useState('')
+
   // Every action changes the counts on the employee, and several change what
   // the other buttons should be, so the whole employee prefix is refreshed
   // rather than this one row.
@@ -106,12 +117,28 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   }
 
   const upload = useMutation({
-    mutationFn: (file: File) => uploadDocument(item.documentId, file),
+    mutationFn: ({ file, overrideReason: reasonGiven }: { file: File; overrideReason?: string }) =>
+      uploadDocument(item.documentId, file, {
+        ...(reasonGiven ? { identityOverrideReason: reasonGiven } : {}),
+      }),
     onSuccess: async () => {
       setFailure(null)
+      setRefused(null)
+      setOverrideReason('')
       await refresh()
     },
-    onError,
+    // A refused upload is not an error to report and move on from: it is a
+    // question for the person holding the document, so it opens the override
+    // rather than printing a sentence they cannot act on.
+    onError: (error, variables) => {
+      const identity = identityFailureOf(error)
+      if (identity && error instanceof ApiError) {
+        setFailure(null)
+        setRefused({ file: variables.file, message: error.message, failure: identity })
+        return
+      }
+      onError(error)
+    },
   })
 
   const verify = useMutation({
@@ -156,7 +183,9 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
       setFailure(`That file is larger than the ${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} MB limit.`)
       return
     }
-    upload.mutate(file)
+    setRefused(null)
+    setOverrideReason('')
+    upload.mutate({ file })
   }
 
   const deadline = deriveDeadline(item.dueDate, item.status)
@@ -176,6 +205,15 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     can(PERMISSIONS.SIGNATURE_SKIP) &&
     hasFile &&
     canTransitionSignature(item.signatureStatus, SIGNATURE_STATUS.SKIPPED)
+
+  // Positioning a signature needs a file to position it on, and a signature
+  // status that is still open: a document already signed is re-signed by
+  // saving its placements again, not by a second pass over the same button.
+  const canSign =
+    can(PERMISSIONS.SIGNATURE_PLACE) &&
+    hasFile &&
+    item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED &&
+    item.signatureStatus !== SIGNATURE_STATUS.SKIPPED
 
   const busy = upload.isPending || verify.isPending || reject.isPending || skip.isPending
 
@@ -202,6 +240,19 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
           {item.verifiedByName ? (
             <p className="mt-1 text-xs text-slate-500">
               by {item.verifiedByName}, {formatDateTime(item.verifiedAt)}
+            </p>
+          ) : null}
+          {/* An accepted-anyway document says so on its face. The whole reason
+              the override is stored on the row rather than only in the audit
+              trail is that it has to be visible here, months later, without
+              knowing to go looking for it. */}
+          {item.identityCheck?.status === 'Overridden' ? (
+            <p className="mt-1 max-w-56 text-xs text-status-pending">
+              Identity check overridden
+              {item.identityCheck.overriddenByName
+                ? ` by ${item.identityCheck.overriddenByName}`
+                : ''}
+              {item.identityCheck.overrideReason ? `: ${item.identityCheck.overrideReason}` : ''}
             </p>
           ) : null}
         </td>
@@ -281,6 +332,15 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
               </>
             ) : null}
 
+            {canSign ? (
+              <Link
+                to={`/documents/${item.documentId}/signature`}
+                className="text-sm text-brand-700 hover:text-brand-800"
+              >
+                Sign
+              </Link>
+            ) : null}
+
             {canVerify ? (
               <Button
                 variant="secondary"
@@ -349,6 +409,65 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
                 Reject document
               </Button>
               <Button variant="ghost" onClick={() => setRejecting(false)}>
+                Cancel
+              </Button>
+            </form>
+          </td>
+        </tr>
+      ) : null}
+
+      {refused ? (
+        <tr>
+          <td colSpan={5} className="bg-slate-50 px-4 py-3">
+            {/* The server's own sentence, because it names what it could not
+                confirm and says what to do next. */}
+            <p className="text-sm font-medium text-slate-900">{refused.message}</p>
+
+            {unconfirmedLabels(refused.failure).length > 0 ? (
+              <p className="mt-1 text-xs text-slate-600">
+                Not found in {refused.file.name}:{' '}
+                <span className="font-medium">
+                  {unconfirmedLabels(refused.failure).join(', ')}
+                </span>
+              </p>
+            ) : null}
+
+            <form
+              className="mt-3 flex flex-wrap items-end gap-3"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (overrideReason.trim().length < MIN_IDENTITY_OVERRIDE_REASON_LENGTH) return
+                upload.mutate({ file: refused.file, overrideReason: overrideReason.trim() })
+              }}
+            >
+              <label className="flex-1">
+                <span className="text-xs font-medium text-slate-700">
+                  Accepting it anyway? Say why - it is recorded on the document under your name.
+                </span>
+                <input
+                  autoFocus
+                  value={overrideReason}
+                  maxLength={500}
+                  onChange={(event) => setOverrideReason(event.target.value)}
+                  placeholder="The scan is too faint for the Aadhaar number to be read"
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <Button
+                type="submit"
+                busy={upload.isPending}
+                busyLabel="Uploading..."
+                disabled={overrideReason.trim().length < MIN_IDENTITY_OVERRIDE_REASON_LENGTH}
+              >
+                Accept and upload
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setRefused(null)
+                  setOverrideReason('')
+                }}
+              >
                 Cancel
               </Button>
             </form>

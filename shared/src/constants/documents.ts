@@ -53,6 +53,29 @@ export const SIGNATURE_STATUS_LABEL: Readonly<Record<SignatureStatus, string>> =
 }
 
 /**
+ * Whose signature a placement carries.
+ *
+ * Two people sign a document, and they sign different boxes on it: the
+ * EMPLOYEE, whose signature is enrolled once and reused (Section 24), and the
+ * AUTHORISER - the HR user who is signing the document off. The role has to
+ * travel with the placement because it is what tells the stamper which of the
+ * two images to draw; a placement that only said WHERE would leave that to be
+ * guessed, and a signature drawn in the wrong person's name is worse than one
+ * drawn in the wrong place.
+ */
+export const SIGNER_ROLES = {
+  EMPLOYEE: 'Employee',
+  AUTHORISER: 'Authoriser',
+} as const
+
+export type SignerRole = (typeof SIGNER_ROLES)[keyof typeof SIGNER_ROLES]
+
+export const SIGNER_ROLE_LABEL: Readonly<Record<SignerRole, string>> = {
+  [SIGNER_ROLES.EMPLOYEE]: 'Employee signature',
+  [SIGNER_ROLES.AUTHORISER]: 'HR signature',
+}
+
+/**
  * Allowed status transitions. Anything not listed here is rejected by the
  * service layer with 409 Conflict rather than silently written.
  */

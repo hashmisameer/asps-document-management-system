@@ -7,6 +7,75 @@ import {
 } from './common.js'
 
 /**
+ * An identity number, as someone actually types it.
+ *
+ * Spaces and hyphens are stripped before the length is checked, because an
+ * Aadhaar number is written '1234 5678 9012' on every form that carries one and
+ * refusing that spelling teaches people to fight the form. What is stored is
+ * the digits, so the check against a document compares like with like.
+ */
+const digitsOnly = (length: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/[\s-]/g, ''))
+    .refine((value) => value.length === 0 || new RegExp(`^\\d{${length}}$`).test(value), {
+      message: `${label} must be ${length} digits`,
+    })
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional()
+
+/**
+ * The employee details the company's forms carry.
+ *
+ * Every one is optional. They are checked against an uploaded document when the
+ * document type asks for them, and a detail the office has not recorded is
+ * reported as missing FROM THE RECORD rather than as a fault in the document -
+ * so an incomplete employee record never looks like a bad scan.
+ */
+export const employeeIdentitySchema = z.object({
+  phoneNumber: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/[\s()-]/g, ''))
+    .refine((value) => value.length === 0 || /^(\+91)?\d{10}$/.test(value), {
+      message: 'Mobile number must be 10 digits',
+    })
+    .transform((value) => (value.length === 0 ? null : value.replace(/^\+91/, '')))
+    .nullable()
+    .optional(),
+  dateOfBirth: dateOnlySchema.nullable().optional(),
+  postAppliedFor: optionalShortText(100),
+  categoryOfWorkmen: optionalShortText(100),
+  aadhaarNumber: digitsOnly(12, 'Aadhaar number'),
+  /** Five letters, four digits, one letter - the shape is fixed by the format. */
+  panNumber: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((value) => value.length === 0 || /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(value), {
+      // asps-dms:allow-secret - an example of the format, shown to the person typing.
+      message: 'PAN must be five letters, four digits and a letter, such as ABCDE1234F',
+    })
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional(),
+  uanNumber: digitsOnly(12, 'UAN'),
+  esiNumber: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/[\s-]/g, ''))
+    .refine((value) => value.length === 0 || /^\d{10,17}$/.test(value), {
+      message: 'ESI number must be between 10 and 17 digits',
+    })
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional(),
+  appointmentLetterDate: dateOnlySchema.nullable().optional(),
+})
+
+/**
  * Employee creation.
  *
  * Business rules, Section 89 items 1-5, enforced identically here (browser)
@@ -18,7 +87,7 @@ import {
  *   Department    OPTIONAL
  *   Designation   OPTIONAL
  */
-export const createEmployeeSchema = z.object({
+export const createEmployeeSchema = employeeIdentitySchema.extend({
   employeeName: z
     .string()
     .trim()

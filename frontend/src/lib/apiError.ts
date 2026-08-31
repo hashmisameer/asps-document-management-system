@@ -12,6 +12,15 @@ export class ApiError extends Error {
   readonly code: string
   readonly status: number
   readonly issues: ApiValidationIssue[]
+  /**
+   * The envelope's `details`, as the server sent it.
+   *
+   * Untyped on purpose: what is in it depends on the code, and only the screen
+   * that handles that code knows its shape. The identity check is the one that
+   * uses it today - it carries the per-field outcome so the upload form can say
+   * which detail could not be found.
+   */
+  readonly details: unknown
   /** Present on a server fault. Worth showing: it matches the server log. */
   readonly referenceId: string | null
 
@@ -20,6 +29,7 @@ export class ApiError extends Error {
     message: string
     status: number
     issues?: ApiValidationIssue[]
+    details?: unknown
     referenceId?: string | null
   }) {
     super(options.message)
@@ -27,6 +37,7 @@ export class ApiError extends Error {
     this.code = options.code
     this.status = options.status
     this.issues = options.issues ?? []
+    this.details = options.details
     this.referenceId = options.referenceId ?? null
   }
 
@@ -76,6 +87,7 @@ export function toApiError(error: unknown): ApiError {
       message: data.error.message,
       status,
       issues: Array.isArray(issues) ? issues : [],
+      details: data.error.details,
       referenceId: data.error.referenceId ?? null,
     })
   }

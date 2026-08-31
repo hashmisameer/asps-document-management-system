@@ -8,10 +8,9 @@
  *
  * Exits non-zero on failure so it can be used in a deployment script.
  */
-import crypto from 'node:crypto'
 import { ALL_ROLES, passwordSchema, type Role } from '@asps-dms/shared'
 import * as userRepository from '../repositories/user.repository.js'
-import { hashPassword } from '../services/password.service.js'
+import { generateTemporaryPassword, hashPassword } from '../services/password.service.js'
 import { closePool, getPool } from './pool.js'
 import { getStatus, runMigrations, runSeeds } from './migrate.js'
 
@@ -85,35 +84,6 @@ function readFlags(argv: string[]): Map<string, string> {
     }
   }
   return flags
-}
-
-const LOWER = 'abcdefghijkmnopqrstuvwxyz'
-const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
-const DIGITS = '23456789'
-
-/**
- * A temporary password that satisfies the shared password policy.
- *
- * Characters that are easily confused when read off a screen and typed by hand
- * (l, I, 1, O, 0) are left out, because this password is going to be read off a
- * screen and typed by hand exactly once before it is changed.
- */
-function generateTemporaryPassword(): string {
-  const alphabet = LOWER + UPPER + DIGITS
-  const pick = (source: string): string => source[crypto.randomInt(source.length)] ?? ''
-
-  const characters = [pick(LOWER), pick(UPPER), pick(DIGITS)]
-  while (characters.length < 16) characters.push(pick(alphabet))
-
-  // Fisher-Yates, so the guaranteed lower/upper/digit are not always first.
-  for (let index = characters.length - 1; index > 0; index -= 1) {
-    const swap = crypto.randomInt(index + 1)
-    const current = characters[index] ?? ''
-    characters[index] = characters[swap] ?? ''
-    characters[swap] = current
-  }
-
-  return characters.join('')
 }
 
 function isRole(value: string): value is Role {

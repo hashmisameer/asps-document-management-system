@@ -22,6 +22,14 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/', label: 'Dashboard', permission: null, status: 'ready' },
   { to: '/employees', label: 'Employees', permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready' },
+  {
+    to: '/my-signature',
+    label: 'My signature',
+    // SIGNATURE_UPLOAD, because only someone who signs documents off has any
+    // use for a signature of their own: a Viewer authorises nothing.
+    permission: PERMISSIONS.SIGNATURE_UPLOAD,
+    status: 'ready',
+  },
   { to: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_READ, status: 'planned' },
   { to: '/users', label: 'Users', permission: PERMISSIONS.USER_MANAGE, status: 'planned' },
 ]

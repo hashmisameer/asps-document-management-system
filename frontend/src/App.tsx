@@ -8,6 +8,8 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
+import { MySignaturePage } from './pages/MySignaturePage.js'
+import { PlacementEditorPage } from './features/signatures/PlacementEditorPage.js'
 import { DashboardPage } from './pages/DashboardPage.js'
 
 /**
@@ -70,6 +72,26 @@ export default function App() {
           element={
             <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_UPDATE}>
               <EmployeeFormPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Positioning signatures on one document. Keyed by document rather
+            than employee: the placements belong to the file, not the person. */}
+        <Route
+          path="documents/:documentId/signature"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.SIGNATURE_PLACE}>
+              <PlacementEditorPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* The user's own authorising signature. No id in the path: there is
+            no screen that sets somebody else's. */}
+        <Route
+          path="my-signature"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.SIGNATURE_UPLOAD}>
+              <MySignaturePage />
             </ProtectedRoute>
           }
         />

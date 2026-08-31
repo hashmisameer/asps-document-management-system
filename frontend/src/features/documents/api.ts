@@ -8,6 +8,12 @@ import { api } from '../../lib/api.js'
  * fields, validated by the same schema on both sides.
  */
 
+/** One document, with its deadline state and identity-check outcome. */
+export async function fetchDocument(documentId: number): Promise<EmployeeDocument> {
+  const response = await api.get<{ document: EmployeeDocument }>(`/documents/${documentId}`)
+  return response.data.document
+}
+
 export async function uploadDocument(
   documentId: number,
   file: File,
@@ -18,6 +24,12 @@ export async function uploadDocument(
   form.append('isExistingRecord', String(input.isExistingRecord ?? false))
   if (input.landingStatus) form.append('landingStatus', input.landingStatus)
   if (input.notes) form.append('notes', input.notes)
+  // Only present when someone is knowingly accepting a document the identity
+  // check refused. The reason travels with the file rather than as a second
+  // request, so there is never a moment where an unexplained override exists.
+  if (input.identityOverrideReason) {
+    form.append('identityOverrideReason', input.identityOverrideReason)
+  }
 
   // The Content-Type header is deliberately not set: the browser has to add it
   // with the multipart boundary, and setting it by hand removes the boundary.

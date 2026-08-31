@@ -95,6 +95,20 @@ export class UnsupportedMediaTypeError extends AppError {
   }
 }
 
+/**
+ * An uploaded document did not confirm the employee it was filed against.
+ *
+ * 422 rather than 400: the request was well formed and the file was accepted as
+ * a file - what failed is the comparison with the record. `details` carries the
+ * per-field outcome so the screen can name the details that could not be found
+ * and offer the override, rather than saying only that something was wrong.
+ */
+export class IdentityCheckError extends AppError {
+  constructor(message: string, details: unknown) {
+    super(422, API_ERROR_CODES.IDENTITY_CHECK_FAILED, message, { details })
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message?: string) {
     super(429, API_ERROR_CODES.RATE_LIMITED, message)

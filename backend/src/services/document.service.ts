@@ -12,17 +12,24 @@ import {
   type AuthUser,
   type DocumentStatus,
   type EmployeeDocument,
+  type FieldCheck,
   type SignatureStatus,
   type UpdateDocumentDeadlineInput,
   type UploadDocumentInput,
 } from '@asps-dms/shared'
+import * as documentTypeRepository from '../repositories/documentType.repository.js'
+import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
-import type { EmployeeDocumentRecord } from '../repositories/employeeDocument.repository.js'
-import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors.js'
+import type {
+  AttachIdentityCheck,
+  EmployeeDocumentRecord,
+} from '../repositories/employeeDocument.repository.js'
+import { ConflictError, ForbiddenError, IdentityCheckError, NotFoundError } from '../utils/errors.js'
 import * as audit from './audit.service.js'
 import type { RequestContext } from './auth.service.js'
 import { inspectDocumentUpload, type UploadedFile } from './fileValidation.service.js'
 import * as storage from './storage.service.js'
+import { checkUpload, describeFailure } from './documentVerification.service.js'
 
 /**
  * Employee documents: the file, its status, and its deadline.
@@ -71,6 +78,102 @@ function concurrentChange(): ConflictError {
 }
 
 /**
+ * Reads the file, compares it with the employee, and says what to store.
+ *
+ * Runs BEFORE the file is written: a document that is going to be refused
+ * should never reach the disk in the first place. Three outcomes, and every one
+ * of them is recorded on the row rather than only in the log -
+ *
+ *   Passed      the details the type asks for were found in the document
+ *   NotChecked  the type asks for nothing, or the check is switched off
+ *   Overridden  it failed and a person accepted it anyway, in their own name
+ *
+ * - because "this service card was accepted although its Aadhaar number could
+ * not be read" has to be visible on the document months later, not
+ * reconstructed by someone who knew to go looking in the audit trail.
+ */
+async function runIdentityCheck(
+  record: EmployeeDocumentRecord,
+  file: { buffer: Buffer; mimeType: string },
+  input: UploadDocumentInput,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<AttachIdentityCheck> {
+  const notChecked: AttachIdentityCheck = {
+    status: 'NotChecked',
+    source: null,
+    checks: [],
+    overrideBy: null,
+    overrideReason: null,
+  }
+
+  const documentType = await documentTypeRepository.findById(record.documentTypeId)
+  if (!documentType || documentType.requiredFields.length === 0) return notChecked
+
+  const employee = await employeeRepository.findById(record.employeeId)
+  if (!employee) throw new NotFoundError('That employee does not exist.')
+
+  const result = await checkUpload(employee, documentType.requiredFields, file)
+  if (result === null) return notChecked
+
+  if (result.passed) {
+    return {
+      status: 'Passed',
+      source: result.source,
+      checks: result.checks,
+      overrideBy: null,
+      overrideReason: null,
+    }
+  }
+
+  const reason = input.identityOverrideReason
+  if (reason === undefined) {
+    // Recorded even though nothing was stored. An upload that was turned away
+    // is exactly the event this control exists to make visible, and it leaves
+    // no other trace: there is no document row to look at afterwards.
+    await audit.record({
+      userId: actor.userId,
+      action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_REFUSED,
+      entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
+      entityId: record.documentId,
+      ipAddress: context.ipAddress,
+      metadata: {
+        employeeCode: record.employeeCode,
+        documentName: record.documentName,
+        source: result.source,
+        unreadable: result.unreadable,
+        ...summariseChecks(result.checks),
+      },
+    })
+
+    throw new IdentityCheckError(describeFailure(result), {
+      source: result.source,
+      unreadable: result.unreadable,
+      checks: result.checks,
+    })
+  }
+
+  return {
+    status: 'Overridden',
+    source: result.source,
+    checks: result.checks,
+    overrideBy: actor.userId,
+    overrideReason: reason,
+  }
+}
+
+/**
+ * The check outcomes as audit metadata: which fields, and how each came out.
+ *
+ * The expected VALUES are dropped here. The audit trail is read by more people
+ * and kept for longer than the employee record itself, and a copy of an Aadhaar
+ * number in it would outlive every control on the record it came from.
+ */
+function summariseChecks(checks: readonly FieldCheck[]): { fieldResults: string[] } {
+  return { fieldResults: checks.map((check) => `${check.field}=${check.result}`) }
+}
+
+/**
  * Stores an uploaded file against a checklist row.
  *
  * The order is deliberate: validate, write the file, then update the row. If
@@ -100,6 +203,15 @@ export async function uploadFile(
   }
 
   const inspected = await inspectDocumentUpload(file)
+
+  const identity = await runIdentityCheck(
+    record,
+    { buffer: file.buffer, mimeType: inspected.mimeType },
+    input,
+    actor,
+    context,
+  )
+
   const stored = await storage.storeDocument(record.employeeId, file.buffer, inspected.extension)
 
   // A replacement voids whatever signature work was done on the previous file:
@@ -125,6 +237,7 @@ export async function uploadFile(
       // Section 19: a document HR already holds on paper for an existing
       // employee is not being awaited from anyone, so it carries no deadline.
       clearDueDate: input.isExistingRecord,
+      identity,
     })
   } catch (error) {
     await storage.discardStoredFile(stored.relativePath)
@@ -149,8 +262,29 @@ export async function uploadFile(
       status: targetStatus,
       replacedPreviousFile: isReplacement,
       notes: input.notes,
+      identityCheck: identity.status,
+      ...summariseChecks(identity.checks),
     },
   })
+
+  // A second entry, on purpose. An override is the event a reviewer looks for,
+  // and it should not have to be found by reading the metadata of every upload.
+  if (identity.status === 'Overridden') {
+    await audit.record({
+      userId: actor.userId,
+      action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_OVERRIDDEN,
+      entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
+      entityId: documentId,
+      ipAddress: context.ipAddress,
+      metadata: {
+        employeeCode: record.employeeCode,
+        documentName: record.documentName,
+        source: identity.source,
+        reason: identity.overrideReason,
+        ...summariseChecks(identity.checks),
+      },
+    })
+  }
 
   return getById(documentId)
 }

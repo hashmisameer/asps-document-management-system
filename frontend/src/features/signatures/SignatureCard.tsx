@@ -1,20 +1,20 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ALLOWED_SIGNATURE_MIME_TYPES,
-  MAX_SIGNATURE_SIZE_BYTES,
-  PERMISSIONS,
-} from '@asps-dms/shared'
-import { Alert } from '../../components/ui/Alert.js'
+import { PERMISSIONS } from '@asps-dms/shared'
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDateTime } from '../../lib/format.js'
+import { SignatureCaptureDialog } from './SignatureCaptureDialog.js'
 import { fetchSignature, signatureImageUrl, signatureKeys, uploadSignature } from './api.js'
 
 /**
  * The employee's signature.
+ *
+ * Signed on the pad, not uploaded as a file: the employee is standing at the
+ * desk with the tablet when their record is created, and a scan of a signature
+ * on paper is a photograph of a signature rather than the thing itself.
  *
  * Uploaded once and reused on every document they sign (Section 24), which is
  * why it lives on the employee rather than on any one document.
@@ -27,7 +27,7 @@ import { fetchSignature, signatureImageUrl, signatureKeys, uploadSignature } fro
 export function SignatureCard({ employeeId }: { employeeId: number }) {
   const { can } = useAuth()
   const queryClient = useQueryClient()
-  const fileInput = useRef<HTMLInputElement>(null)
+  const [signing, setSigning] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
   const signature = useQuery({
@@ -35,47 +35,30 @@ export function SignatureCard({ employeeId }: { employeeId: number }) {
     queryFn: () => fetchSignature(employeeId),
   })
 
-  const upload = useMutation({
-    mutationFn: (file: File) => uploadSignature(employeeId, file),
+  const save = useMutation({
+    mutationFn: (png: Blob) => uploadSignature(employeeId, png),
     onSuccess: async () => {
       setFailure(null)
+      setSigning(false)
       await queryClient.invalidateQueries({ queryKey: signatureKeys.employee(employeeId) })
       // The employee profile carries hasSignature, so it changes with this.
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
     },
     onError: (error) => {
+      // The dialog stays open with the ink still on it, so a failed save does
+      // not mean signing again from nothing.
       setFailure(error instanceof ApiError ? error.message : 'Something went wrong.')
     },
   })
 
-  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
-    if (file.size > MAX_SIGNATURE_SIZE_BYTES) {
-      setFailure(
-        `A signature image must be under ${MAX_SIGNATURE_SIZE_BYTES / (1024 * 1024)} MB.`,
-      )
-      return
-    }
-    upload.mutate(file)
-  }
-
   const data = signature.data
-  const canUpload = can(PERMISSIONS.SIGNATURE_UPLOAD)
+  const canSign = can(PERMISSIONS.SIGNATURE_UPLOAD)
 
   return (
     <section className="mt-6">
       <h2 className="text-sm font-semibold text-slate-900">Signature</h2>
 
       <div className="mt-2 rounded-card border border-slate-200 bg-white p-4 shadow-sm">
-        {failure ? (
-          <div className="mb-3">
-            <Alert title="Could not save the signature">{failure}</Alert>
-          </div>
-        ) : null}
-
         <div className="flex flex-wrap items-center gap-6">
           <div className="flex h-24 w-56 items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50">
             {data?.hasSignature ? (
@@ -97,37 +80,29 @@ export function SignatureCard({ employeeId }: { employeeId: number }) {
                 <p>
                   {data.widthPx} x {data.heightPx} pixels
                 </p>
-                <p className="text-xs text-slate-500">
-                  Uploaded {formatDateTime(data.uploadedAt)}
-                </p>
+                <p className="text-xs text-slate-500">Signed {formatDateTime(data.uploadedAt)}</p>
               </>
             ) : (
               <p className="max-w-md">
-                A signature is needed before one can be placed on a document. A PNG with a
-                transparent background works best.
+                A signature is needed before one can be placed on a document. Hand the employee
+                the pen tablet and have them sign on the pad.
               </p>
             )}
 
-            {canUpload ? (
+            {canSign ? (
               <div className="mt-3">
-                <input
-                  ref={fileInput}
-                  type="file"
-                  accept={ALLOWED_SIGNATURE_MIME_TYPES.join(',')}
-                  className="hidden"
-                  onChange={handleFile}
-                />
                 <Button
                   variant="secondary"
-                  busy={upload.isPending}
-                  busyLabel="Uploading..."
-                  onClick={() => fileInput.current?.click()}
+                  onClick={() => {
+                    setFailure(null)
+                    setSigning(true)
+                  }}
                 >
-                  {data?.hasSignature ? 'Replace signature' : 'Upload signature'}
+                  {data?.hasSignature ? 'Sign again' : 'Sign on pad'}
                 </Button>
                 {data?.hasSignature ? (
                   <p className="mt-2 max-w-md text-xs text-slate-500">
-                    Replacing this does not change documents that have already been signed.
+                    Signing again does not change documents that have already been signed.
                   </p>
                 ) : null}
               </div>
@@ -135,6 +110,19 @@ export function SignatureCard({ employeeId }: { employeeId: number }) {
           </div>
         </div>
       </div>
+
+      <SignatureCaptureDialog
+        open={signing}
+        title="Employee signature"
+        description="The employee signs here. This signature is stamped on every document of theirs that needs one."
+        busy={save.isPending}
+        failure={failure}
+        onCancel={() => {
+          setSigning(false)
+          setFailure(null)
+        }}
+        onSave={(png) => save.mutate(png)}
+      />
     </section>
   )
 }

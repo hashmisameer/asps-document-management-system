@@ -31,13 +31,9 @@ export function DashboardPage() {
           .
         </p>
         <p className="mt-3 text-sm text-slate-600">
-          Documents can be uploaded, verified and rejected from an employee's page. Signature
-          placement arrives in Milestone 5, and the summary tiles that belong on this page with the
-          reports. Nothing here has run against a real database yet - see
-          <code className="mx-1 rounded bg-slate-100 px-1 py-0.5 text-xs">
-            docs/open-questions.md
-          </code>
-          item B1.
+          Documents can be uploaded, verified and rejected from an employee's page, and a document
+          that needs signing is positioned and stamped from its Sign link. The summary tiles that
+          belong on this page arrive with the reports.
         </p>
       </section>
     </main>

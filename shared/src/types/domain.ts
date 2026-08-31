@@ -1,6 +1,7 @@
 import type { Role } from '../constants/roles.js'
-import type { DocumentStatus, SignatureStatus } from '../constants/documents.js'
+import type { DocumentStatus, SignatureStatus, SignerRole } from '../constants/documents.js'
 import type { DeadlineState, DeadlineUnit } from '../constants/deadlines.js'
+import type { DocumentField, FieldCheckResult, TextSource } from '../constants/documentFields.js'
 
 /**
  * API-facing domain shapes.
@@ -18,6 +19,26 @@ export interface AuthUser {
   mustChangePassword: boolean
 }
 
+/**
+ * A user account as an administrator sees it.
+ *
+ * No hash, no salt and no algorithm: those never leave the repository layer,
+ * because there is no screen that has any use for them.
+ */
+export interface UserAccount {
+  userId: number
+  username: string
+  fullName: string
+  role: Role
+  isActive: boolean
+  mustChangePassword: boolean
+  lastLoginAt: string | null
+  /** Present only while a temporary lock is in force. */
+  lockedUntil: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface Employee {
   employeeId: number
   employeeCode: string
@@ -25,10 +46,41 @@ export interface Employee {
   joiningDate: string
   department: string | null
   designation: string | null
+
+  /**
+   * The details the company's forms carry, and therefore the details an
+   * uploaded document is checked against. All optional: an employee already on
+   * file predates them, and a detail the office has not recorded is reported as
+   * exactly that rather than as a document at fault.
+   *
+   * Aadhaar and PAN are the most sensitive values here. They are never included
+   * in a list response, never logged, and never written to audit metadata.
+   */
+  phoneNumber: string | null
+  dateOfBirth: string | null
+  postAppliedFor: string | null
+  categoryOfWorkmen: string | null
+  aadhaarNumber: string | null
+  panNumber: string | null
+  uanNumber: string | null
+  esiNumber: string | null
+  appointmentLetterDate: string | null
+
   isActive: boolean
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * The employee as a LIST row.
+ *
+ * Omits the identity numbers on purpose: a list is the one place they would be
+ * on screen in bulk, and nothing on a list has any use for them.
+ */
+export type EmployeeSummary = Omit<
+  Employee,
+  'aadhaarNumber' | 'panNumber' | 'uanNumber' | 'esiNumber'
+>
 
 export interface EmployeeDocumentCounts {
   total: number
@@ -38,7 +90,7 @@ export interface EmployeeDocumentCounts {
   signatureReviewRequired: number
 }
 
-export interface EmployeeListItem extends Employee {
+export interface EmployeeListItem extends EmployeeSummary {
   counts: EmployeeDocumentCounts
 }
 
@@ -58,8 +110,43 @@ export interface DocumentType {
   deadlineValue: number | null
   deadlineUnit: DeadlineUnit | null
   sortOrder: number
+  /**
+   * Which of the employee's details this document must confirm before it can be
+   * uploaded. Empty means the type is not checked.
+   */
+  requiredFields: DocumentField[]
   createdAt: string
   updatedAt: string
+}
+
+/** One field's outcome from reading a document and comparing it with the record. */
+export interface FieldCheck {
+  field: DocumentField
+  result: FieldCheckResult
+  /**
+   * What the record says, for the fields it is safe to echo back. Null for
+   * Aadhaar and PAN: showing the expected value beside a failure would turn a
+   * refusal message into a way of reading an employee's identity numbers.
+   */
+  expected: string | null
+}
+
+export interface IdentityCheck {
+  /** False when any required field was not confirmed - which refuses the upload. */
+  passed: boolean
+  source: TextSource
+  checks: FieldCheck[]
+  /** True when the document yielded no readable text at all. */
+  unreadable: boolean
+}
+
+export interface DocumentIdentityCheck {
+  status: 'Passed' | 'Overridden' | 'NotChecked'
+  source: TextSource | null
+  checks: FieldCheck[]
+  checkedAt: string | null
+  overriddenByName: string | null
+  overrideReason: string | null
 }
 
 export interface EmployeeDocument {
@@ -85,6 +172,9 @@ export interface EmployeeDocument {
   deadlineState: DeadlineState
   /** Positive = days remaining. Negative = days overdue. Null = no deadline. */
   daysRemaining: number | null
+
+  /** What reading this document found, and any recorded override of a failure. */
+  identityCheck: DocumentIdentityCheck | null
 
   uploadedByName: string | null
   uploadedAt: string | null
@@ -116,6 +206,11 @@ export interface SignaturePlacement {
   method: PlacementMethod
   detectionMethod: DetectionMethod
   confidence: number | null
+  /** Whose signature belongs in this box - the employee's, or the authoriser's. */
+  signerRole: SignerRole
+  /** For an Authoriser box, the user whose signature was drawn into it. */
+  signerUserId: number | null
+  signerName: string | null
   isApplied: boolean
   createdAt: string
   updatedAt: string

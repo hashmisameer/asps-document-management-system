@@ -21,6 +21,10 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_VERIFIED: 'DOCUMENT_VERIFIED',
   DOCUMENT_REJECTED: 'DOCUMENT_REJECTED',
   DOCUMENT_ARCHIVED: 'DOCUMENT_ARCHIVED',
+  /** An upload the identity check refused, accepted anyway with a reason. */
+  DOCUMENT_IDENTITY_OVERRIDDEN: 'DOCUMENT_IDENTITY_OVERRIDDEN',
+  /** An upload the identity check refused, and which was not overridden. */
+  DOCUMENT_IDENTITY_REFUSED: 'DOCUMENT_IDENTITY_REFUSED',
   DEADLINE_CHANGED: 'DEADLINE_CHANGED',
 
   SIGNATURE_UPLOADED: 'SIGNATURE_UPLOADED',
@@ -37,6 +41,12 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_TYPE_UPDATED: 'DOCUMENT_TYPE_UPDATED',
   USER_CREATED: 'USER_CREATED',
   USER_UPDATED: 'USER_UPDATED',
+  /** An administrator resetting someone else's password, not a self-service change. */
+  USER_PASSWORD_RESET: 'USER_PASSWORD_RESET',
+  USER_DEACTIVATED: 'USER_DEACTIVATED',
+  USER_REACTIVATED: 'USER_REACTIVATED',
+  /** An HR or Admin user enrolling or re-drawing their own authorising signature. */
+  USER_SIGNATURE_SAVED: 'USER_SIGNATURE_SAVED',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
@@ -47,6 +57,7 @@ export const AUDIT_ENTITY_TYPES = {
   DOCUMENT: 'EmployeeDocument',
   DOCUMENT_TYPE: 'DocumentType',
   SIGNATURE: 'EmployeeSignature',
+  USER_SIGNATURE: 'UserSignature',
   SIGNATURE_PLACEMENT: 'SignaturePlacement',
 } as const
 
@@ -73,4 +84,12 @@ export const AUDIT_REDACTED_KEYS: readonly string[] = [
   'apiKey',
   'fileBuffer',
   'fileContent',
+  // Identity numbers. The record holds them because the service card check
+  // compares them, but nothing is served by a copy of them in a log line or in
+  // audit metadata, where they would outlive the record and be read by anyone
+  // who can read the trail.
+  'aadhaarNumber',
+  'panNumber',
+  'uanNumber',
+  'esiNumber',
 ]

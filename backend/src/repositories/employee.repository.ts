@@ -46,6 +46,15 @@ interface EmployeeRow extends EmployeeCountsRow {
   JoiningDate: Date
   Department: string | null
   Designation: string | null
+  PhoneNumber: string | null
+  DateOfBirth: Date | null
+  PostAppliedFor: string | null
+  CategoryOfWorkmen: string | null
+  AadhaarNumber: string | null
+  PanNumber: string | null
+  UanNumber: string | null
+  EsiNumber: string | null
+  AppointmentLetterDate: Date | null
   IsActive: boolean
   CreatedAt: Date
   UpdatedAt: Date
@@ -57,7 +66,27 @@ interface EmployeeProfileRow extends EmployeeRow {
 
 const SELECT_EMPLOYEE_COLUMNS = `
              e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
-             e.Department, e.Designation, e.IsActive, e.CreatedAt, e.UpdatedAt`
+             e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
+             e.PostAppliedFor, e.CategoryOfWorkmen, e.AadhaarNumber, e.PanNumber,
+             e.UanNumber, e.EsiNumber, e.AppointmentLetterDate,
+             e.IsActive, e.CreatedAt, e.UpdatedAt`
+
+/**
+ * The same columns without the identity numbers, for the list.
+ *
+ * A list is the one screen that would put Aadhaar and PAN numbers on screen in
+ * bulk, and nothing on it has any use for them.
+ */
+const SELECT_EMPLOYEE_LIST_COLUMNS = `
+             e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
+             e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
+             e.PostAppliedFor, e.CategoryOfWorkmen,
+             CAST(NULL AS VARCHAR(20)) AS AadhaarNumber,
+             CAST(NULL AS VARCHAR(10)) AS PanNumber,
+             CAST(NULL AS VARCHAR(20)) AS UanNumber,
+             CAST(NULL AS VARCHAR(25)) AS EsiNumber,
+             e.AppointmentLetterDate,
+             e.IsActive, e.CreatedAt, e.UpdatedAt`
 
 /**
  * The checklist counters, as a correlated subquery.
@@ -119,6 +148,16 @@ function toEmployee(row: EmployeeRow): Employee {
     joiningDate: formatDateOnly(row.JoiningDate),
     department: row.Department,
     designation: row.Designation,
+    phoneNumber: row.PhoneNumber,
+    dateOfBirth: row.DateOfBirth === null ? null : formatDateOnly(row.DateOfBirth),
+    postAppliedFor: row.PostAppliedFor,
+    categoryOfWorkmen: row.CategoryOfWorkmen,
+    aadhaarNumber: row.AadhaarNumber,
+    panNumber: row.PanNumber,
+    uanNumber: row.UanNumber,
+    esiNumber: row.EsiNumber,
+    appointmentLetterDate:
+      row.AppointmentLetterDate === null ? null : formatDateOnly(row.AppointmentLetterDate),
     isActive: row.IsActive,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
@@ -186,7 +225,7 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
   // Two statements in one round trip, so the page and the total it reports
   // are read against the same state of the table.
   const result = await request.query<EmployeeRow>(`
-      SELECT ${SELECT_EMPLOYEE_COLUMNS},
+      SELECT ${SELECT_EMPLOYEE_LIST_COLUMNS},
              c.Total, c.Completed, c.Overdue, c.SignatureReview
       FROM   dbo.Employees AS e
       ${COUNTS_APPLY}
@@ -258,6 +297,19 @@ export async function create(
     .input('joiningDate', sql.Date, parseDateOnly(input.joiningDate))
     .input('department', sql.NVarChar(100), input.department ?? null)
     .input('designation', sql.NVarChar(100), input.designation ?? null)
+    .input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
+    .input('dateOfBirth', sql.Date, input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null)
+    .input('postAppliedFor', sql.NVarChar(100), input.postAppliedFor ?? null)
+    .input('categoryOfWorkmen', sql.NVarChar(100), input.categoryOfWorkmen ?? null)
+    .input('aadhaarNumber', sql.VarChar(20), input.aadhaarNumber ?? null)
+    .input('panNumber', sql.VarChar(10), input.panNumber ?? null)
+    .input('uanNumber', sql.VarChar(20), input.uanNumber ?? null)
+    .input('esiNumber', sql.VarChar(25), input.esiNumber ?? null)
+    .input(
+      'appointmentLetterDate',
+      sql.Date,
+      input.appointmentLetterDate ? parseDateOnly(input.appointmentLetterDate) : null,
+    )
     .input('createdBy', sql.Int, createdBy).query<{
       EmployeeId: number
       EmployeeCode: string
@@ -270,10 +322,16 @@ export async function create(
                   END;
 
       INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, JoiningDate,
-                                 Department, Designation, CreatedBy)
+                                 Department, Designation, PhoneNumber, DateOfBirth,
+                                 PostAppliedFor, CategoryOfWorkmen, AadhaarNumber,
+                                 PanNumber, UanNumber, EsiNumber, AppointmentLetterDate,
+                                 CreatedBy)
       OUTPUT INSERTED.EmployeeId, INSERTED.EmployeeCode
       VALUES (@employeeCode, @employeeName, @joiningDate,
-              @department, @designation, @createdBy);`)
+              @department, @designation, @phoneNumber, @dateOfBirth,
+              @postAppliedFor, @categoryOfWorkmen, @aadhaarNumber,
+              @panNumber, @uanNumber, @esiNumber, @appointmentLetterDate,
+              @createdBy);`)
 
   const row = result.recordset[0]
   if (!row) throw new Error('Employee insert returned no row')
@@ -306,6 +364,46 @@ export async function update(employeeId: number, input: UpdateEmployeeInput): Pr
   if ('designation' in input) {
     assignments.push('Designation = @designation')
     request.input('designation', sql.NVarChar(100), input.designation ?? null)
+  }
+  if ('phoneNumber' in input) {
+    assignments.push('PhoneNumber = @phoneNumber')
+    request.input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
+  }
+  if ('dateOfBirth' in input) {
+    assignments.push('DateOfBirth = @dateOfBirth')
+    request.input('dateOfBirth', sql.Date, input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null)
+  }
+  if ('postAppliedFor' in input) {
+    assignments.push('PostAppliedFor = @postAppliedFor')
+    request.input('postAppliedFor', sql.NVarChar(100), input.postAppliedFor ?? null)
+  }
+  if ('categoryOfWorkmen' in input) {
+    assignments.push('CategoryOfWorkmen = @categoryOfWorkmen')
+    request.input('categoryOfWorkmen', sql.NVarChar(100), input.categoryOfWorkmen ?? null)
+  }
+  if ('aadhaarNumber' in input) {
+    assignments.push('AadhaarNumber = @aadhaarNumber')
+    request.input('aadhaarNumber', sql.VarChar(20), input.aadhaarNumber ?? null)
+  }
+  if ('panNumber' in input) {
+    assignments.push('PanNumber = @panNumber')
+    request.input('panNumber', sql.VarChar(10), input.panNumber ?? null)
+  }
+  if ('uanNumber' in input) {
+    assignments.push('UanNumber = @uanNumber')
+    request.input('uanNumber', sql.VarChar(20), input.uanNumber ?? null)
+  }
+  if ('esiNumber' in input) {
+    assignments.push('EsiNumber = @esiNumber')
+    request.input('esiNumber', sql.VarChar(25), input.esiNumber ?? null)
+  }
+  if ('appointmentLetterDate' in input) {
+    assignments.push('AppointmentLetterDate = @appointmentLetterDate')
+    request.input(
+      'appointmentLetterDate',
+      sql.Date,
+      input.appointmentLetterDate ? parseDateOnly(input.appointmentLetterDate) : null,
+    )
   }
 
   if (assignments.length === 0) return true

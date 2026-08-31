@@ -152,8 +152,7 @@ describe('stampSignature', () => {
     const output = await stampSignature({
       source,
       sourceMimeType: 'application/pdf',
-      signature: PNG_1X1,
-      signatureMimeType: 'image/png',
+      signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
       placements: [{ ...placement, pageNumber: 2 }],
     })
 
@@ -168,8 +167,7 @@ describe('stampSignature', () => {
     const output = await stampSignature({
       source: PNG_1X1,
       sourceMimeType: 'image/png',
-      signature: PNG_1X1,
-      signatureMimeType: 'image/png',
+      signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
       placements: [placement],
     })
 
@@ -184,8 +182,7 @@ describe('stampSignature', () => {
     const output = await stampSignature({
       source,
       sourceMimeType: 'application/pdf',
-      signature: PNG_1X1,
-      signatureMimeType: 'image/png',
+      signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
       placements: [{ ...placement, pageRotation: 90 }],
     })
 
@@ -202,8 +199,7 @@ describe('stampSignature', () => {
       stampSignature({
         source,
         sourceMimeType: 'application/pdf',
-        signature: PNG_1X1,
-        signatureMimeType: 'image/png',
+        signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
         placements: [{ ...placement, pageRotation: 0 }],
       }),
     ).rejects.toMatchObject({ statusCode: 409 })
@@ -216,8 +212,7 @@ describe('stampSignature', () => {
       stampSignature({
         source,
         sourceMimeType: 'application/pdf',
-        signature: PNG_1X1,
-        signatureMimeType: 'image/png',
+        signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
         placements: [{ ...placement, pageNumber: 7 }],
       }),
     ).rejects.toMatchObject({ statusCode: 409 })
@@ -228,8 +223,7 @@ describe('stampSignature', () => {
       stampSignature({
         source: Buffer.from('not a pdf at all'),
         sourceMimeType: 'application/pdf',
-        signature: PNG_1X1,
-        signatureMimeType: 'image/png',
+        signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
         placements: [placement],
       }),
     ).rejects.toMatchObject({ statusCode: 400 })
@@ -242,8 +236,7 @@ describe('stampSignature', () => {
       stampSignature({
         source,
         sourceMimeType: 'application/pdf',
-        signature: Buffer.from('not an image'),
-        signatureMimeType: 'image/png',
+        signatures: { Employee: { data: Buffer.from('not an image'), mimeType: 'image/png' } },
         placements: [placement],
       }),
     ).rejects.toMatchObject({ statusCode: 415 })

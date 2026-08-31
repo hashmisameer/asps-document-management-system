@@ -3,11 +3,15 @@ import {
   SIGNATURE_STATUS,
   formatDateOnly,
   parseDateOnly,
+  type DocumentIdentityCheck,
   type DocumentStatus,
   type EmployeeDocument,
+  type FieldCheck,
   type SignatureStatus,
+  type TextSource,
 } from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
+import { logger } from '../utils/logger.js'
 
 /**
  * dbo.EmployeeDocuments access.
@@ -46,6 +50,12 @@ interface EmployeeDocumentRow {
   VerifiedByName: string | null
   VerifiedAt: Date | null
   RejectionReason: string | null
+  IdentityCheckStatus: string | null
+  IdentityCheckSource: string | null
+  IdentityCheckDetail: string | null
+  IdentityCheckedAt: Date | null
+  IdentityOverrideByName: string | null
+  IdentityOverrideReason: string | null
   CreatedAt: Date
   UpdatedAt: Date
 }
@@ -57,12 +67,17 @@ const SELECT_EMPLOYEE_DOCUMENT = `
             d.ProcessedFilePath, d.Status, d.SignatureStatus, d.DueDate,
             up.FullName AS UploadedByName, d.UploadedAt,
             vf.FullName AS VerifiedByName, d.VerifiedAt,
-            d.RejectionReason, d.CreatedAt, d.UpdatedAt
+            d.RejectionReason,
+            d.IdentityCheckStatus, d.IdentityCheckSource, d.IdentityCheckDetail,
+            d.IdentityCheckedAt, ov.FullName AS IdentityOverrideByName,
+            d.IdentityOverrideReason,
+            d.CreatedAt, d.UpdatedAt
     FROM    dbo.EmployeeDocuments AS d
     INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
     INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
     LEFT JOIN dbo.Users AS up ON up.UserId = d.UploadedBy
-    LEFT JOIN dbo.Users AS vf ON vf.UserId = d.VerifiedBy`
+    LEFT JOIN dbo.Users AS vf ON vf.UserId = d.VerifiedBy
+    LEFT JOIN dbo.Users AS ov ON ov.UserId = d.IdentityOverrideBy`
 
 function toDocumentStatus(value: string): DocumentStatus {
   // CK_EmpDocs_Status makes anything else impossible. If the constraint is ever
@@ -76,6 +91,43 @@ function toSignatureStatus(value: string): SignatureStatus {
   return (Object.values(SIGNATURE_STATUS) as string[]).includes(value)
     ? (value as SignatureStatus)
     : SIGNATURE_STATUS.NOT_REQUIRED
+}
+
+/**
+ * The identity check as it was recorded, or null for a document that predates
+ * the check or whose type is not checked at all.
+ *
+ * The per-field detail is JSON in an NVARCHAR(MAX) column, because SQL Server
+ * 2014 has no JSON type and nothing ever queries inside it - it is read whole,
+ * with the row it belongs to. Unparseable JSON is reported as no detail rather
+ * than thrown: a document that cannot be opened because a column written months
+ * ago is malformed would be a far worse failure than a missing explanation.
+ */
+function toIdentityCheck(row: EmployeeDocumentRow): DocumentIdentityCheck | null {
+  const status = row.IdentityCheckStatus
+  if (status !== 'Passed' && status !== 'Overridden' && status !== 'NotChecked') return null
+
+  let checks: FieldCheck[] = []
+  if (row.IdentityCheckDetail !== null) {
+    try {
+      const parsed: unknown = JSON.parse(row.IdentityCheckDetail)
+      if (Array.isArray(parsed)) checks = parsed as FieldCheck[]
+    } catch (error) {
+      logger.warn(
+        { err: error, documentId: row.DocumentId },
+        'Could not parse IdentityCheckDetail; reporting the check without its per-field detail',
+      )
+    }
+  }
+
+  return {
+    status,
+    source: (row.IdentityCheckSource as TextSource | null) ?? null,
+    checks,
+    checkedAt: row.IdentityCheckedAt?.toISOString() ?? null,
+    overriddenByName: row.IdentityOverrideByName,
+    overrideReason: row.IdentityOverrideReason,
+  }
 }
 
 function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
@@ -104,6 +156,7 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     verifiedByName: row.VerifiedByName,
     verifiedAt: row.VerifiedAt?.toISOString() ?? null,
     rejectionReason: row.RejectionReason,
+    identityCheck: toIdentityCheck(row),
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }
@@ -264,6 +317,24 @@ export interface AttachFileInput {
   dueDate: string | null
   clearDueDate: boolean
   verifiedBy: number | null
+  /**
+   * What reading the file found, and any override of a refusal.
+   *
+   * Written in the same statement that points the row at the file, so a
+   * document and the check that let it in can never disagree: there is no
+   * moment where the row says a file is attached and says nothing about
+   * whether it was checked.
+   */
+  identity: AttachIdentityCheck
+}
+
+export interface AttachIdentityCheck {
+  status: 'Passed' | 'Overridden' | 'NotChecked'
+  source: TextSource | null
+  /** Per-field outcomes, serialised to JSON by the caller's shape, not the text read. */
+  checks: FieldCheck[]
+  overrideBy: number | null
+  overrideReason: string | null
 }
 
 /**
@@ -294,7 +365,17 @@ export async function attachFile(input: AttachFileInput): Promise<void> {
     .input('uploadedBy', sql.Int, input.uploadedBy)
     .input('verifiedBy', sql.Int, input.verifiedBy)
     .input('dueDate', sql.Date, input.dueDate === null ? null : parseDateOnly(input.dueDate))
-    .input('clearDueDate', sql.Bit, input.clearDueDate).query(`
+    .input('clearDueDate', sql.Bit, input.clearDueDate)
+    .input('identityStatus', sql.VarChar(20), input.identity.status)
+    .input('identitySource', sql.VarChar(10), input.identity.source)
+    .input(
+      'identityDetail',
+      sql.NVarChar(sql.MAX),
+      input.identity.checks.length === 0 ? null : JSON.stringify(input.identity.checks),
+    )
+    .input('identityOverrideBy', sql.Int, input.identity.overrideBy)
+    .input('identityOverrideReason', sql.NVarChar(500), input.identity.overrideReason)
+    .query(`
       UPDATE dbo.EmployeeDocuments
       SET    OriginalFileName = @originalFileName,
              StoredFileName   = @storedFileName,
@@ -311,6 +392,12 @@ export async function attachFile(input: AttachFileInput): Promise<void> {
              VerifiedBy       = @verifiedBy,
              VerifiedAt       = CASE WHEN @verifiedBy IS NULL THEN NULL ELSE SYSUTCDATETIME() END,
              DueDate          = CASE WHEN @clearDueDate = 1 THEN NULL ELSE @dueDate END,
+             IdentityCheckStatus    = @identityStatus,
+             IdentityCheckSource    = @identitySource,
+             IdentityCheckDetail    = @identityDetail,
+             IdentityCheckedAt      = SYSUTCDATETIME(),
+             IdentityOverrideBy     = @identityOverrideBy,
+             IdentityOverrideReason = @identityOverrideReason,
              UpdatedAt        = SYSUTCDATETIME()
       WHERE  DocumentId = @documentId AND IsActive = 1`)
 }

@@ -36,6 +36,10 @@ import { logger } from '../utils/logger.js'
  */
 const DOCUMENTS_FOLDER = 'documents'
 const SIGNATURES_FOLDER = 'signatures'
+/* The authorising signatures, kept apart from the employees' because they are
+   keyed by user id: two ids from different tables must never share a folder,
+   or user 7's signature and employee 7's would land in the same place. */
+const USER_SIGNATURES_FOLDER = 'user-signatures'
 const PROCESSED_FOLDER = 'processed'
 
 export interface StoredFile {
@@ -55,7 +59,12 @@ export interface StoredFile {
  * a document.
  */
 export async function ensureStorageReady(): Promise<void> {
-  for (const folder of [DOCUMENTS_FOLDER, SIGNATURES_FOLDER, PROCESSED_FOLDER]) {
+  for (const folder of [
+    DOCUMENTS_FOLDER,
+    SIGNATURES_FOLDER,
+    USER_SIGNATURES_FOLDER,
+    PROCESSED_FOLDER,
+  ]) {
     await fs.mkdir(path.join(env.storageRoot, folder), { recursive: true })
   }
 }
@@ -76,17 +85,19 @@ export async function checkStorageWritable(): Promise<{ ok: boolean; error?: str
 /**
  * Writes a file into one of the store's folders.
  *
- * Files are grouped by employee id rather than by employee code: the id never
- * changes, and a directory listing of codes would be a list of employees.
+ * Files are grouped by the owner's numeric id - an employee id, or a user id
+ * under the user-signatures folder - rather than by employee code or username:
+ * an id never changes, and a directory listing of codes or usernames would be a
+ * list of the people this system holds documents about.
  */
 async function store(
   folder: string,
-  employeeId: number,
+  ownerId: number,
   buffer: Buffer,
   extension: string,
 ): Promise<StoredFile> {
   const storedFileName = `${randomUUID()}${extension}`
-  const relativePath = path.posix.join(folder, String(employeeId), storedFileName)
+  const relativePath = path.posix.join(folder, String(ownerId), storedFileName)
   const absolutePath = resolveWithinRoot(relativePath)
 
   await fs.mkdir(path.dirname(absolutePath), { recursive: true })
@@ -117,6 +128,15 @@ export async function storeSignature(
   extension: string,
 ): Promise<StoredFile> {
   return store(SIGNATURES_FOLDER, employeeId, buffer, extension)
+}
+
+/** The authorising signature of an HR or Admin user, keyed by their user id. */
+export async function storeUserSignature(
+  userId: number,
+  buffer: Buffer,
+  extension: string,
+): Promise<StoredFile> {
+  return store(USER_SIGNATURES_FOLDER, userId, buffer, extension)
 }
 
 /**

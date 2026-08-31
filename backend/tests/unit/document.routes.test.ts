@@ -24,6 +24,8 @@ const db = vi.hoisted(() => ({
   openStoredFile: vi.fn(),
   storedFileExists: vi.fn(),
   discardStoredFile: vi.fn(),
+  findDocumentType: vi.fn(),
+  findEmployee: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/session.repository.js', () => ({
@@ -57,6 +59,23 @@ vi.mock('../../src/services/storage.service.js', () => ({
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
+
+// The identity check's two reads. A document type that asks for no fields is
+// the uninteresting answer, which keeps these tests about routing.
+vi.mock('../../src/repositories/documentType.repository.js', () => ({
+  findById: db.findDocumentType,
+  listActive: vi.fn(),
+  listAll: vi.fn(),
+}))
+
+vi.mock('../../src/repositories/employee.repository.js', () => ({
+  findById: db.findEmployee,
+  list: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  setActive: vi.fn(),
+  listFacets: vi.fn(),
+}))
 
 const { createApp } = await import('../../src/app.js')
 const { Readable } = await import('node:stream')
@@ -127,6 +146,8 @@ beforeEach(() => {
   db.insertAudit.mockResolvedValue(undefined)
   db.touchSession.mockResolvedValue(undefined)
   db.findById.mockResolvedValue(documentRecord)
+  db.findDocumentType.mockResolvedValue({ documentTypeId: 1, requiredFields: [] })
+  db.findEmployee.mockResolvedValue(null)
   db.findStoredFile.mockResolvedValue(storedFile)
   db.storedFileExists.mockResolvedValue(true)
   db.setStatus.mockResolvedValue(true)
