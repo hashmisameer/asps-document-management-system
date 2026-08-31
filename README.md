@@ -6,9 +6,10 @@ Manages employee records, a configurable document checklist, submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
-> **Status: Milestone 1 complete in code; Milestone 2 (authentication) landed.**
-> The API process, authentication, the signed-in SPA shell, shared business
-> rules and safety checks run and are unit-tested. The schema, migration runner and every SQL query are
+> **Status: Milestones 1-2 complete in code; Milestone 3 (employee records)
+> landed.** The API process, authentication, the signed-in SPA shell, employee
+> management with its document checklist, shared business rules and safety
+> checks run and are unit-tested. The schema, migration runner and every SQL query are
 > written and typechecked but have **not yet been run against a real database**,
 > because no SQL Server instance is available yet - so nothing that reads or
 > writes a table has been exercised end to end.
@@ -99,6 +100,19 @@ trusted, so a caller cannot choose its own log correlation id.
 | `POST /api/auth/logout` | Revokes the session and clears the cookie. |
 | `GET /api/auth/me` | The signed-in user. |
 | `POST /api/auth/change-password` | Changes own password; ends every other session. |
+| `GET /api/employees` | Paginated list with search, filters, sorting and checklist counts. |
+| `GET /api/employees/facets` | The departments and designations in use, for the filters. |
+| `POST /api/employees` | Creates an employee and materialises their checklist. |
+| `GET /api/employees/:id` | One employee, with counts and signature state. |
+| `PATCH /api/employees/:id` | Updates the details. The employee code is immutable. |
+| `POST /api/employees/:id/archive` | Archives. There is no DELETE. |
+| `POST /api/employees/:id/restore` | Restores an archived employee. |
+| `GET /api/employees/:id/documents` | The checklist, with deadline state derived at read time. |
+| `GET /api/document-types` | The configured checklist. Read-only until Settings. |
+
+Health and auth are mounted before the authentication gate; everything else is
+mounted underneath it, so a new feature router is authenticated by where it is
+mounted rather than by each route remembering to ask.
 
 ## Frontend
 
@@ -116,7 +130,12 @@ lets it set a password.
   disagree about what is acceptable. The client check saves a round trip; the
   server rejects the same input again regardless.
 - **Navigation is built from permissions**, not roles, so an Admin and a Viewer
-  get different menus from the same code.
+  get different menus from the same code. The employee pages read the same map:
+  a Viewer sees the list and the checklist, and no button that would change
+  either.
+- **Calendar values are rendered in UTC**, so a joining date shows the day it
+  says. Timestamps are rendered in the reader's own timezone, because those are
+  real instants.
 - **Every failure becomes one `ApiError`**, so a component never sees an axios
   error. A request that never reached the server says so rather than reporting a
   generic failure.
@@ -147,6 +166,28 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 
   The temporary password is printed once. `MustChangePassword` is always set,
   so whoever runs the command does not end up knowing the user's password.
+
+## Employee records
+
+- **The employee code is generated, never typed.** `dbo.EmployeeCodeSeq` yields
+  EMP001..EMP999 and then EMP1000 onwards inside the creation transaction, so it
+  keeps working past 999 without renumbering, and the UNIQUE constraint is the
+  final guarantee. The API accepts no code from the client, and there is no
+  route that can change one afterwards.
+- **An employee and their checklist are created together or not at all.** The
+  document types are read inside the same transaction as the insert, and one row
+  per active type is materialised as `Pending`. A record with no checklist would
+  report nothing outstanding, which looks exactly like a fully compliant
+  employee - the most dangerous wrong answer this system can give.
+- **Due dates are computed by the shared rules**, not by `DATEADD` in the INSERT,
+  so `joiningDate + 10 DAY` has one definition (`shared/src/utils/deadline.ts`),
+  one set of tests, and the browser previews the same numbers the server stores.
+- **Overdue is derived at read time** from `DueDate` against today, in the counts
+  query and again in the checklist, so it is correct the moment it is looked at
+  and no scheduled job can leave it stale.
+- **Employees are archived, never deleted.** There is no `DELETE` route.
+  Archiving is idempotent: asking twice writes nothing and audits nothing,
+  because an audit trail full of repeated clicks is a worse trail.
 
 ## Checks
 

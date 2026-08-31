@@ -35,3 +35,19 @@ export const optionalShortText = (max: number) =>
     .transform((v) => (v.length === 0 ? null : v))
     .nullable()
     .optional()
+
+/**
+ * A boolean that arrives as a query-string or form-field value.
+ *
+ * `z.coerce.boolean()` is wrong for this: it applies JavaScript truthiness, so
+ * the string 'false' - which is exactly what a browser sends for a flag that is
+ * off - parses as true. Only the affirmative spellings count here; anything
+ * else, including 'false' and an empty value, is false.
+ */
+export const booleanQueryParam = z
+  .union([z.boolean(), z.string()])
+  .transform((value) =>
+    typeof value === 'boolean'
+      ? value
+      : ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase()),
+  )

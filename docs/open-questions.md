@@ -4,7 +4,7 @@ Anything the company has not confirmed is recorded here rather than silently
 invented. Each item says what is blocked by it and what the code currently
 assumes, so the assumption is visible instead of buried.
 
-Last updated: 2026-08-31 (authentication, Milestone 2).
+Last updated: 2026-08-31 (employee records, Milestone 3).
 
 ---
 
@@ -29,11 +29,15 @@ Options:
 than 2014, so option (c) at least announces itself.
 
 ### B2 - The official company document list
-**Status: OPEN. Blocks Milestone 2 (document type configuration).**
+**Status: OPEN. The employee checklist is live but nearly empty.**
 
 `database/seeds/0002_document_types.sql` currently seeds **PAN Card only**,
 which is the one confirmed rule (PAN Card = MANDATORY). Every document marked
 "M" on the official list must be `IsMandatory = 1`, everything else `0`.
+
+Employee creation now materialises one checklist row per active document type,
+so until this list arrives every new employee gets a one-line checklist. The
+code is complete; what is missing is the configuration it reads.
 
 Needed: document names and their M markings. **Document names only - no real
 employee data, no scans, no PAN or Aadhaar numbers.**
@@ -97,3 +101,11 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
 10. **A password change ends every other session** for that account and issues a
    fresh one for the device making the change, so whoever prompted the change
    is signed out immediately without the user having to sign in again.
+11. **A checklist is materialised when the employee is created**, from the
+   document types active at that moment. A type added later therefore does not
+   appear on existing employees' checklists on its own: whatever backfills them
+   ships with document type management, and until then the seed is the only way
+   types are added - before the employees are.
+12. **Archive and restore are idempotent.** Archiving an already archived
+   employee writes nothing and audits nothing, so a repeated click cannot fill
+   the audit trail with events that did not happen.

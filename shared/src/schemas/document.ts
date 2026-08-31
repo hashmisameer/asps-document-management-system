@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { dateOnlySchema, paginationQuerySchema, shortText } from './common.js'
+import { booleanQueryParam, dateOnlySchema, paginationQuerySchema, shortText } from './common.js'
 import { DEADLINE_UNITS } from '../constants/deadlines.js'
 import { DEADLINE_STATE } from '../constants/deadlines.js'
 import { DOCUMENT_STATUS, SIGNATURE_STATUS } from '../constants/documents.js'
@@ -29,6 +29,19 @@ const deadlineStateEnum = z.enum([
   DEADLINE_STATE.OVERDUE,
 ])
 
+/**
+ * The document type list.
+ *
+ * Inactive types are hidden by default: a type that has been retired should not
+ * appear in a filter or a form, but it still has to be readable, because
+ * employees who joined earlier may hold documents against it.
+ */
+export const documentTypeListQuerySchema = z.object({
+  includeInactive: booleanQueryParam.default(false),
+})
+
+export type DocumentTypeListQuery = z.infer<typeof documentTypeListQuerySchema>
+
 export const documentListQuerySchema = paginationQuerySchema.extend({
   employeeId: z.coerce.number().int().positive().optional(),
   documentTypeId: z.coerce.number().int().positive().optional(),
@@ -48,7 +61,7 @@ export type DocumentListQuery = z.infer<typeof documentListQuerySchema>
  * they carry no deadline and HR chooses the landing status directly.
  */
 export const uploadDocumentSchema = z.object({
-  isExistingRecord: z.coerce.boolean().default(false),
+  isExistingRecord: booleanQueryParam.default(false),
   landingStatus: z
     .enum([DOCUMENT_STATUS.UPLOADED, DOCUMENT_STATUS.VERIFIED])
     .default(DOCUMENT_STATUS.UPLOADED),

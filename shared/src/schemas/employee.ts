@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { dateOnlySchema, optionalShortText, paginationQuerySchema } from './common.js'
+import {
+  booleanQueryParam,
+  dateOnlySchema,
+  optionalShortText,
+  paginationQuerySchema,
+} from './common.js'
 
 /**
  * Employee creation.
@@ -37,10 +42,31 @@ export const updateEmployeeSchema = createEmployeeSchema.partial().refine(
 
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>
 
+/**
+ * The columns a caller may sort the employee list by.
+ *
+ * An enum rather than a free string: `sortBy` reaches an ORDER BY clause, and
+ * the only safe way to put a caller's value there is to accept nothing that is
+ * not on this list. The backend maps each key to a column name; nothing the
+ * caller sends is ever concatenated into SQL.
+ */
+export const EMPLOYEE_SORT_KEYS = [
+  'employeeCode',
+  'employeeName',
+  'joiningDate',
+  'department',
+  'designation',
+  'createdAt',
+] as const
+
+export type EmployeeSortKey = (typeof EMPLOYEE_SORT_KEYS)[number]
+
 export const employeeListQuerySchema = paginationQuerySchema.extend({
   department: z.string().trim().max(100).optional(),
   designation: z.string().trim().max(100).optional(),
-  includeArchived: z.coerce.boolean().default(false),
+  /** Archived employees are hidden by default; they are never deleted. */
+  includeArchived: booleanQueryParam.default(false),
+  sortBy: z.enum(EMPLOYEE_SORT_KEYS).default('employeeName'),
 })
 
 export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>

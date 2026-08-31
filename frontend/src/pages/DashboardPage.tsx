@@ -1,11 +1,12 @@
+import { Link } from 'react-router-dom'
 import { useAuth } from '../features/auth/useAuth.js'
 
 /**
  * The dashboard.
  *
- * A placeholder until the counts exist: the real tiles need employees and
- * documents, which arrive in Milestone 3, and the summary endpoint they read
- * cannot be written against a database that does not exist yet.
+ * Still without its tiles: the summary counts are a report, and reports arrive
+ * in Milestone 5. What exists now is the way in to the employee records, which
+ * is what anyone signing in is here for.
  */
 export function DashboardPage() {
   const { user } = useAuth()
@@ -21,10 +22,18 @@ export function DashboardPage() {
       </p>
 
       <section className="mt-6 rounded-card border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-900">Coming next</h2>
+        <h2 className="text-sm font-semibold text-slate-900">Employees</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Employee records, the document checklist and the deadline summary land in Milestone 3.
-          They need a SQL Server 2014 instance before they can be built against anything real - see
+          Employee records and their document checklists are ready.{' '}
+          <Link to="/employees" className="font-medium text-brand-700 hover:text-brand-800">
+            Open the employee list
+          </Link>
+          .
+        </p>
+        <p className="mt-3 text-sm text-slate-600">
+          Uploading and verifying documents arrives in Milestone 4, and the summary tiles that
+          belong on this page in Milestone 5. Nothing here has run against a real database yet -
+          see
           <code className="mx-1 rounded bg-slate-100 px-1 py-0.5 text-xs">
             docs/open-questions.md
           </code>

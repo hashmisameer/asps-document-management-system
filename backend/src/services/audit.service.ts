@@ -115,3 +115,11 @@ export async function record(entry: AuditEntry): Promise<void> {
 export function clientIp(req: Request): string | null {
   return req.ip?.slice(0, 45) ?? null
 }
+
+/** Who and where a request came from, as every service records it. */
+export function requestContext(req: Request): {
+  ipAddress: string | null
+  userAgent: string | null
+} {
+  return { ipAddress: clientIp(req), userAgent: req.get('user-agent') ?? null }
+}

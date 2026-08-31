@@ -21,7 +21,7 @@ export interface NavItem {
 
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/', label: 'Dashboard', permission: null, status: 'ready' },
-  { to: '/employees', label: 'Employees', permission: PERMISSIONS.EMPLOYEE_READ, status: 'planned' },
+  { to: '/employees', label: 'Employees', permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready' },
   { to: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_READ, status: 'planned' },
   { to: '/users', label: 'Users', permission: PERMISSIONS.USER_MANAGE, status: 'planned' },
 ]

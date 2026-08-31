@@ -4,6 +4,9 @@ import { AppLayout } from './components/AppLayout.js'
 import { ProtectedRoute } from './components/ProtectedRoute.js'
 import { ChangePasswordPage } from './features/auth/ChangePasswordPage.js'
 import { LoginPage } from './features/auth/LoginPage.js'
+import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
+import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
+import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
 import { DashboardPage } from './pages/DashboardPage.js'
 
@@ -40,7 +43,33 @@ export default function App() {
           path="employees"
           element={
             <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_READ}>
-              <ComingSoonPage title="Employees" milestone="Milestone 3" />
+              <EmployeeListPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Declared before 'employees/:employeeId' so 'new' is a route and not
+            an employee id that would fail to parse. */}
+        <Route
+          path="employees/new"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_CREATE}>
+              <EmployeeFormPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="employees/:employeeId"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_READ}>
+              <EmployeeDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="employees/:employeeId/edit"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_UPDATE}>
+              <EmployeeFormPage />
             </ProtectedRoute>
           }
         />
