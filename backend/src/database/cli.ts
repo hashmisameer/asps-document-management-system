@@ -1,18 +1,23 @@
 /**
  * Database CLI.
  *
- *   npm run db:status    - list migrations and whether each has been applied
- *   npm run db:migrate   - apply all pending migrations
- *   npm run db:seed      - apply seed data (idempotent)
+ *   npm run db:status       - list migrations and whether each has been applied
+ *   npm run db:migrate      - apply all pending migrations
+ *   npm run db:seed         - apply seed data (idempotent)
+ *   npm run db:create-user  - create a login (first admin, or a new user)
  *
  * Exits non-zero on failure so it can be used in a deployment script.
  */
+import crypto from 'node:crypto'
+import { ALL_ROLES, passwordSchema, type Role } from '@asps-dms/shared'
+import * as userRepository from '../repositories/user.repository.js'
+import { hashPassword } from '../services/password.service.js'
 import { closePool, getPool } from './pool.js'
 import { getStatus, runMigrations, runSeeds } from './migrate.js'
 
-type Command = 'status' | 'migrate' | 'seed' | 'check'
+type Command = 'status' | 'migrate' | 'seed' | 'check' | 'create-user'
 
-const COMMANDS: readonly Command[] = ['status', 'migrate', 'seed', 'check']
+const COMMANDS: readonly Command[] = ['status', 'migrate', 'seed', 'check', 'create-user']
 
 function isCommand(value: string | undefined): value is Command {
   return typeof value === 'string' && (COMMANDS as readonly string[]).includes(value)
@@ -62,11 +67,120 @@ async function checkConnection(): Promise<void> {
   }
 }
 
+/**
+ * Reads --flag value pairs. Deliberately minimal: this is an operator tool run
+ * by hand a handful of times, not a user interface.
+ */
+function readFlags(argv: string[]): Map<string, string> {
+  const flags = new Map<string, string>()
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]
+    if (token?.startsWith('--')) {
+      const value = argv[index + 1]
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`Flag ${token} needs a value`)
+      }
+      flags.set(token.slice(2), value)
+      index += 1
+    }
+  }
+  return flags
+}
+
+const LOWER = 'abcdefghijkmnopqrstuvwxyz'
+const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+const DIGITS = '23456789'
+
+/**
+ * A temporary password that satisfies the shared password policy.
+ *
+ * Characters that are easily confused when read off a screen and typed by hand
+ * (l, I, 1, O, 0) are left out, because this password is going to be read off a
+ * screen and typed by hand exactly once before it is changed.
+ */
+function generateTemporaryPassword(): string {
+  const alphabet = LOWER + UPPER + DIGITS
+  const pick = (source: string): string => source[crypto.randomInt(source.length)] ?? ''
+
+  const characters = [pick(LOWER), pick(UPPER), pick(DIGITS)]
+  while (characters.length < 16) characters.push(pick(alphabet))
+
+  // Fisher-Yates, so the guaranteed lower/upper/digit are not always first.
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swap = crypto.randomInt(index + 1)
+    const current = characters[index] ?? ''
+    characters[index] = characters[swap] ?? ''
+    characters[swap] = current
+  }
+
+  return characters.join('')
+}
+
+function isRole(value: string): value is Role {
+  return (ALL_ROLES as readonly string[]).includes(value)
+}
+
+async function createUser(argv: string[]): Promise<void> {
+  const flags = readFlags(argv)
+  const username = flags.get('username')?.trim()
+  const fullName = flags.get('name')?.trim()
+  const role = flags.get('role')?.trim().toUpperCase()
+
+  if (!username || !fullName || !role) {
+    throw new Error(
+      'Usage: npm run db:create-user -- --username <name> --name "<full name>" ' +
+        `--role <${ALL_ROLES.join('|')}> [--password <password>]`,
+    )
+  }
+  if (!isRole(role)) {
+    throw new Error(`Unknown role '${role}'. Expected one of: ${ALL_ROLES.join(', ')}`)
+  }
+  if (username.length > 100) throw new Error('Username must be 100 characters or fewer')
+  if (fullName.length > 150) throw new Error('Full name must be 150 characters or fewer')
+
+  if (await userRepository.usernameExists(username)) {
+    throw new Error(`A user named '${username}' already exists`)
+  }
+
+  // A password passed on the command line lands in the shell history, so the
+  // generated one is the recommended path and the flag exists only for scripts.
+  const supplied = flags.get('password')
+  const password = supplied ?? generateTemporaryPassword()
+
+  const policy = passwordSchema.safeParse(password)
+  if (!policy.success) {
+    const reasons = policy.error.issues.map((issue) => `  - ${issue.message}`).join('\n')
+    throw new Error(`Password does not meet the policy:\n${reasons}`)
+  }
+
+  const userId = await userRepository.createUser({
+    username,
+    fullName,
+    role,
+    password: await hashPassword(password),
+    // Always: the person running this command must not end up knowing the
+    // password the user ends up with.
+    mustChangePassword: true,
+  })
+
+  console.log(`Created user #${userId}`)
+  console.log(`  Username : ${username}`)
+  console.log(`  Full name: ${fullName}`)
+  console.log(`  Role     : ${role}`)
+  if (!supplied) {
+    console.log(`\n  Temporary password: ${password}`)
+    console.log(
+      '\n  Shown once and not stored anywhere in this form. Hand it over in person,\n' +
+        '  not by email or chat. The user must change it at first sign-in.',
+    )
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2]
 
   if (!isCommand(command)) {
-    console.error(`Usage: tsx src/database/cli.ts <${COMMANDS.join('|')}>`)
+    console.error(`Usage: tsx src/database/cli.ts <${COMMANDS.join('|')}> [flags]`)
     process.exitCode = 1
     return
   }
@@ -107,6 +221,10 @@ async function main(): Promise<void> {
           ? '\nNo pending migrations.'
           : `\nApplied ${executed.length} migration(s):\n${executed.map((n) => `  - ${n}`).join('\n')}`,
       )
+      break
+    }
+    case 'create-user': {
+      await createUser(process.argv.slice(3))
       break
     }
     case 'seed': {

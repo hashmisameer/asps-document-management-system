@@ -123,6 +123,19 @@ export async function withTransaction<T>(
   }
 }
 
+/**
+ * A request bound either to the pool or to an open transaction.
+ *
+ * Repositories take an optional transaction so the same function can be called
+ * standalone or as one step of a multi-table write - employee creation and its
+ * document checklist, for instance - without a second copy of the query.
+ */
+export async function createRequest(transaction?: sql.Transaction): Promise<sql.Request> {
+  if (transaction) return new sql.Request(transaction)
+  const activePool = await getPool()
+  return activePool.request()
+}
+
 /** Re-exported so repositories never import the driver directly. */
 export { sql }
 

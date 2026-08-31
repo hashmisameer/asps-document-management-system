@@ -4,7 +4,7 @@ Anything the company has not confirmed is recorded here rather than silently
 invented. Each item says what is blocked by it and what the code currently
 assumes, so the assumption is visible instead of buried.
 
-Last updated: 2026-08-30 (end of Milestone 1).
+Last updated: 2026-08-31 (authentication, Milestone 2).
 
 ---
 
@@ -64,7 +64,7 @@ conservatively. Development is on Node 24.20.0.
 | Q8 | For a JPG/PNG document needing a signature, should the processed output be a PDF or a stamped image? | M4 | **PDF**, for one consistent output format. |
 | Q9 | Should a signed document carry a visible footer (e.g. "Signed via ASPS-DMS, date, user")? | M4 | **No.** Signature image only; nothing else drawn on the page. |
 | Q10 | Server hostname/IP, bind port, HTTPS internally?, who administers firewall rules | M6 | Not assumed. |
-| Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords** - first login forces a password change. |
+| Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords.** Accounts are created with `npm run db:create-user`, which prints a temporary password once and always sets `MustChangePassword`, so the first login forces a change. |
 | Q12 | Backup policy for the database and the storage folder: owner and schedule | M6 | Not assumed. |
 
 ---
@@ -88,3 +88,12 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
 7. **No Active Directory / LDAP / Entra ID.** Local `Users` table only (Section 84).
 8. **Detection is advisory.** No code path applies a signature from an OCR/CV
    result without an explicit HR confirmation.
+9. **Session and lockout policy**, none of which the specification fixes:
+   sessions expire after 8 hours idle under a 24 hour absolute ceiling
+   (`SESSION_IDLE_TTL_MINUTES`, `SESSION_ABSOLUTE_TTL_HOURS`), and five failed
+   sign-ins lock an account for 15 minutes (`backend/src/config/security.ts`).
+   The lockout values are code, not configuration, on purpose: an operator
+   should not be able to switch off account lockout by editing `.env`.
+10. **A password change ends every other session** for that account and issues a
+   fresh one for the device making the change, so whoever prompted the change
+   is signed out immediately without the user having to sign in again.

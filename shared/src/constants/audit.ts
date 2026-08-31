@@ -6,6 +6,8 @@ export const AUDIT_ACTIONS = {
   LOGIN_SUCCESS: 'LOGIN_SUCCESS',
   LOGIN_FAILED: 'LOGIN_FAILED',
   LOGOUT: 'LOGOUT',
+  /** A user changing their own password. Every other session is revoked with it. */
+  PASSWORD_CHANGED: 'PASSWORD_CHANGED',
 
   EMPLOYEE_CREATED: 'EMPLOYEE_CREATED',
   EMPLOYEE_UPDATED: 'EMPLOYEE_UPDATED',

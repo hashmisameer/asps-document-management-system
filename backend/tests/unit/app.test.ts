@@ -112,6 +112,24 @@ describe('error envelope', () => {
     expect(response.body.error.code).toBe(API_ERROR_CODES.PAYLOAD_TOO_LARGE)
   })
 
+  it('answers 503, not 500, when the database is unreachable', async () => {
+    // What tedious throws when SQL Server is not listening.
+    pingDatabase.mockRejectedValue(
+      Object.assign(new Error('Failed to connect to 10.0.0.5:1433'), {
+        name: 'ConnectionError',
+        code: 'ESOCKET',
+      }),
+    )
+
+    const response = await request(app).get('/api/health/ready')
+
+    expect(response.status).toBe(503)
+    expect(response.body.error.code).toBe(API_ERROR_CODES.SERVICE_UNAVAILABLE)
+    // Server-side fault, so it carries a reference - but not the host or port.
+    expect(response.body.error.referenceId).toBeTruthy()
+    expect(JSON.stringify(response.body)).not.toContain('1433')
+  })
+
   it('never returns a stack trace', async () => {
     const response = await request(app).get('/api/not-a-route')
 

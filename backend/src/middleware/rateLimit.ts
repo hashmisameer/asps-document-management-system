@@ -24,3 +24,27 @@ export const apiLimiter = rateLimit({
     next(new TooManyRequestsError())
   },
 })
+
+/**
+ * A much tighter limit on the credential endpoints.
+ *
+ * Account lockout (config/security.ts) already stops guessing at ONE username;
+ * this stops one source spraying a common password across many. Successful
+ * requests are not counted, so a person legitimately signing in and out all day
+ * never runs into it - only failures accumulate.
+ */
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  skip: () => env.isTest,
+  handler: (_req, _res, next) => {
+    next(
+      new TooManyRequestsError(
+        'Too many sign-in attempts from this device. Please wait and try again.',
+      ),
+    )
+  },
+})

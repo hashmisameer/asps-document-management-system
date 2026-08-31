@@ -7,6 +7,7 @@ import {
   InternalError,
   NotFoundError,
   PayloadTooLargeError,
+  ServiceUnavailableError,
   ValidationError,
   describeError,
   isAppError,
@@ -37,6 +38,30 @@ function isBodyParserError(err: unknown): err is BodyParserError {
   return err instanceof Error && typeof (err as BodyParserError).type === 'string'
 }
 
+/**
+ * Tedious/mssql connection failures, by their driver code.
+ *
+ * These mean the database could not be reached - not that the request was
+ * wrong. Answering 503 rather than 500 tells the caller it is worth trying
+ * again, and tells an uptime check the difference between "this deployment is
+ * broken" and "SQL Server is down".
+ */
+const DATABASE_UNAVAILABLE_CODES = new Set([
+  'ESOCKET',
+  'ELOGIN',
+  'ETIMEOUT',
+  'ECONNCLOSED',
+  'ENOTOPEN',
+  'ENOCONN',
+  'EINSTLOOKUP',
+])
+
+function isDatabaseUnavailable(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as { code?: unknown }).code
+  return typeof code === 'string' && DATABASE_UNAVAILABLE_CODES.has(code)
+}
+
 /** Maps anything thrown into the one hierarchy the responder understands. */
 function normalise(err: unknown): AppError {
   if (isAppError(err)) return err
@@ -56,6 +81,13 @@ function normalise(err: unknown): AppError {
     if (err.type === 'entity.verify.failed' || err.type === 'encoding.unsupported') {
       return new AppError(400, API_ERROR_CODES.BAD_REQUEST, undefined, { cause: err })
     }
+  }
+
+  if (isDatabaseUnavailable(err)) {
+    return new ServiceUnavailableError(
+      'The system cannot reach the database right now. Please try again in a moment.',
+      { cause: err },
+    )
   }
 
   return new InternalError(undefined, { cause: err })

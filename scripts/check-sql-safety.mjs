@@ -101,13 +101,18 @@ async function checkSqlCompatibility() {
 }
 
 /**
- * Flags string interpolation inside query text.
+ * Flags interpolated VALUES inside query text.
  *
- * Matches .query`...${x}...`, .query(`...${x}...`) and .batch(`...${x}...`),
- * which are the ways an untrusted value could reach the server as SQL rather
- * than as a bound parameter.
+ * Matches .query(`...`), .batch(`...`) and the generic form .query<Row>(`...`),
+ * then looks at every ${...} inside the template. Composing a query from a
+ * named SQL fragment - a shared SELECT list, say - is legitimate and common
+ * here, so an interpolation of a SCREAMING_SNAKE_CASE constant is allowed.
+ * Anything else is a runtime value reaching the server as SQL text instead of
+ * as a bound parameter, which is the bug this exists to prevent.
  */
-const INTERPOLATED_QUERY = /\.(query|batch)\s*(\(\s*)?`[^`]*\$\{[^`]*`/gs
+const QUERY_TEMPLATE = /\.(?:query|batch)\s*(?:<[^>]*>)?\s*\(?\s*`([^`]*)`/gs
+const INTERPOLATION = /\$\{([^}]*)\}/g
+const CONSTANT_FRAGMENT = /^[A-Z][A-Z0-9_]*$/
 
 async function checkParameterisation() {
   const files = []
@@ -115,12 +120,19 @@ async function checkParameterisation() {
 
   for (const file of files) {
     const text = await fs.readFile(path.join(repoRoot, file), 'utf8')
-    for (const match of text.matchAll(INTERPOLATED_QUERY)) {
-      const line = text.slice(0, match.index).split('\n').length
-      problems.push(
-        `${file}:${line}  Interpolated value inside SQL text. ` +
-          `Use request.input('name', sql.Type, value) and reference @name instead.`,
-      )
+
+    for (const match of text.matchAll(QUERY_TEMPLATE)) {
+      const template = match[1] ?? ''
+      for (const interpolation of template.matchAll(INTERPOLATION)) {
+        const expression = (interpolation[1] ?? '').trim()
+        if (CONSTANT_FRAGMENT.test(expression)) continue
+
+        const line = text.slice(0, match.index).split('\n').length
+        problems.push(
+          `${file}:${line}  Interpolated value inside SQL text (\${${expression}}). ` +
+            `Use request.input('name', sql.Type, value) and reference @name instead.`,
+        )
+      }
     }
   }
   return files.length

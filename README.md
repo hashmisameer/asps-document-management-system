@@ -6,10 +6,12 @@ Manages employee records, a configurable document checklist, submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
-> **Status: Milestone 1 (Foundation) - partially complete.**
-> The API process, shared business rules and safety checks run. The schema and
-> migration runner are written and typechecked but have **not yet been run
-> against a real database**, because no SQL Server instance is available yet.
+> **Status: Milestone 1 complete in code; Milestone 2 (authentication) landed.**
+> The API process, authentication, shared business rules and safety checks run
+> and are unit-tested. The schema, migration runner and every SQL query are
+> written and typechecked but have **not yet been run against a real database**,
+> because no SQL Server instance is available yet - so nothing that reads or
+> writes a table has been exercised end to end.
 > See [`docs/open-questions.md`](docs/open-questions.md) item B1.
 >
 > The API starts and serves requests without a database: it reports the
@@ -56,6 +58,9 @@ npm run db:status     # verifies connectivity and reports the server version
 npm run db:migrate    # applies pending migrations
 npm run db:seed       # roles, and the confirmed document types
 
+# The first login. Prints a temporary password once; the user must change it.
+npm run db:create-user -- --username admin --name "Full Name" --role ADMIN
+
 npm run dev           # backend + frontend
 ```
 
@@ -90,6 +95,37 @@ trusted, so a caller cannot choose its own log correlation id.
 |---|---|
 | `GET /api/health` | Liveness. Never touches the database, safe to poll. |
 | `GET /api/health/ready` | Readiness. Round-trips to SQL Server; 503 when it cannot. |
+| `POST /api/auth/login` | Sign in. Sets the session cookie. |
+| `POST /api/auth/logout` | Revokes the session and clears the cookie. |
+| `GET /api/auth/me` | The signed-in user. |
+| `POST /api/auth/change-password` | Changes own password; ends every other session. |
+
+## Authentication
+
+Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
+
+- **Passwords** are scrypt with a per-user salt, and the parameters are stored
+  with the hash so the cost can be raised later and upgraded on next sign-in.
+  The policy is length-led: 12 characters, with an upper, a lower and a digit.
+- **Sessions** are server-side and revocable. The cookie carries a 256-bit
+  random token and nothing else; only its SHA-256 is stored, so a leak of
+  `dbo.Sessions` yields no usable session. The cookie is httpOnly and SameSite
+  lax, with a sliding idle expiry under a fixed absolute ceiling.
+- **A failed sign-in says nothing.** Wrong password, unknown username and
+  deactivated account all return the same 401. Five failures lock the account
+  for fifteen minutes; the reasons go to `dbo.AuditLogs`, not to the caller.
+- **Authorisation is permission-based**, from `ROLE_PERMISSIONS` in
+  `shared/src/constants/roles.ts`. The frontend reads the same map to decide
+  what to render, but every check that matters is server-side.
+- **Accounts are created from the CLI**, never from a seed file, so no password
+  is ever committed:
+
+  ```bash
+  npm run db:create-user -- --username hr1 --name "Full Name" --role HR
+  ```
+
+  The temporary password is printed once. `MustChangePassword` is always set,
+  so whoever runs the command does not end up knowing the user's password.
 
 ## Checks
 

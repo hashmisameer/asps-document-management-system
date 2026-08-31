@@ -14,7 +14,8 @@
     "test:watch": "vitest tests/unit",
     "db:migrate": "tsx src/database/cli.ts migrate",
     "db:status": "tsx src/database/cli.ts status",
-    "db:seed": "tsx src/database/cli.ts seed"
+    "db:seed": "tsx src/database/cli.ts seed",
+    "db:create-user": "tsx src/database/cli.ts create-user"
   },
   "dependencies": {
     "@asps-dms/shared": "*",
