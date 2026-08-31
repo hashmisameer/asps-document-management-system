@@ -36,3 +36,45 @@ export const changePasswordSchema = z
   })
 
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
+
+/**
+ * Self-registration, which exists only to enrol the office's own staff.
+ *
+ * Capped: see MAX_SELF_REGISTRATIONS. Once that many accounts have been created
+ * this way the route closes permanently, so an open registration form cannot
+ * sit on the network indefinitely handing out accounts to a system holding
+ * every employee's Aadhaar and PAN numbers.
+ */
+export const registerSchema = z
+  .object({
+    username: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(3, 'Username must be at least 3 characters')
+      .max(100)
+      .regex(
+        /^[a-z0-9._-]+$/,
+        'Username may use letters, digits, a dot, a dash or an underscore',
+      ),
+    fullName: z.string().trim().min(1, 'Full name is required').max(150),
+    /**
+     * ADMIN is deliberately absent.
+     *
+     * A form anyone on the network can reach must not be able to mint the role
+     * that manages every other account. The first account on an empty system is
+     * made an Admin by the server, because otherwise nobody could administer
+     * it; after that, an Admin is made by an Admin.
+     */
+    role: z.enum(['HR', 'VIEWER']).default('HR'),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+    /** Required only when the server is configured with a registration secret. */
+    registrationSecret: z.string().max(200).optional(),
+  })
+  .refine((v) => v.password === v.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  })
+
+export type RegisterInput = z.infer<typeof registerSchema>

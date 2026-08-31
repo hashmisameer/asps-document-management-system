@@ -4,6 +4,7 @@ import { AppLayout } from './components/AppLayout.js'
 import { ProtectedRoute } from './components/ProtectedRoute.js'
 import { ChangePasswordPage } from './features/auth/ChangePasswordPage.js'
 import { LoginPage } from './features/auth/LoginPage.js'
+import { RegisterPage } from './features/auth/RegisterPage.js'
 import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
@@ -23,6 +24,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* Public, like /login: registering is what someone does when they have no
+          account to sign in with. The cap on it is enforced server-side. */}
+      <Route path="/register" element={<RegisterPage />} />
 
       <Route
         path="/change-password"

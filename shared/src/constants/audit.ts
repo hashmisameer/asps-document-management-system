@@ -42,6 +42,8 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_TYPE_CREATED: 'DOCUMENT_TYPE_CREATED',
   DOCUMENT_TYPE_UPDATED: 'DOCUMENT_TYPE_UPDATED',
   USER_CREATED: 'USER_CREATED',
+  /** An account enrolled through the registration form, not issued by an admin. */
+  USER_REGISTERED: 'USER_REGISTERED',
   USER_UPDATED: 'USER_UPDATED',
   /** An administrator resetting someone else's password, not a self-service change. */
   USER_PASSWORD_RESET: 'USER_PASSWORD_RESET',

@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import * as authController from '../controllers/auth.controller.js'
+import * as registrationController from '../controllers/registration.controller.js'
 import { loginLimiter } from '../middleware/rateLimit.js'
 import { requireAuth } from '../middleware/requireAuth.js'
 
@@ -13,6 +14,11 @@ import { requireAuth } from '../middleware/requireAuth.js'
 export const authRouter: Router = Router()
 
 authRouter.post('/auth/login', loginLimiter, authController.login)
+
+// Public, and rate limited with the same bucket as signing in: both are ways of
+// hammering the accounts table from outside, and neither should be cheap.
+authRouter.get('/auth/registration', registrationController.status)
+authRouter.post('/auth/register', loginLimiter, registrationController.register)
 authRouter.post('/auth/logout', requireAuth, authController.logout)
 authRouter.get('/auth/me', requireAuth, authController.me)
 authRouter.post(

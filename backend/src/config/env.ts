@@ -78,6 +78,14 @@ const envSchema = z
      * several people at once and a list in configuration is the whole feature:
      * who is chased is an office decision, not a code change.
      */
+    /**
+     * Optional shared code for the registration form.
+     *
+     * Unset by default: the cap is the control, and an office of five people on
+     * their own LAN should not need a code as well. Set it when the network is
+     * shared more widely than the team is.
+     */
+    REGISTRATION_SECRET: z.string().min(8).optional(),
     REMINDER_ENABLED: booleanish.default('false'),
     REMINDER_RECIPIENTS: z
       .string()

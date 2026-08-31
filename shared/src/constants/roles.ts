@@ -114,3 +114,15 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
 export function roleHasPermission(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false
 }
+
+/**
+ * How many accounts may ever be created through the registration form.
+ *
+ * The office has five staff (open question Q11), so five is the whole intended
+ * population. The form closes for good once that many accounts have been
+ * registered - a cap counted in the DATABASE, not in the browser, because a
+ * hidden button is not a control. Accounts an administrator creates with
+ * `npm run db:create-user` do not consume these slots: an Admin adding a
+ * colleague deliberately is a different act from a stranger enrolling.
+ */
+export const MAX_SELF_REGISTRATIONS = 5

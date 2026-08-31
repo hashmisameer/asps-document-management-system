@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { loginSchema } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
+import { REGISTRATION_QUERY_KEY, fetchRegistrationStatus } from './api.js'
 import { useAuth } from './useAuth.js'
 
 interface FromState {
@@ -29,6 +31,17 @@ export function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({})
   const [failure, setFailure] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Whether to offer the link at all. A form that has no places left should not
+  // be advertised; the cap itself is enforced in the database, not here.
+  const registration = useQuery({
+    queryKey: REGISTRATION_QUERY_KEY,
+    queryFn: fetchRegistrationStatus,
+    // A closed registration stays closed, so this is worth remembering rather
+    // than asking again on every visit to the sign-in page.
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
 
   if (isLoading) return null
   if (user) {
@@ -117,6 +130,20 @@ export function LoginPage() {
             Sign in
           </Button>
         </form>
+
+        {registration.data?.open ? (
+          <p className="mt-4 text-center text-sm text-slate-600">
+            {registration.data.firstAccount
+              ? 'No accounts exist yet. '
+              : ''}
+            <Link
+              to="/register"
+              className="font-medium text-brand-700 hover:text-brand-800"
+            >
+              Create an account
+            </Link>
+          </p>
+        ) : null}
 
         <p className="mt-4 text-center text-xs text-slate-500">
           Internal use only. Contact your administrator if you cannot sign in.
