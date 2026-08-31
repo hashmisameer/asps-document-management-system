@@ -48,6 +48,14 @@ import {
 // The worker is resolved through the bundler rather than fetched from a CDN:
 // the company server has no route to the internet, and a viewer that silently
 // fails to start there would be found on deployment day.
+//
+// frontend/package.json pins pdfjs-dist to the EXACT version react-pdf depends
+// on, and it has to stay that way. pdf.js refuses to run when the API and the
+// worker differ even in a patch version - 'The API version X does not match the
+// Worker version Y' - and because the backend also uses pdfjs-dist, npm hoists
+// its copy to the root, where this specifier would otherwise resolve. The
+// symptom is not an obvious version error on screen: the page simply says the
+// file cannot be displayed, as though the PDF were at fault.
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
