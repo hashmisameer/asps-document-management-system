@@ -4,7 +4,7 @@ Anything the company has not confirmed is recorded here rather than silently
 invented. Each item says what is blocked by it and what the code currently
 assumes, so the assumption is visible instead of buried.
 
-Last updated: 2026-08-31 (documents, Milestone 4).
+Last updated: 2026-08-31 (signatures, Milestone 5).
 
 ---
 
@@ -65,8 +65,8 @@ conservatively. Development is on Node 24.20.0.
 | Q5 | Production `DOCUMENT_STORAGE_PATH`, and whether that volume is backed up | **NOW** | Dev default `./.local-storage`; never hard-coded anywhere. Documents are written there from this milestone on, so the volume and its backup are needed before go-live, not at it. |
 | Q6 | May Viewers **download** documents, or preview only? | **NOW** | **Preview only.** Section 6 omits download for Viewers while Section 38 lists it for HR. To change: add `DOCUMENT_DOWNLOAD` to `VIEWER_PERMISSIONS` in `shared/src/constants/roles.ts`; nothing else changes. |
 | Q7 | "Due Soon" threshold | M3 | **7 days.** `DEFAULT_DUE_SOON_THRESHOLD_DAYS`; becomes an `AppSettings` row in M5. |
-| Q8 | For a JPG/PNG document needing a signature, should the processed output be a PDF or a stamped image? | M4 | **PDF**, for one consistent output format. |
-| Q9 | Should a signed document carry a visible footer (e.g. "Signed via ASPS-DMS, date, user")? | M4 | **No.** Signature image only; nothing else drawn on the page. |
+| Q8 | For a JPG/PNG document needing a signature, should the processed output be a PDF or a stamped image? | **IMPLEMENTED** | **PDF**, for one consistent output format. An image document becomes a one-page PDF sized to the image. Reversing this now means changing signatureStamp.service.ts only. |
+| Q9 | Should a signed document carry a visible footer (e.g. "Signed via ASPS-DMS, date, user")? | **IMPLEMENTED** | **No.** The signature image is the only thing drawn on the page. Adding a footer later is one more draw call in the stamper. |
 | Q10 | Server hostname/IP, bind port, HTTPS internally?, who administers firewall rules | M6 | Not assumed. |
 | Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords.** Accounts are created with `npm run db:create-user`, which prints a temporary password once and always sets `MustChangePassword`, so the first login forces a change. |
 | Q12 | Backup policy for the database and the storage folder: owner and schedule | M6 | Not assumed. |
@@ -118,3 +118,12 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    has to be read end to end anyway to sniff its type and hash it, and a
    temporary file would leave an unencrypted copy of an employee's document in
    the system temp folder that nothing here is responsible for cleaning up.
+15. **Replacing an employee's signature does not re-stamp documents already
+   signed.** They carry the image that was current when they were issued;
+   silently changing a signature on a document that has already gone out is not
+   something this system should decide on its own. Re-signing is a deliberate
+   act: open the document and save its placements again.
+16. **Processed files are written as new files, never over the previous one.**
+   A browser displaying the old copy keeps a valid file underneath it, and the
+   earlier output stays inspectable if a placement turns out to have been wrong.
+   Like replaced originals (13), nothing prunes them yet.

@@ -362,3 +362,52 @@ export async function setDueDate(documentId: number, dueDate: string | null): Pr
 
   return (result.rowsAffected[0] ?? 0) > 0
 }
+
+/**
+ * Records the signed copy, and the signature state that goes with it.
+ *
+ * Both move together on purpose: a processed file with a signature status of
+ * ReviewRequired, or an 'Added' status with no processed file, are each a
+ * document that reads as one thing and is another.
+ */
+export async function setProcessedFile(
+  documentId: number,
+  processedFilePath: string | null,
+  signatureStatus: SignatureStatus,
+): Promise<void> {
+  const request = await createRequest()
+  await request
+    .input('documentId', sql.Int, documentId)
+    .input('processedFilePath', sql.NVarChar(500), processedFilePath)
+    .input('signatureStatus', sql.VarChar(20), signatureStatus).query(`
+      UPDATE dbo.EmployeeDocuments
+      SET    ProcessedFilePath = @processedFilePath,
+             SignatureStatus = @signatureStatus,
+             UpdatedAt = SYSUTCDATETIME()
+      WHERE  DocumentId = @documentId AND IsActive = 1`)
+}
+
+/**
+ * Moves the signature state on its own, for the paths that change nothing else
+ * - skipping, or sending a document back for review.
+ *
+ * The current value is in the WHERE clause, so two people acting on the same
+ * document cannot both succeed.
+ */
+export async function setSignatureStatus(
+  documentId: number,
+  fromStatus: SignatureStatus,
+  toStatus: SignatureStatus,
+): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request
+    .input('documentId', sql.Int, documentId)
+    .input('fromStatus', sql.VarChar(20), fromStatus)
+    .input('toStatus', sql.VarChar(20), toStatus).query(`
+      UPDATE dbo.EmployeeDocuments
+      SET    SignatureStatus = @toStatus,
+             UpdatedAt = SYSUTCDATETIME()
+      WHERE  DocumentId = @documentId AND IsActive = 1 AND SignatureStatus = @fromStatus`)
+
+  return (result.rowsAffected[0] ?? 0) > 0
+}

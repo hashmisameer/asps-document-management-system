@@ -293,10 +293,18 @@ export async function openForDelivery(
   const location = await employeeDocumentRepository.findStoredFile(documentId)
   if (!location) throw new NotFoundError('That document does not exist.')
 
+  const servingProcessed = location.processedFilePath !== null
   const relativePath = location.processedFilePath ?? location.originalFilePath
   if (!relativePath) {
     throw new NotFoundError('No file has been uploaded for this document yet.')
   }
+
+  // The processed copy is always a PDF, even when the original was a scan
+  // (open question Q8), so it must not be served with the original's type - a
+  // PDF labelled image/jpeg is a file the browser refuses to display.
+  const mimeType = servingProcessed
+    ? 'application/pdf'
+    : (location.mimeType ?? 'application/octet-stream')
 
   if (!(await storage.storedFileExists(relativePath))) {
     // The row says there is a file and the store disagrees. That is an
@@ -323,7 +331,7 @@ export async function openForDelivery(
 
   return {
     stream: storage.openStoredFile(relativePath),
-    mimeType: location.mimeType ?? 'application/octet-stream',
+    mimeType,
     fileName: deliveryFileName(location.employeeCode, location.documentName, relativePath),
   }
 }

@@ -6,6 +6,7 @@ import { Badge } from '../../components/ui/Badge.js'
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
+import { SignatureCard } from '../signatures/SignatureCard.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDate } from '../../lib/format.js'
 import {
@@ -127,6 +128,7 @@ export function EmployeeDetailPage() {
 
       <Details profile={profile} />
       <Counts profile={profile} />
+      <SignatureCard employeeId={employeeId} />
 
       <section className="mt-6">
         <h2 className="text-sm font-semibold text-slate-900">Document checklist</h2>

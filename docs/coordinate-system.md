@@ -6,6 +6,7 @@ not be visible from the editor preview.
 
 Implementation: `shared/src/utils/coordinates.ts`
 Tests: `backend/tests/unit/coordinates.test.ts` (16 tests, passing)
+Drawing: `backend/src/services/signatureStamp.service.ts` (`toDrawParams`)
 
 ## The stored form
 
@@ -54,6 +55,30 @@ actually catches an inverted axis.
 
 The round-trip is tested too, across A4, Letter, Legal and a landscape page, at
 all four rotations, to 9 decimal places.
+
+## Drawing
+
+`toPdfUserSpace` answers *where on the unrotated page a placement lands*. Drawing
+it needs one more step, and it lives in
+`backend/src/services/signatureStamp.service.ts` as `toDrawParams`:
+
+- A page with `/Rotate` 90 is turned clockwise by the viewer, and content drawn
+  into it turns with it - so an image drawn without compensation appears on its
+  side. It is drawn pre-rotated counter-clockwise by the same angle.
+- `pdf-lib` rotates about `(x, y)` rather than about the rect's centre, so the
+  anchor is a different corner of the target rect at each rotation, and the
+  image's own width and height are swapped at 90 and 270.
+
+That maths deliberately does **not** live in the shared module: it encodes
+pdf-lib's anchor-and-rotate semantics, which the browser editor has no use for
+and must not start depending on. The shared module holds the *contract*; this
+holds one library's way of honouring it. Its four rotations are pinned to
+absolute values in `backend/tests/unit/signatureStamp.test.ts`, the same way the
+table above is.
+
+A placement whose recorded `pageRotation` no longer matches the page's own is
+**refused rather than drawn**. The coordinates describe the page as HR saw it; if
+it has since been rotated, they describe somewhere else.
 
 ## Rules
 

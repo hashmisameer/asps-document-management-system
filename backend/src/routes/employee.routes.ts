@@ -1,7 +1,9 @@
 import { Router } from 'express'
 import { PERMISSIONS } from '@asps-dms/shared'
 import * as employeeController from '../controllers/employee.controller.js'
+import * as signatureController from '../controllers/signature.controller.js'
 import { requirePermission } from '../middleware/requireAuth.js'
+import { uploadSingleDocument } from '../middleware/upload.js'
 
 /**
  * /api/employees
@@ -57,4 +59,25 @@ employeeRouter.get(
   '/:employeeId/documents',
   requirePermission(PERMISSIONS.DOCUMENT_READ),
   employeeController.listDocuments,
+)
+
+/* The signature belongs to the employee, not to any one document: it is
+   uploaded once and reused on everything they sign (Section 24). */
+employeeRouter.get(
+  '/:employeeId/signature',
+  requirePermission(PERMISSIONS.SIGNATURE_READ),
+  signatureController.getEmployeeSignature,
+)
+
+employeeRouter.post(
+  '/:employeeId/signature',
+  requirePermission(PERMISSIONS.SIGNATURE_UPLOAD),
+  uploadSingleDocument,
+  signatureController.uploadEmployeeSignature,
+)
+
+employeeRouter.get(
+  '/:employeeId/signature/image',
+  requirePermission(PERMISSIONS.SIGNATURE_READ),
+  signatureController.downloadEmployeeSignature,
 )

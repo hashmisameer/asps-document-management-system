@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { PERMISSIONS } from '@asps-dms/shared'
 import * as documentController from '../controllers/document.controller.js'
+import * as signatureController from '../controllers/signature.controller.js'
 import { requirePermission } from '../middleware/requireAuth.js'
 import { uploadSingleDocument } from '../middleware/upload.js'
 
@@ -61,4 +62,25 @@ documentRouter.get(
   '/:documentId/download',
   requirePermission(PERMISSIONS.DOCUMENT_DOWNLOAD),
   documentController.download,
+)
+
+/* Placements are per document: where this employee's signature goes on this
+   file. Saving them regenerates the signed copy from the ORIGINAL, which is
+   why it is a PUT of the complete set rather than a PATCH of one. */
+documentRouter.get(
+  '/:documentId/placements',
+  requirePermission(PERMISSIONS.SIGNATURE_READ),
+  signatureController.listPlacements,
+)
+
+documentRouter.put(
+  '/:documentId/placements',
+  requirePermission(PERMISSIONS.SIGNATURE_PLACE),
+  signatureController.savePlacements,
+)
+
+documentRouter.post(
+  '/:documentId/skip-signature',
+  requirePermission(PERMISSIONS.SIGNATURE_SKIP),
+  signatureController.skipSignature,
 )

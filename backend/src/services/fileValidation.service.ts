@@ -3,7 +3,9 @@ import { fileTypeFromBuffer } from 'file-type'
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
   ALLOWED_DOCUMENT_MIME_TYPES,
+  ALLOWED_SIGNATURE_MIME_TYPES,
   MAX_DOCUMENT_SIZE_BYTES,
+  MAX_SIGNATURE_SIZE_BYTES,
   type AllowedDocumentMimeType,
 } from '@asps-dms/shared'
 import { env } from '../config/env.js'
@@ -101,4 +103,39 @@ export async function inspectDocumentUpload(file: UploadedFile): Promise<Inspect
   }
 
   return { extension, mimeType: detected.mime, safeOriginalName }
+}
+
+/**
+ * A signature image.
+ *
+ * Narrower than a document on purpose: PNG or JPEG only, and much smaller. A
+ * signature is a small transparent crop, not a scan - and PDF is excluded
+ * because the stamper draws an image onto a page, not a page onto a page.
+ */
+export async function inspectSignatureUpload(file: UploadedFile): Promise<InspectedFile> {
+  if (file.buffer.byteLength === 0) {
+    throw new BadRequestError('That file is empty.')
+  }
+  if (file.buffer.byteLength > MAX_SIGNATURE_SIZE_BYTES) {
+    throw new PayloadTooLargeError(
+      `A signature image must be under ${Math.floor(MAX_SIGNATURE_SIZE_BYTES / (1024 * 1024))} MB.`,
+    )
+  }
+
+  const detected = await fileTypeFromBuffer(file.buffer)
+
+  if (!detected || !(ALLOWED_SIGNATURE_MIME_TYPES as readonly string[]).includes(detected.mime)) {
+    throw new UnsupportedMediaTypeError(
+      'A signature must be a PNG or JPEG image. A PNG with a transparent background works best.',
+    )
+  }
+
+  const safeOriginalName = safeFileName(file.originalname)
+  return {
+    // The extension comes from the CONTENT, not from the name: this file is
+    // never shown to anyone by name, and the stamper picks its decoder from it.
+    extension: detected.mime === 'image/png' ? '.png' : '.jpg',
+    mimeType: detected.mime as AllowedDocumentMimeType,
+    safeOriginalName,
+  }
 }

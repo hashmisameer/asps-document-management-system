@@ -90,8 +90,8 @@ export class PayloadTooLargeError extends AppError {
 }
 
 export class UnsupportedMediaTypeError extends AppError {
-  constructor(message?: string) {
-    super(415, API_ERROR_CODES.UNSUPPORTED_MEDIA_TYPE, message)
+  constructor(message?: string, options?: { cause?: unknown }) {
+    super(415, API_ERROR_CODES.UNSUPPORTED_MEDIA_TYPE, message, options)
   }
 }
 

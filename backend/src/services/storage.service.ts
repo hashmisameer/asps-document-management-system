@@ -26,8 +26,17 @@ import { logger } from '../utils/logger.js'
  *      able to read a file outside the store.
  */
 
-/** Sub-folder of the storage root; keeps room for signatures alongside. */
+/**
+ * Sub-folders of the storage root.
+ *
+ * Signatures are kept apart from documents because they are reused across every
+ * document an employee has, and processed output is kept apart from both
+ * because it is DERIVED: it can always be regenerated from the original plus
+ * the placements, and losing it loses nothing that cannot be rebuilt.
+ */
 const DOCUMENTS_FOLDER = 'documents'
+const SIGNATURES_FOLDER = 'signatures'
+const PROCESSED_FOLDER = 'processed'
 
 export interface StoredFile {
   /** UUID plus extension. Unique, and reveals nothing about the employee. */
@@ -46,7 +55,9 @@ export interface StoredFile {
  * a document.
  */
 export async function ensureStorageReady(): Promise<void> {
-  await fs.mkdir(path.join(env.storageRoot, DOCUMENTS_FOLDER), { recursive: true })
+  for (const folder of [DOCUMENTS_FOLDER, SIGNATURES_FOLDER, PROCESSED_FOLDER]) {
+    await fs.mkdir(path.join(env.storageRoot, folder), { recursive: true })
+  }
 }
 
 /** Whether the store can actually be written to, for the readiness endpoint. */
@@ -63,18 +74,19 @@ export async function checkStorageWritable(): Promise<{ ok: boolean; error?: str
 }
 
 /**
- * Writes a document into the store.
+ * Writes a file into one of the store's folders.
  *
  * Files are grouped by employee id rather than by employee code: the id never
  * changes, and a directory listing of codes would be a list of employees.
  */
-export async function storeDocument(
+async function store(
+  folder: string,
   employeeId: number,
   buffer: Buffer,
   extension: string,
 ): Promise<StoredFile> {
   const storedFileName = `${randomUUID()}${extension}`
-  const relativePath = path.posix.join(DOCUMENTS_FOLDER, String(employeeId), storedFileName)
+  const relativePath = path.posix.join(folder, String(employeeId), storedFileName)
   const absolutePath = resolveWithinRoot(relativePath)
 
   await fs.mkdir(path.dirname(absolutePath), { recursive: true })
@@ -89,6 +101,43 @@ export async function storeDocument(
     sizeBytes: buffer.byteLength,
     sha256: createHash('sha256').update(buffer).digest(),
   }
+}
+
+export async function storeDocument(
+  employeeId: number,
+  buffer: Buffer,
+  extension: string,
+): Promise<StoredFile> {
+  return store(DOCUMENTS_FOLDER, employeeId, buffer, extension)
+}
+
+export async function storeSignature(
+  employeeId: number,
+  buffer: Buffer,
+  extension: string,
+): Promise<StoredFile> {
+  return store(SIGNATURES_FOLDER, employeeId, buffer, extension)
+}
+
+/**
+ * Writes a signed copy of a document.
+ *
+ * Always a new file rather than an overwrite of the previous processed copy: a
+ * browser that is displaying the old one keeps a valid file underneath it, and
+ * the previous output stays inspectable if a placement turns out to have been
+ * wrong.
+ */
+export async function storeProcessedDocument(
+  employeeId: number,
+  buffer: Buffer,
+  extension: string,
+): Promise<StoredFile> {
+  return store(PROCESSED_FOLDER, employeeId, buffer, extension)
+}
+
+/** Reads a stored file back into memory, for stamping. */
+export async function readStoredFile(relativePath: string): Promise<Buffer> {
+  return fs.readFile(resolveWithinRoot(relativePath))
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   SIGNATURE_STATUS,
   SIGNATURE_STATUS_LABEL,
   canTransitionDocument,
+  canTransitionSignature,
   deriveDeadline,
   type EmployeeDocument,
 } from '@asps-dms/shared'
@@ -18,6 +19,7 @@ import { Badge, DEADLINE_STATE_TONE, DOCUMENT_STATUS_TONE } from '../../componen
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
+import { skipSignature } from '../signatures/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
 import { documentFileUrl, rejectDocument, uploadDocument, verifyDocument } from './api.js'
@@ -132,6 +134,15 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     onError,
   })
 
+  const skip = useMutation({
+    mutationFn: () => skipSignature(item.documentId),
+    onSuccess: async () => {
+      setFailure(null)
+      await refresh()
+    },
+    onError,
+  })
+
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     // The input is reset immediately, so choosing the same file again after a
@@ -158,8 +169,15 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     canTransitionDocument(item.status, DOCUMENT_STATUS.VERIFIED)
   const canReject =
     can(PERMISSIONS.DOCUMENT_REJECT) && canTransitionDocument(item.status, DOCUMENT_STATUS.REJECTED)
+  // Skipping is a decision someone makes, not a failure: plenty of documents
+  // need no signature, and 'Skipped' says a person decided that, where leaving
+  // it awaiting review for ever says only that nobody got to it.
+  const canSkipSignature =
+    can(PERMISSIONS.SIGNATURE_SKIP) &&
+    hasFile &&
+    canTransitionSignature(item.signatureStatus, SIGNATURE_STATUS.SKIPPED)
 
-  const busy = upload.isPending || verify.isPending || reject.isPending
+  const busy = upload.isPending || verify.isPending || reject.isPending || skip.isPending
 
   return (
     <>
@@ -278,6 +296,18 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
             {canReject ? (
               <Button variant="ghost" disabled={busy} onClick={() => setRejecting((v) => !v)}>
                 Reject
+              </Button>
+            ) : null}
+
+            {canSkipSignature ? (
+              <Button
+                variant="ghost"
+                busy={skip.isPending}
+                busyLabel="Saving..."
+                disabled={busy}
+                onClick={() => skip.mutate()}
+              >
+                No signature needed
               </Button>
             ) : null}
           </div>

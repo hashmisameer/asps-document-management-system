@@ -6,10 +6,14 @@ Manages employee records, a configurable document checklist, submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
-> **Status: Milestones 1-3 complete in code; Milestone 4 (documents) landed.**
-> The API process, authentication, the signed-in SPA shell, employee management
-> with its document checklist, document upload, verification and secure file
-> serving, shared business rules and safety checks run and are unit-tested. The schema, migration runner and every SQL query are
+> **Status: Milestones 1-4 complete in code; Milestone 5 (signatures) landed
+> except for the placement editor.** The API process, authentication, the
+> signed-in SPA shell, employee management with its document checklist, document
+> upload, verification and secure file serving, signature upload, placement and
+> PDF stamping, shared business rules and safety checks run and are unit-tested.
+> The drag-and-drop editor that lets HR position a signature on the page is the
+> one piece still to build: the API it will call, and the stamping behind it,
+> are done and tested. The schema, migration runner and every SQL query are
 > written and typechecked but have **not yet been run against a real database**,
 > because no SQL Server instance is available yet - so nothing that reads or
 > writes a table has been exercised end to end.
@@ -116,6 +120,12 @@ trusted, so a caller cannot choose its own log correlation id.
 | `PATCH /api/documents/:id/deadline` | Overrides this document's deadline. |
 | `GET /api/documents/:id/preview` | Streams it inline. |
 | `GET /api/documents/:id/download` | Streams it as an attachment. |
+| `GET /api/employees/:id/signature` | Whether a signature is on file, and its size. |
+| `POST /api/employees/:id/signature` | Uploads or replaces it (multipart). |
+| `GET /api/employees/:id/signature/image` | Streams the signature image. |
+| `GET /api/documents/:id/placements` | Where the signature goes on this document. |
+| `PUT /api/documents/:id/placements` | Replaces them all and regenerates the signed PDF. |
+| `POST /api/documents/:id/skip-signature` | Records that no signature is needed. |
 
 Health and auth are mounted before the authentication gate; everything else is
 mounted underneath it, so a new feature router is authenticated by where it is
@@ -229,6 +239,40 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 - **A replacement voids prior signature work.** A placement describes a page in
   a file that is no longer served, so the signature status starts over rather
   than being carried forward onto a document nobody has placed it on.
+
+## Signatures
+
+- **One signature per employee**, uploaded once and reused on everything they
+  sign (Section 24). Replacing it does *not* re-stamp documents that were
+  already signed: those carry the image that was current when they were issued.
+- **The image is measured by embedding it exactly as the stamper will.** That
+  records its pixel size, and it also catches a progressive JPEG - which
+  `pdf-lib` cannot embed - while someone is looking at an upload form, rather
+  than later, when the failure would appear to be about the document.
+- **The signed PDF is always rebuilt from the ORIGINAL** (Sections 34 and 64).
+  Stamping the previous output would compound every placement ever made, and a
+  corrected placement would leave the wrong one visible underneath the right
+  one. Saving placements is therefore a `PUT` of the complete set; an empty set
+  removes the signature and drops the processed file.
+- **The output is always a PDF** (open question Q8), so an image document
+  becomes a one-page PDF sized to the image. The processed copy is served in
+  preference to the original, and is served as `application/pdf` whatever the
+  original was.
+- **A page that has been rotated since a placement was made is refused**, not
+  drawn. The coordinates describe the page as HR saw it; if it has since turned,
+  they describe somewhere else. A signature in the wrong place on a real
+  document is the failure the whole coordinate module exists to prevent, so it
+  fails loudly and asks for the placement to be made again.
+- **Nothing places a signature on its own.** Detection, when it lands, produces
+  candidates; only an explicit save draws anything (standing assumption 8).
+
+The coordinate contract - normalized 0..1, top-left origin, `pageRotation`
+carried alongside, no pixel or zoom value ever stored - is in
+[`docs/coordinate-system.md`](docs/coordinate-system.md). The pdf-lib
+anchor-and-rotate maths that turns a placement into a draw call lives with the
+stamper, not in the shared module, because the browser editor has no use for it;
+both its four rotations and the shared transform are pinned to absolute values
+in the tests rather than round-tripped.
 
 ## Checks
 
