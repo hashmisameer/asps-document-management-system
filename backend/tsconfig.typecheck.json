@@ -2,7 +2,13 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": ".."
+    "rootDir": "..",
+    // Checking against shared/src rather than shared/dist means a change to a
+    // shared type is caught here without rebuilding it first, and matches how
+    // vitest resolves the package in tests.
+    "paths": {
+      "@asps-dms/shared": ["../shared/src/index.ts"]
+    }
   },
   "include": ["src/**/*", "tests/**/*", "vitest.config.ts"]
 }

@@ -11,6 +11,8 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     include: ['tests/**/*.test.ts'],
+    // Applied before any module loads, so config/env.ts validates against it.
+    setupFiles: ['./tests/setup/test-env.ts'],
     reporters: 'default',
   },
 })

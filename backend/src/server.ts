@@ -1,0 +1,105 @@
+import type { Server } from 'node:http'
+import { createApp } from './app.js'
+import { env } from './config/env.js'
+import { closePool, getPool } from './database/pool.js'
+import { logger } from './utils/logger.js'
+import { describeError } from './utils/errors.js'
+
+/**
+ * Process entry point: listen, then shut down cleanly.
+ *
+ * A shutdown that drops in-flight requests is not acceptable here - one of
+ * them may be halfway through writing a document to disk and its row to the
+ * database. On a signal the listener stops accepting new connections, existing
+ * requests are given time to finish, and only then is the pool closed.
+ */
+
+const SHUTDOWN_GRACE_MS = 10_000
+
+/**
+ * Opens the pool at boot so a bad DB_* value is reported on the first line of
+ * output rather than by the first user to click something.
+ *
+ * A failure here does NOT stop the process: the database being unreachable is
+ * an operational condition the readiness endpoint reports, and a server that
+ * refuses to boot cannot tell anyone why. It retries on the next request.
+ */
+async function warmUpDatabase(): Promise<void> {
+  try {
+    await getPool()
+  } catch (err) {
+    logger.error(
+      { err },
+      `Could not connect to SQL Server at startup: ${describeError(err)}. ` +
+        `The API is listening; /api/health/ready will report unavailable until it connects.`,
+    )
+  }
+}
+
+function registerShutdown(server: Server): void {
+  let shuttingDown = false
+
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) return
+    shuttingDown = true
+    logger.info({ signal }, 'Shutting down')
+
+    // A request that hangs must not keep the process alive forever; after the
+    // grace period the process exits non-zero so a service manager restarts it.
+    const forceExit = setTimeout(() => {
+      logger.error({ graceMs: SHUTDOWN_GRACE_MS }, 'Shutdown timed out; exiting')
+      process.exit(1)
+    }, SHUTDOWN_GRACE_MS)
+    forceExit.unref()
+
+    server.close((closeError) => {
+      const finish = async (): Promise<void> => {
+        try {
+          await closePool()
+        } catch (err) {
+          logger.error({ err }, 'Failed to close the SQL Server pool')
+        }
+        clearTimeout(forceExit)
+        process.exit(closeError ? 1 : 0)
+      }
+      void finish()
+    })
+  }
+
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+
+  // Windows services and `npm run dev` both send this.
+  process.on('SIGHUP', () => shutdown('SIGHUP'))
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ err: reason }, `Unhandled promise rejection: ${describeError(reason)}`)
+  })
+
+  process.on('uncaughtException', (err) => {
+    // State is unknown after an uncaught exception, so this one does exit.
+    logger.fatal({ err }, `Uncaught exception: ${describeError(err)}`)
+    shutdown('uncaughtException')
+  })
+}
+
+async function main(): Promise<void> {
+  const app = createApp()
+
+  const server = app.listen(env.PORT, env.HOST, () => {
+    logger.info(
+      { host: env.HOST, port: env.PORT, environment: env.NODE_ENV },
+      `ASPS-DMS API listening on http://${env.HOST}:${env.PORT}`,
+    )
+  })
+
+  server.on('error', (err) => {
+    logger.fatal({ err }, `Could not start the server: ${describeError(err)}`)
+    process.exit(1)
+  })
+
+  registerShutdown(server)
+  await warmUpDatabase()
+}
+
+void main()

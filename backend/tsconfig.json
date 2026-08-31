@@ -3,10 +3,12 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"],
-    "paths": {
-      "@asps-dms/shared": ["../shared/src/index.ts"]
-    }
+    "types": ["node"]
+    // No "paths" for @asps-dms/shared here: this config EMITS, and mapping the
+    // package to ../shared/src would pull those files into the program and put
+    // them outside rootDir. The workspace symlink in node_modules resolves the
+    // package to shared/dist instead, which is what the built output imports at
+    // runtime anyway. Build shared first - `npm run build` and `npm run dev` do.
   },
   "include": ["src/**/*"]
 }

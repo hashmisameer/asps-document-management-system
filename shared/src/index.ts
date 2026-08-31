@@ -3,6 +3,7 @@ export * from './constants/roles.js'
 export * from './constants/documents.js'
 export * from './constants/deadlines.js'
 export * from './constants/audit.js'
+export * from './constants/errors.js'
 
 // Types
 export * from './types/domain.js'

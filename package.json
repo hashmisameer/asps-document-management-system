@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "concurrently -n backend,frontend -c blue,magenta \"npm:dev:backend\" \"npm:dev:frontend\"",
-    "dev:backend": "npm run dev --workspace backend",
+    "dev:backend": "npm run build --workspace shared && npm run dev --workspace backend",
     "dev:frontend": "npm run dev --workspace frontend",
     "build": "npm run build --workspace shared && npm run build --workspace backend && npm run build --workspace frontend",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -29,7 +29,7 @@
     "db:status": "npm run db:status --workspace backend",
     "check:sql-safety": "node scripts/check-sql-safety.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run check:sql-safety && npm run test"
+    "verify": "npm run lint && npm run typecheck && npm run check:sql-safety && npm run check:secrets && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

@@ -45,7 +45,9 @@ const streams: pino.StreamEntry[] = [
   { level: 'error', stream: pino.destination({ dest: path.join(env.logDir, 'error.log'), sync: false, mkdir: true }) },
 ]
 
-if (!env.isProduction) {
+// Console output in development only: under test it would interleave with the
+// reporter and make a passing run look like a failing one.
+if (!env.isProduction && !env.isTest) {
   streams.push({ level: env.LOG_LEVEL, stream: process.stdout })
 }
 

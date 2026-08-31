@@ -17,6 +17,8 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    // A failed compile must not leave half-written output behind.
+    "noEmitOnError": true
   }
 }

@@ -125,3 +125,33 @@ export async function withTransaction<T>(
 
 /** Re-exported so repositories never import the driver directly. */
 export { sql }
+
+export interface DatabasePing {
+  ok: boolean
+  latencyMs: number
+  /** Present only when ok === false. Logged and shown to operators, not users. */
+  error?: string
+}
+
+/**
+ * Cheapest possible round trip to SQL Server, for the readiness endpoint.
+ *
+ * Never throws: an unreachable database is a state the caller reports, not an
+ * exception it has to catch. A failure here also drops the cached pool so the
+ * next call reconnects rather than reusing a dead handle.
+ */
+export async function pingDatabase(): Promise<DatabasePing> {
+  const startedAt = Date.now()
+  try {
+    const activePool = await getPool()
+    await activePool.request().query('SELECT 1 AS Ok')
+    return { ok: true, latencyMs: Date.now() - startedAt }
+  } catch (err) {
+    pool = null
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
