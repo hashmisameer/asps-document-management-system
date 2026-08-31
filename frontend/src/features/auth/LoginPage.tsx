@@ -6,6 +6,7 @@ import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
+import { APP_NAME, ORGANISATION_NAME } from '../../app/brand.js'
 import { REGISTRATION_QUERY_KEY, fetchRegistrationStatus } from './api.js'
 import { useAuth } from './useAuth.js'
 
@@ -90,9 +91,9 @@ export function LoginPage() {
       <div className="w-full max-w-sm">
         <header className="mb-6 text-center">
           <p className="text-sm font-medium tracking-wide text-brand-700 uppercase">
-            ASPS International
+            {ORGANISATION_NAME}
           </p>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-900">Document Management</h1>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-900">{APP_NAME}</h1>
         </header>
 
         <form

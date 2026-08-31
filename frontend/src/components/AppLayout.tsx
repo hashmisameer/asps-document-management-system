@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
 import { useAuth } from '../features/auth/useAuth.js'
@@ -35,9 +36,9 @@ export function AppLayout() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
           <Link to="/" className="flex flex-col leading-tight">
             <span className="text-xs font-medium tracking-wide text-brand-700 uppercase">
-              ASPS International
+              {ORGANISATION_NAME}
             </span>
-            <span className="text-sm font-semibold text-slate-900">Document Management</span>
+            <span className="text-sm font-semibold text-slate-900">{APP_NAME}</span>
           </Link>
 
           <div className="flex items-center gap-3">
