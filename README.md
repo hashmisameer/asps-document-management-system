@@ -390,13 +390,31 @@ in the tests rather than round-tripped.
 npm run verify              # lint + typecheck + SQL safety + secrets + tests
 npm run check:sql-safety    # blocks 2016+ T-SQL and interpolated SQL
 npm run check:secrets       # blocks committed credentials, keys, scans, PAN/Aadhaar
-npm run test                # unit tests
+npm run test                # unit tests - no database, always safe to run
+npm run test:integration    # the same code against a real SQL Server
 ```
 
 `check:sql-safety` exists because production is SQL Server 2014 while developers
 are likely to have something newer: it fails the build on T-SQL that needs a
 later version, and on any value interpolated into query text instead of being
 bound as a parameter.
+
+The **unit** tests mock the repository layer and point at a database host that
+deliberately does not resolve, so they can never reach a real server. They are
+what `npm run verify` runs.
+
+The **integration** tests are the opposite: the same code over HTTP against a
+real SQL Server, exercising what a mock cannot - the checklist a new employee
+gets, the identity check reading an actual PDF, the reminder query, and the
+registration cap, which lives in a condition inside an INSERT precisely so it
+cannot be raced and so cannot be proved by a mock that counts.
+
+They borrow the connection from `backend/.env` and then **force the database
+name to `ASPS_DMS_TEST`**, because they delete rows to reach a known state.
+That database is created once, by hand, with an administrator's account - the
+application's own login is db_owner on its own database and nothing more, and
+widening it just to run tests would be the wrong trade. The command is in the
+error the tests print if it is missing.
 
 `check:secrets` scans everything that would be committed - what git tracks, plus
 untracked files `.gitignore` does not already exclude - for `.env` files, private
