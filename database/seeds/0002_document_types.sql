@@ -1,29 +1,29 @@
 /* =============================================================================
    Seed 0002 - Document types
 
-   The official company list (open question B2), as supplied on 2026-08-31:
+   The official company list (open question B2), as supplied on 2026-08-31 and
+   CONFIRMED on 2026-08-31:
 
-       1  Appointment letter      M          7 days
-       2  Bio Data form           M          7 days
-       3  Aadhaar Card            M    (E)   2 days
-       4  PAN Card                M    (E)   2 days
+       1  Appointment letter                 7 days
+       2  Bio Data form                      7 days
+       3  Aadhaar Card            MANDATORY  2 days
+       4  PAN Card                MANDATORY  2 days
        5  PF form                            10 days
-       6  ESIC form                    (E)   10 days
+       6  ESIC form                          10 days
        7  Service Card                       7 days
-       8  Form of Gratuity        M          7 days
-       9  Form No. 16             M          7 days
+       8  Form of Gratuity                   7 days
+       9  Form No. 16                        7 days
       10  Confirmation letter                6 months from date of joining
 
-   IsMandatory = 1 for the six marked M, and 0 for the four that are not.
-   +-------------------------------------------------------------------------+
-   |  STILL TO CONFIRM: the marks against PF form (5) and Confirmation letter |
-   |  (10) are struck through rather than a clear M, Service Card (7) carries |
-   |  no mark, and the circled (E) on 3, 4 and 6 has not been explained.      |
-   |  Those four are seeded OPTIONAL until the marks are confirmed. Wrongly   |
-   |  mandatory would put a false 'Pending' on every employee record; wrongly  |
-   |  optional hides a real compliance gap. Neither is guessed here - the      |
-   |  written mark is followed exactly.                                       |
-   +-------------------------------------------------------------------------+
+   ONLY the Aadhaar Card and the PAN Card are mandatory. Every other document is
+   OPTIONAL, and the marks on the original sheet - the struck-through ones, the
+   circled (E), the unmarked Service Card - do not make any of them required.
+   That was confirmed directly, which settles what the sheet could not.
+
+   Optional does NOT mean undated. Every type keeps its own deadline, so each
+   one still appears on the checklist with a date to chase, and 'Overdue' still
+   means overdue. What being optional changes is that a missing one is not a
+   compliance failure against the employee record - the two ID cards are.
 
    RequiredFields is the identity check: which of the employee's own details the
    document must confirm before it can be uploaded. A document whose text names
@@ -49,10 +49,10 @@ GO
 MERGE dbo.DocumentTypes AS target
 USING (VALUES
     -- DocumentCode, DocumentName, IsMandatory, RequiresSignature, DeadlineValue, DeadlineUnit, SortOrder, RequiredFields
-    ('APPOINTMENT_LETTER', N'Appointment Letter', 1, 1,  7, 'DAY',    10,
+    ('APPOINTMENT_LETTER', N'Appointment Letter', 0, 1,  7, 'DAY',    10,
      N'EmployeeName,JoiningDate,EmployeeCode'),
 
-    ('BIO_DATA',           N'Bio Data Form',      1, 1,  7, 'DAY',    20,
+    ('BIO_DATA',           N'Bio Data Form',      0, 1,  7, 'DAY',    20,
      N'PostAppliedFor,EmployeeCode,EmployeeName,Phone,JoiningDate'),
 
     ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  2, 'DAY',    30,
@@ -70,10 +70,10 @@ USING (VALUES
     ('SERVICE_CARD',       N'Service Card',       0, 1,  7, 'DAY',    70,
      N'EmployeeCode,EmployeeName,JoiningDate,Designation,AadhaarNumber,PanNumber,CategoryOfWorkmen,UanNumber,EsiNumber'),
 
-    ('GRATUITY_FORM',      N'Form of Gratuity',   1, 1,  7, 'DAY',    80,
+    ('GRATUITY_FORM',      N'Form of Gratuity',   0, 1,  7, 'DAY',    80,
      N'EmployeeName'),
 
-    ('FORM_16',            N'Form No. 16',        1, 1,  7, 'DAY',    90,
+    ('FORM_16',            N'Form No. 16',        0, 1,  7, 'DAY',    90,
      N'EmployeeName'),
 
     -- Six months from joining, not days: confirmation follows the probation period.

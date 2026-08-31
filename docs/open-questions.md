@@ -34,18 +34,31 @@ Options:
 than 2014, so option (c) at least announces itself.
 
 ### B2 - The official company document list
-**Status: OPEN. The employee checklist is live but nearly empty.**
+**Status: RESOLVED on 2026-08-31.**
 
-`database/seeds/0002_document_types.sql` currently seeds **PAN Card only**,
-which is the one confirmed rule (PAN Card = MANDATORY). Every document marked
-"M" on the official list must be `IsMandatory = 1`, everything else `0`.
+All ten document types are seeded, with their deadlines and the details each one
+must confirm for the identity check.
 
-Employee creation now materialises one checklist row per active document type,
-so until this list arrives every new employee gets a one-line checklist. The
-code is complete; what is missing is the configuration it reads.
+**Only the Aadhaar Card and the PAN Card are mandatory. Every other document is
+optional.** That was confirmed directly, and it settles what the original sheet
+could not: the struck-through marks, the circled (E) and the unmarked Service
+Card do not make any of those documents required.
 
-Needed: document names and their M markings. **Document names only - no real
-employee data, no scans, no PAN or Aadhaar numbers.**
+Optional does not mean undated. Every type keeps its own reminder date, so all
+ten appear on an employee's checklist with a date to chase, and 'Overdue' still
+means overdue. What being optional changes is that a missing one is not a
+compliance failure against the employee record.
+
+Seed 0002 first went out with six types marked mandatory, read from those marks.
+Because that seed inserts and never updates - deliberately, so it cannot
+overwrite a value someone has since changed - a database seeded before this was
+not corrected by re-running it. Migration
+`0004_mandatory_documents.sql` fixes the databases that already exist; the seed
+is corrected for the ones created from here on.
+
+Still open, and much smaller: `RequiresSignature` is an assumption, set to 1 for
+the company's own forms and 0 for the two identity cards. It is one value per
+row in the seed if any of them is wrong.
 
 ### B3 - Windows Server version on the production server
 **Status: OPEN. Affects dependency choices now, not at deployment.**
