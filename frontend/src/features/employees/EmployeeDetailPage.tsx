@@ -1,24 +1,11 @@
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  DEADLINE_STATE,
-  DEADLINE_STATE_LABEL,
-  DOCUMENT_STATUS_LABEL,
-  PERMISSIONS,
-  SIGNATURE_STATUS,
-  SIGNATURE_STATUS_LABEL,
-  deriveDeadline,
-  type EmployeeDocument,
-  type EmployeeProfile,
-} from '@asps-dms/shared'
+import { PERMISSIONS, type EmployeeProfile } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
-import {
-  Badge,
-  DEADLINE_STATE_TONE,
-  DOCUMENT_STATUS_TONE,
-} from '../../components/ui/Badge.js'
+import { Badge } from '../../components/ui/Badge.js'
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
+import { DocumentChecklist } from '../documents/DocumentChecklist.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDate } from '../../lib/format.js'
 import {
@@ -154,47 +141,8 @@ export function EmployeeDetailPage() {
           </div>
         ) : null}
 
-        <div className="mt-2 overflow-x-auto rounded-card border border-slate-200 bg-white shadow-sm">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-xs tracking-wide text-slate-500 uppercase">
-              <tr>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Document
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Due
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Signature
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {documents.data?.map((document) => (
-                <ChecklistRow key={document.documentId} item={document} />
-              ))}
-
-              {documents.data && documents.data.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                    No document types are configured yet, so this employee has no checklist. Seed
-                    them from the official company document list.
-                  </td>
-                </tr>
-              ) : null}
-
-              {documents.isLoading ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                    Loading checklist...
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="mt-2">
+          <DocumentChecklist documents={documents.data} isLoading={documents.isLoading} />
         </div>
       </section>
     </main>
@@ -242,55 +190,5 @@ function Counts({ profile }: { profile: EmployeeProfile }) {
         </div>
       ))}
     </div>
-  )
-}
-
-function ChecklistRow({ item }: { item: EmployeeDocument }) {
-  // The label is recomputed from the same shared rule the server used, so an
-  // overdue item that crosses midnight while the page is open says so
-  // without waiting for a refetch.
-  const deadline = deriveDeadline(item.dueDate, item.status)
-
-  return (
-    <tr>
-      <td className="px-4 py-2">
-        <span className="font-medium text-slate-900">{item.documentName}</span>
-        {item.isMandatory ? (
-          <span className="ml-2 text-xs text-slate-500">Mandatory</span>
-        ) : null}
-      </td>
-      <td className="px-4 py-2">
-        <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>
-          {DOCUMENT_STATUS_LABEL[item.status]}
-        </Badge>
-      </td>
-      <td className="px-4 py-2">
-        {item.dueDate ? (
-          <div className="flex items-center gap-2">
-            <span className="text-slate-700">{formatDate(item.dueDate)}</span>
-            {deadline.state === DEADLINE_STATE.NOT_APPLICABLE ||
-            deadline.state === DEADLINE_STATE.NOT_DUE ? null : (
-              <Badge tone={DEADLINE_STATE_TONE[deadline.state]}>
-                {deadline.state === DEADLINE_STATE.COMPLETED
-                  ? DEADLINE_STATE_LABEL[deadline.state]
-                  : deadline.label}
-              </Badge>
-            )}
-          </div>
-        ) : (
-          <span className="text-xs text-slate-500">No deadline</span>
-        )}
-      </td>
-      <td className="px-4 py-2">
-        {item.requiresSignature ||
-        item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED ? (
-          <span className="text-slate-700">
-            {SIGNATURE_STATUS_LABEL[item.signatureStatus]}
-          </span>
-        ) : (
-          <span className="text-xs text-slate-500">-</span>
-        )}
-      </td>
-    </tr>
   )
 }

@@ -74,10 +74,21 @@ export const rejectDocumentSchema = z.object({
   reason: z.string().trim().min(1, 'A rejection reason is required').max(500),
 })
 
+export type RejectDocumentInput = z.infer<typeof rejectDocumentSchema>
+
+/**
+ * A per-document deadline override.
+ *
+ * Null clears it. The deadline a document type carries is a default applied
+ * when the checklist is created, not a rule: HR can extend one employee's
+ * deadline without changing what every future joiner gets.
+ */
 export const updateDeadlineSchema = z.object({
   dueDate: dateOnlySchema.nullable(),
   reason: shortText(500).optional(),
 })
+
+export type UpdateDocumentDeadlineInput = z.infer<typeof updateDeadlineSchema>
 
 export const createDocumentTypeSchema = z
   .object({

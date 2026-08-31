@@ -2,6 +2,7 @@ import type { Server } from 'node:http'
 import { createApp } from './app.js'
 import { env } from './config/env.js'
 import { closePool, getPool } from './database/pool.js'
+import { ensureStorageReady } from './services/storage.service.js'
 import { logger } from './utils/logger.js'
 import { describeError } from './utils/errors.js'
 
@@ -32,6 +33,25 @@ async function warmUpDatabase(): Promise<void> {
       { err },
       `Could not connect to SQL Server at startup: ${describeError(err)}. ` +
         `The API is listening; /api/health/ready will report unavailable until it connects.`,
+    )
+  }
+}
+
+/**
+ * Creates the document store if it is missing.
+ *
+ * Like the database warm-up, a failure here is logged rather than fatal: an
+ * unwritable storage volume stops uploads, not sign-ins or the readiness
+ * endpoint that would explain the problem. /api/health/ready reports it.
+ */
+async function warmUpStorage(): Promise<void> {
+  try {
+    await ensureStorageReady()
+  } catch (err) {
+    logger.error(
+      { err },
+      `Could not prepare the document storage folder: ${describeError(err)}. ` +
+        `Uploads will fail until DOCUMENT_STORAGE_PATH exists and is writable.`,
     )
   }
 }
@@ -100,6 +120,7 @@ async function main(): Promise<void> {
 
   registerShutdown(server)
   await warmUpDatabase()
+  await warmUpStorage()
 }
 
 void main()

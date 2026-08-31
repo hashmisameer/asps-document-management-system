@@ -38,3 +38,12 @@ export function formatDateTime(iso: string | null): string {
   if (!iso) return '-'
   return DATE_TIME_FORMAT.format(new Date(iso))
 }
+
+/** '1.4 MB'. Sizes are shown so someone can tell a scan from a photograph. */
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null) return '-'
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${Math.round(kb)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}

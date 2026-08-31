@@ -6,10 +6,10 @@ Manages employee records, a configurable document checklist, submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
-> **Status: Milestones 1-2 complete in code; Milestone 3 (employee records)
-> landed.** The API process, authentication, the signed-in SPA shell, employee
-> management with its document checklist, shared business rules and safety
-> checks run and are unit-tested. The schema, migration runner and every SQL query are
+> **Status: Milestones 1-3 complete in code; Milestone 4 (documents) landed.**
+> The API process, authentication, the signed-in SPA shell, employee management
+> with its document checklist, document upload, verification and secure file
+> serving, shared business rules and safety checks run and are unit-tested. The schema, migration runner and every SQL query are
 > written and typechecked but have **not yet been run against a real database**,
 > because no SQL Server instance is available yet - so nothing that reads or
 > writes a table has been exercised end to end.
@@ -109,6 +109,13 @@ trusted, so a caller cannot choose its own log correlation id.
 | `POST /api/employees/:id/restore` | Restores an archived employee. |
 | `GET /api/employees/:id/documents` | The checklist, with deadline state derived at read time. |
 | `GET /api/document-types` | The configured checklist. Read-only until Settings. |
+| `GET /api/documents/:id` | One document, with its deadline state. |
+| `POST /api/documents/:id/file` | Uploads or replaces the file (multipart). |
+| `POST /api/documents/:id/verify` | Marks it verified. |
+| `POST /api/documents/:id/reject` | Rejects it. A reason is required. |
+| `PATCH /api/documents/:id/deadline` | Overrides this document's deadline. |
+| `GET /api/documents/:id/preview` | Streams it inline. |
+| `GET /api/documents/:id/download` | Streams it as an attachment. |
 
 Health and auth are mounted before the authentication gate; everything else is
 mounted underneath it, so a new feature router is authenticated by where it is
@@ -188,6 +195,40 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 - **Employees are archived, never deleted.** There is no `DELETE` route.
   Archiving is idempotent: asking twice writes nothing and audits nothing,
   because an audit trail full of repeated clicks is a worse trail.
+
+## Documents
+
+- **The content decides what a file is**, not its name and not the Content-Type
+  the browser attached: both are chosen by the caller. A `.exe` renamed to
+  `.pdf` is rejected because its first bytes are not a PDF's, and a real PDF
+  named `.png` is rejected too, because everything downstream decides what to do
+  from the type.
+- **The stored name is a UUID.** An uploaded name can contain path separators,
+  can collide with another employee's file, and is itself personal data sitting
+  in a directory listing. What is stored in the database is the path *relative*
+  to the storage root, so the volume can move without rewriting every row, and
+  every path read back is re-resolved and checked to be inside the store before
+  it is opened.
+- **Validate, write the file, then update the row.** If the row fails to save
+  the file is removed again: an orphaned file is recoverable housekeeping, while
+  a row pointing at a file that was never written is a document nobody can open.
+- **Every status change goes through the state machine** in
+  `shared/src/constants/documents.ts`. A change it does not permit is a 409 with
+  `INVALID_STATE_TRANSITION`, never a silent write - so replacing a *verified*
+  document re-opens it as Uploaded rather than staying verified on the strength
+  of a file nobody has looked at. The current status is part of the UPDATE's
+  WHERE clause, so two people verifying at once cannot both succeed.
+- **Uploading and replacing are separate permissions**, and only the row knows
+  which a request is: the route requires `DOCUMENT_UPLOAD`, and the service
+  additionally requires `DOCUMENT_REPLACE` when a file is already there.
+- **Preview and download are separate routes** because they are separate
+  permissions (open question Q6). Both are ordinary authenticated requests -
+  there is no signed URL and no token in a query string - and both send
+  `Cache-Control: private, no-store`, because an employee's document must not
+  sit in a shared cache.
+- **A replacement voids prior signature work.** A placement describes a page in
+  a file that is no longer served, so the signature status starts over rather
+  than being carried forward onto a document nobody has placed it on.
 
 ## Checks
 

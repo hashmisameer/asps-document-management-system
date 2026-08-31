@@ -93,7 +93,12 @@ export const ALLOWED_SIGNATURE_TRANSITIONS: Readonly<
     SIGNATURE_STATUS.SKIPPED,
     SIGNATURE_STATUS.NOT_REQUIRED,
   ],
-  [SIGNATURE_STATUS.REVIEW_REQUIRED]: [SIGNATURE_STATUS.ADDED, SIGNATURE_STATUS.SKIPPED],
+  [SIGNATURE_STATUS.REVIEW_REQUIRED]: [
+    SIGNATURE_STATUS.ADDED,
+    SIGNATURE_STATUS.SKIPPED,
+    // A replacement file voids the review it was under.
+    SIGNATURE_STATUS.PENDING_DETECTION,
+  ],
   // HR may revisit a placed signature; the processed PDF is then regenerated
   // from the ORIGINAL, never from the previously processed file
   // (Sections 34 and 64).
@@ -101,8 +106,16 @@ export const ALLOWED_SIGNATURE_TRANSITIONS: Readonly<
     SIGNATURE_STATUS.ADDED,
     SIGNATURE_STATUS.REVIEW_REQUIRED,
     SIGNATURE_STATUS.SKIPPED,
+    // Replacing the file starts the signature work over: the placement that was
+    // applied describes a page in a document that is no longer served, so it
+    // cannot be carried forward.
+    SIGNATURE_STATUS.PENDING_DETECTION,
   ],
-  [SIGNATURE_STATUS.SKIPPED]: [SIGNATURE_STATUS.REVIEW_REQUIRED, SIGNATURE_STATUS.ADDED],
+  [SIGNATURE_STATUS.SKIPPED]: [
+    SIGNATURE_STATUS.REVIEW_REQUIRED,
+    SIGNATURE_STATUS.ADDED,
+    SIGNATURE_STATUS.PENDING_DETECTION,
+  ],
 }
 
 export function canTransitionSignature(from: SignatureStatus, to: SignatureStatus): boolean {

@@ -1,5 +1,6 @@
 import { Router, type RequestHandler } from 'express'
 import { authRouter } from './auth.routes.js'
+import { documentRouter } from './document.routes.js'
 import { documentTypeRouter } from './documentType.routes.js'
 import { employeeRouter } from './employee.routes.js'
 import { healthRouter } from './health.routes.js'
@@ -27,4 +28,5 @@ apiRouter.use(authRouter)
 const authenticated: RequestHandler[] = [requireAuth, requirePasswordChanged]
 
 apiRouter.use('/employees', ...authenticated, employeeRouter)
+apiRouter.use('/documents', ...authenticated, documentRouter)
 apiRouter.use('/document-types', ...authenticated, documentTypeRouter)

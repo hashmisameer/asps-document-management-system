@@ -2,7 +2,6 @@ import {
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPES,
   computeDueDate,
-  deriveDeadline,
   type AuthUser,
   type CreateEmployeeInput,
   type EmployeeDocument,
@@ -13,6 +12,7 @@ import {
   type UpdateEmployeeInput,
 } from '@asps-dms/shared'
 import { withTransaction } from '../database/pool.js'
+import { withDeadline } from './document.service.js'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
@@ -198,9 +198,5 @@ export async function setArchived(
 export async function listDocuments(employeeId: number): Promise<EmployeeDocument[]> {
   await getById(employeeId)
   const records = await employeeDocumentRepository.listForEmployee(employeeId)
-
-  return records.map((record) => {
-    const deadline = deriveDeadline(record.dueDate, record.status)
-    return { ...record, deadlineState: deadline.state, daysRemaining: deadline.daysRemaining }
-  })
+  return records.map(withDeadline)
 }
