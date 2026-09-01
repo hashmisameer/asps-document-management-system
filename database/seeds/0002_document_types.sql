@@ -39,6 +39,11 @@
    Idempotent: matches on DocumentCode, so re-running will not duplicate rows
    and will not silently overwrite a value HR has since changed in Settings.
 
+   The two ID cards have NO deadline. They must be attached before an employee
+   can be created, so either the file was there when the record was made or the
+   record predates that rule - neither is a document running late. They are
+   still mandatory, and still counted as outstanding when missing.
+
    DeadlineValue / DeadlineUnit are the DEFAULT deadline applied to new joiners
    for this document type. NULL means the document has no submission deadline.
    ============================================================================= */
@@ -55,10 +60,10 @@ USING (VALUES
     ('BIO_DATA',           N'Bio Data Form',      0, 1,  7, 'DAY',    20,
      N'PostAppliedFor,EmployeeCode,EmployeeName,Phone,JoiningDate'),
 
-    ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  2, 'DAY',    30,
+    ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  NULL, NULL,   30,
      NULL),
 
-    ('PAN_CARD',           N'PAN Card',           1, 0,  2, 'DAY',    40,
+    ('PAN_CARD',           N'PAN Card',           1, 0,  NULL, NULL,   40,
      NULL),
 
     ('PF_FORM',            N'PF Form',            0, 1, 10, 'DAY',    50,

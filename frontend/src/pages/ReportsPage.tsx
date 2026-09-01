@@ -185,6 +185,11 @@ export function ReportsPage() {
             </tbody>
           </table>
         </div>
+        <p className="mt-2 text-xs text-slate-500">
+          The two mandatory cards have no deadline and never show as overdue: they are attached
+          when the employee is created, so they are either there or the record predates the rule.
+          Missing ones are still counted as outstanding.
+        </p>
       </section>
 
       {/* Who is outstanding, and what to ask them for. */}

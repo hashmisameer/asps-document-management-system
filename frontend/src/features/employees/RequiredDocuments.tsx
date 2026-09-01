@@ -115,16 +115,22 @@ export function RequiredDocuments({
                   <Badge tone={chosen ? 'verified' : 'neutral'}>
                     {chosen ? 'Attached' : 'Pending'}
                   </Badge>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={10}
-                    placeholder="DD/MM/YYYY"
-                    aria-label={`Due date for ${type.documentName}`}
-                    value={dueText[type.documentTypeId] ?? toDisplayDate(defaultFor(type))}
-                    onChange={(event) => onDueDateText(type.documentTypeId, event.target.value)}
-                    className="w-28 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
-                  />
+                  {/* A document attached here and now has no deadline to set: it is
+                      either provided before the record exists or it is not. */}
+                  {type.isMandatory ? (
+                    <span className="w-28 text-right text-xs text-slate-500">Now</span>
+                  ) : (
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="DD/MM/YYYY"
+                      aria-label={`Due date for ${type.documentName}`}
+                      value={dueText[type.documentTypeId] ?? toDisplayDate(defaultFor(type))}
+                      onChange={(event) => onDueDateText(type.documentTypeId, event.target.value)}
+                      className="w-28 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
+                    />
+                  )}
                 </span>
               </div>
 
