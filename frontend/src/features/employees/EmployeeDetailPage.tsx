@@ -142,7 +142,7 @@ export function EmployeeDetailPage() {
         </p>
         <div className="mt-2 grid gap-4 lg:grid-cols-2 lg:items-start">
           <SignatureCard employeeId={employeeId} employeeName={profile.employeeName} />
-          <AuthoriserSignatureCard />
+          <AuthoriserSignatureCard employeeName={profile.employeeName} />
         </div>
       </section>
 

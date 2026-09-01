@@ -24,7 +24,7 @@ import { fetchMySignature, mySignatureImageUrl, saveMySignature, signatureKeys }
  * signed by the person saving it, so nobody can sign a document off in a
  * colleague's name.
  */
-export function AuthoriserSignatureCard() {
+export function AuthoriserSignatureCard({ employeeName }: { employeeName: string }) {
   const { can, user } = useAuth()
   const queryClient = useQueryClient()
   const [signing, setSigning] = useState(false)
@@ -52,14 +52,20 @@ export function AuthoriserSignatureCard() {
 
   const data = signature.data
 
+  // Dashed and tinted, so it does not read as another part of the employee's
+  // record sitting next to their own signature.
   return (
-    <div className="rounded-card border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-card border border-dashed border-slate-300 bg-slate-50 p-4">
       <h3 className="text-sm font-semibold text-slate-900">
-        Authoriser signature
+        Your signature
         <span className="ml-2 font-normal text-slate-500">
           {user ? `- ${user.fullName}` : ''}
         </span>
       </h3>
+      <p className="mt-1 text-xs text-slate-600">
+        This is yours, not {employeeName}. It is the same on every employee page, and it reaches a
+        document only when you place an authoriser box on that document and save.
+      </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-6">
         <div className="flex h-24 w-56 items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50">
@@ -86,8 +92,7 @@ export function AuthoriserSignatureCard() {
             </>
           ) : (
             <p className="max-w-md">
-              Yours goes in the Authoriser box when you sign a document off. Sign on the pad once
-              and it is reused on everything you authorise.
+              Sign on the pad once and it is reused on everything you authorise.
             </p>
           )}
 
