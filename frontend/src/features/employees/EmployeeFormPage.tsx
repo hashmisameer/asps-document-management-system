@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { GENDERS, computeDueDate, createEmployeeSchema, type Employee } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
+import { DateField } from '../../components/ui/DateField.js'
 import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
@@ -321,9 +322,8 @@ export function EmployeeFormPage() {
           onChange={set('employeeName')}
         />
 
-        <TextField
+        <DateField
           label="Joining date"
-          type="date"
           value={values.joiningDate}
           error={fieldErrors.joiningDate}
           hint={
