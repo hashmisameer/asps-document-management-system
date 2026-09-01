@@ -130,3 +130,23 @@ export async function uploadEmployeePhoto(employeeId: number, file: File): Promi
   )
   return response.data.employee
 }
+
+export interface ReferenceLists {
+  departments: string[]
+  designations: string[]
+}
+
+/**
+ * The lists the employee form offers.
+ *
+ * Cached for the session: 26 departments and 49 designations do not change
+ * while somebody is filling in a form.
+ */
+export async function fetchReference(): Promise<ReferenceLists> {
+  const response = await api.get<{ reference: ReferenceLists }>('/reference')
+  return response.data.reference
+}
+
+export const referenceKeys = {
+  all: ['reference'] as const,
+}

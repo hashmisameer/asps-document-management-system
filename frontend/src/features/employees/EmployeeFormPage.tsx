@@ -16,11 +16,33 @@ import {
 } from './RequiredDocuments.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
 import { updateDocumentDeadline, uploadDocument } from '../documents/api.js'
-import { fetchEmployeeDocuments, listDocumentTypes, documentTypeKeys } from './api.js'
+import {
+  fetchEmployeeDocuments,
+  fetchReference,
+  listDocumentTypes,
+  documentTypeKeys,
+  referenceKeys,
+} from './api.js'
 
 type Field = 'gender' | 'employeeCode' | 'employeeName' | 'joiningDate' | 'department' | 'designation'
 
 const GENDER_CHOICES = GENDERS.map((value) => ({ value, label: value }))
+
+/**
+ * The list, plus whatever the record already says.
+ *
+ * An employee edited after their department was deactivated - or imported with
+ * a spelling not in the list - must not have it silently changed to blank by
+ * opening the form. The current value is offered alongside the list.
+ */
+function optionsFor(
+  names: readonly string[] | undefined,
+  current: string,
+): { value: string; label: string }[] {
+  const list = names ?? []
+  const all = current && !list.includes(current) ? [current, ...list] : list
+  return all.map((name) => ({ value: name, label: name }))
+}
 
 const EMPTY = { gender: '', employeeCode: '', employeeName: '', joiningDate: '', department: '', designation: '' }
 
@@ -52,6 +74,12 @@ export function EmployeeFormPage() {
   // Set once the record exists. Until then there are no document rows to
   // upload into, which is why this is two steps rather than one form.
   const [created, setCreated] = useState<Employee | null>(null)
+
+  const reference = useQuery({
+    queryKey: referenceKeys.all,
+    queryFn: fetchReference,
+    staleTime: 30 * 60 * 1000,
+  })
 
   const typesQuery = useQuery({
     queryKey: documentTypeKeys.all,
@@ -306,20 +334,20 @@ export function EmployeeFormPage() {
           onChange={set('joiningDate')}
         />
 
-        <TextField
+        <Select
           label="Department"
-          hint="Optional"
-          autoComplete="off"
+          placeholder="Not set"
           value={values.department}
+          options={optionsFor(reference.data?.departments, values.department)}
           error={fieldErrors.department}
           onChange={set('department')}
         />
 
-        <TextField
+        <Select
           label="Designation"
-          hint="Optional"
-          autoComplete="off"
+          placeholder="Not set"
           value={values.designation}
+          options={optionsFor(reference.data?.designations, values.designation)}
           error={fieldErrors.designation}
           onChange={set('designation')}
         />
