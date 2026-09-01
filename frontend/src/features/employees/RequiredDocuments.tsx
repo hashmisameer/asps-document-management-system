@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { computeDueDate, type DocumentType } from '@asps-dms/shared'
 import { Badge } from '../../components/ui/Badge.js'
+import { toDisplayDate } from '../../lib/format.js'
 import { documentTypeKeys, listDocumentTypes } from './api.js'
 
 /**
@@ -39,15 +40,16 @@ export function missingMandatory(
 
 export function RequiredDocuments({
   joiningDate,
-  overrides,
-  onOverride,
+  dueText,
+  onDueDateText,
   files,
   onFile,
   showMissing,
 }: {
   joiningDate: string
-  overrides: DueDateOverrides
-  onOverride: (documentTypeId: number, dueDate: string) => void
+  /** What is typed in each row, DD/MM/YYYY, keyed by document type. */
+  dueText: Record<number, string>
+  onDueDateText: (documentTypeId: number, text: string) => void
   files: SelectedFiles
   onFile: (documentTypeId: number, file: File | null) => void
   /** True once someone has tried to save, so a gap is called out rather than pre-empted. */
@@ -114,11 +116,14 @@ export function RequiredDocuments({
                     {chosen ? 'Attached' : 'Pending'}
                   </Badge>
                   <input
-                    type="date"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="DD/MM/YYYY"
                     aria-label={`Due date for ${type.documentName}`}
-                    value={overrides[type.documentTypeId] ?? defaultFor(type)}
-                    onChange={(event) => onOverride(type.documentTypeId, event.target.value)}
-                    className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
+                    value={dueText[type.documentTypeId] ?? toDisplayDate(defaultFor(type))}
+                    onChange={(event) => onDueDateText(type.documentTypeId, event.target.value)}
+                    className="w-28 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
                   />
                 </span>
               </div>

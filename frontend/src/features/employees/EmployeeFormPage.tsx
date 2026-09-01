@@ -8,6 +8,7 @@ import { DateField } from '../../components/ui/DateField.js'
 import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
+import { parseDisplayDate } from '../../lib/format.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
 import {
   RequiredDocuments,
@@ -69,6 +70,9 @@ export function EmployeeFormPage() {
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string>>>({})
   const [failure, setFailure] = useState<ApiError | null>(null)
   const [overrides, setOverrides] = useState<DueDateOverrides>({})
+  // What is typed in each due-date box, kept as typed so a half-finished
+  // '01/0' is not rewritten under the person's fingers.
+  const [dueText, setDueText] = useState<Record<number, string>>({})
   // The mandatory documents, held until there is a record to attach them to.
   const [files, setFiles] = useState<SelectedFiles>({})
   const [triedToSave, setTriedToSave] = useState(false)
@@ -387,6 +391,12 @@ export function EmployeeFormPage() {
       {isEdit ? null : (
         <RequiredDocuments
           joiningDate={values.joiningDate}
+          dueText={dueText}
+          onDueDateText={(documentTypeId, text) => {
+            setDueText((current) => ({ ...current, [documentTypeId]: text }))
+            const iso = parseDisplayDate(text)
+            if (iso) setOverrides((current) => ({ ...current, [documentTypeId]: iso }))
+          }}
           files={files}
           showMissing={triedToSave}
           onFile={(documentTypeId, file) =>
@@ -396,10 +406,6 @@ export function EmployeeFormPage() {
               else delete next[documentTypeId]
               return next
             })
-          }
-          overrides={overrides}
-          onOverride={(documentTypeId, dueDate) =>
-            setOverrides((current) => ({ ...current, [documentTypeId]: dueDate }))
           }
         />
       )}
