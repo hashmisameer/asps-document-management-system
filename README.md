@@ -240,6 +240,12 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 - **Validate, write the file, then update the row.** If the row fails to save
   the file is removed again: an orphaned file is recoverable housekeeping, while
   a row pointing at a file that was never written is a document nobody can open.
+- **There is no verification step on screen.** A document is done when its
+  file is in: `isDocumentComplete` already counts `Uploaded`, so nothing sits
+  overdue waiting for a second person to agree it arrived, and a wrong document
+  is Replaced rather than rejected and collected again. The API still has
+  `verify` and `reject`, and the state machine still allows them - taking them
+  off the screen is reversible, taking them out of the model would not be.
 - **Every status change goes through the state machine** in
   `shared/src/constants/documents.ts`. A change it does not permit is a 409 with
   `INVALID_STATE_TRANSITION`, never a silent write - so replacing a *verified*

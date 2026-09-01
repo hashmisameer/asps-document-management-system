@@ -234,7 +234,7 @@ export function DashboardPage() {
                 label="Received"
                 value={summary.data.documents.received}
                 tone="good"
-                hint={`${summary.data.documents.verified} verified`}
+                hint={`of ${summary.data.documents.total} on the checklists`}
               />
               <Tile
                 label="Still to come"

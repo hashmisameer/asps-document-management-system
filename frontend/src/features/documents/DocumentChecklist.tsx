@@ -11,7 +11,6 @@ import {
   PERMISSIONS,
   SIGNATURE_STATUS,
   SIGNATURE_STATUS_LABEL,
-  canTransitionDocument,
   canTransitionSignature,
   deriveDeadline,
   type EmployeeDocument,
@@ -24,7 +23,7 @@ import { employeeKeys } from '../employees/api.js'
 import { skipSignature } from '../signatures/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
-import { documentFileUrl, rejectDocument, uploadDocument, verifyDocument } from './api.js'
+import { documentFileUrl, uploadDocument } from './api.js'
 import { identityFailureOf, unconfirmedLabels, type IdentityFailure } from './identityFailure.js'
 
 /**
@@ -96,8 +95,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   const fileInput = useRef<HTMLInputElement>(null)
 
   const [failure, setFailure] = useState<string | null>(null)
-  const [rejecting, setRejecting] = useState(false)
-  const [reason, setReason] = useState('')
 
   // An upload the identity check refused, held with the file that was refused
   // so that accepting it re-sends the same bytes rather than asking the person
@@ -141,26 +138,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     },
   })
 
-  const verify = useMutation({
-    mutationFn: () => verifyDocument(item.documentId),
-    onSuccess: async () => {
-      setFailure(null)
-      await refresh()
-    },
-    onError,
-  })
-
-  const reject = useMutation({
-    mutationFn: () => rejectDocument(item.documentId, reason),
-    onSuccess: async () => {
-      setFailure(null)
-      setRejecting(false)
-      setReason('')
-      await refresh()
-    },
-    onError,
-  })
-
   const skip = useMutation({
     mutationFn: () => skipSignature(item.documentId),
     onSuccess: async () => {
@@ -192,12 +169,14 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   const hasFile = item.originalFileName !== null
 
   const canUpload = can(PERMISSIONS.DOCUMENT_UPLOAD) && (!hasFile || can(PERMISSIONS.DOCUMENT_REPLACE))
-  const canVerify =
-    can(PERMISSIONS.DOCUMENT_VERIFY) &&
-    hasFile &&
-    canTransitionDocument(item.status, DOCUMENT_STATUS.VERIFIED)
-  const canReject =
-    can(PERMISSIONS.DOCUMENT_REJECT) && canTransitionDocument(item.status, DOCUMENT_STATUS.REJECTED)
+  // There is no verification step. A document is done when its file is in:
+  // isDocumentComplete already counts 'Uploaded', so nothing sits overdue
+  // waiting for a second person to agree it arrived. A wrong document is
+  // Replaced rather than rejected and re-collected.
+  //
+  // The API still has verify and reject, and the state machine still allows
+  // them - removing them from the screen is reversible, removing them from the
+  // model would not be.
   // Skipping is a decision someone makes, not a failure: plenty of documents
   // need no signature, and 'Skipped' says a person decided that, where leaving
   // it awaiting review for ever says only that nobody got to it.
@@ -215,7 +194,7 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED &&
     item.signatureStatus !== SIGNATURE_STATUS.SKIPPED
 
-  const busy = upload.isPending || verify.isPending || reject.isPending || skip.isPending
+  const busy = upload.isPending || skip.isPending
 
   return (
     <>
@@ -350,24 +329,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
               </Link>
             ) : null}
 
-            {canVerify ? (
-              <Button
-                variant="secondary"
-                busy={verify.isPending}
-                busyLabel="Verifying..."
-                disabled={busy}
-                onClick={() => verify.mutate()}
-              >
-                Verify
-              </Button>
-            ) : null}
-
-            {canReject ? (
-              <Button variant="ghost" disabled={busy} onClick={() => setRejecting((v) => !v)}>
-                Reject
-              </Button>
-            ) : null}
-
             {canSkipSignature ? (
               <Button
                 variant="ghost"
@@ -382,48 +343,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
           </div>
         </td>
       </tr>
-
-      {rejecting ? (
-        <tr>
-          <td colSpan={5} className="bg-slate-50 px-4 py-3">
-            {/* A reason is required by the API and by the database, because a
-                rejection nobody can act on is worse than no rejection. */}
-            <form
-              className="flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (reason.trim().length === 0) return
-                reject.mutate()
-              }}
-            >
-              <label className="flex-1">
-                <span className="text-xs font-medium text-slate-700">
-                  Why is {item.documentName} being rejected?
-                </span>
-                <input
-                  autoFocus
-                  value={reason}
-                  maxLength={500}
-                  onChange={(event) => setReason(event.target.value)}
-                  placeholder="The scan is cut off at the bottom"
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-              <Button
-                type="submit"
-                busy={reject.isPending}
-                busyLabel="Saving..."
-                disabled={reason.trim().length === 0}
-              >
-                Reject document
-              </Button>
-              <Button variant="ghost" onClick={() => setRejecting(false)}>
-                Cancel
-              </Button>
-            </form>
-          </td>
-        </tr>
-      ) : null}
 
       {refused ? (
         <tr>
