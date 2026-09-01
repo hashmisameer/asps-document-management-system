@@ -81,6 +81,13 @@ export function PlacementEditorPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  // Whether the boxes are on screen.
+  //
+  // Once a document is stamped, the signature is part of the page: drawing the
+  // editing box over it again shows the same signature twice, once burned in
+  // and once outlined. So a document that already has placements opens as it
+  // will be filed, and the boxes come back only when somebody asks to move them.
+  const [editing, setEditing] = useState(false)
 
   const document = useQuery({
     queryKey: ['document', documentId],
@@ -152,6 +159,7 @@ export function PlacementEditorPage() {
     onSuccess: async () => {
       setFailure(null)
       setSaved(true)
+      setEditing(false)
       await queryClient.invalidateQueries({ queryKey: signatureKeys.placements(documentId) })
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
     },
@@ -164,6 +172,7 @@ export function PlacementEditorPage() {
   const canPlace = can(PERMISSIONS.SIGNATURE_PLACE)
 
   const addBox = (signerRole: SignerRole) => {
+    setEditing(true)
     const placement = newPlacement(placements, pageNumber, rotation, signerRole)
     update([...placements, placement])
     setSelected(placement.key)
@@ -200,20 +209,28 @@ export function PlacementEditorPage() {
 
         {canPlace ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}>
-              Add employee box
-            </Button>
-            <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
-              Add my box
-            </Button>
-            <Button
-              busy={save.isPending}
-              busyLabel="Saving..."
-              disabled={save.isPending}
-              onClick={() => save.mutate()}
-            >
-              Save and stamp
-            </Button>
+            {editing ? (
+              <>
+                <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}>
+                  Add employee box
+                </Button>
+                <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
+                  Add my box
+                </Button>
+                <Button
+                  busy={save.isPending}
+                  busyLabel="Saving..."
+                  disabled={save.isPending}
+                  onClick={() => save.mutate()}
+                >
+                  Save and stamp
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                {placements.length > 0 ? 'Move the signatures' : 'Place a signature'}
+              </Button>
+            )}
           </div>
         ) : null}
       </div>
@@ -278,8 +295,21 @@ export function PlacementEditorPage() {
           Next
         </Button>
         <span className="text-xs text-slate-500">
-          {onPage.length} box{onPage.length === 1 ? '' : 'es'} on this page, {placements.length} in
-          all
+          {editing ? (
+            <>
+              {onPage.length} box{onPage.length === 1 ? '' : 'es'} on this page,{' '}
+              {placements.length} in all
+            </>
+          ) : placements.length > 0 ? (
+            // The boxes are hidden, so say what is on the document instead of
+            // leaving the page looking as though nothing has been done to it.
+            <>
+              Signed - {placements.length} signature{placements.length === 1 ? '' : 's'} stamped
+              onto this document
+            </>
+          ) : (
+            <>No signature has been placed on this document yet</>
+          )}
         </span>
       </div>
 
@@ -310,7 +340,7 @@ export function PlacementEditorPage() {
             />
           </Document>
 
-          {rendered
+          {rendered && editing
             ? onPage.map((placement) => (
                 <PlacementBox
                   key={placement.key}
