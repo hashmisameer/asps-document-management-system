@@ -24,7 +24,15 @@ import { fetchSignature, signatureImageUrl, signatureKeys, uploadSignature } fro
  * quietly changing an image on a document that has already gone out is not
  * something this system does on its own.
  */
-export function SignatureCard({ employeeId }: { employeeId: number }) {
+export function SignatureCard({
+  employeeId,
+  employeeName,
+}: {
+  employeeId: number
+  /** Named on the card, so the two signature boxes cannot be confused for each
+      other: one says whose it is, and so does the other. */
+  employeeName: string
+}) {
   const { can } = useAuth()
   const queryClient = useQueryClient()
   const [signing, setSigning] = useState(false)
@@ -55,10 +63,13 @@ export function SignatureCard({ employeeId }: { employeeId: number }) {
   const canSign = can(PERMISSIONS.SIGNATURE_UPLOAD)
 
   return (
-    <section className="mt-6">
-      <h2 className="text-sm font-semibold text-slate-900">Signature</h2>
+    <div className="rounded-card border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 className="text-sm font-semibold text-slate-900">
+        Employee signature
+        <span className="ml-2 font-normal text-slate-500">- {employeeName}</span>
+      </h3>
 
-      <div className="mt-2 rounded-card border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mt-3">
         <div className="flex flex-wrap items-center gap-6">
           <div className="flex h-24 w-56 items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50">
             {data?.hasSignature ? (
@@ -123,6 +134,6 @@ export function SignatureCard({ employeeId }: { employeeId: number }) {
         }}
         onSave={(png) => save.mutate(png)}
       />
-    </section>
+    </div>
   )
 }

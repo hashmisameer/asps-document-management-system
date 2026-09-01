@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { PERMISSIONS } from '@asps-dms/shared'
 import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
 import { useAuth } from '../features/auth/useAuth.js'
-import { Button } from './ui/Button.js'
+import { UserMenu } from './UserMenu.js'
 
 /**
  * The signed-in shell: header, navigation, and the routed page.
@@ -15,7 +14,7 @@ import { Button } from './ui/Button.js'
  * nothing here.
  */
 export function AppLayout() {
-  const { user, signOut, can } = useAuth()
+  const { user, signOut } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -42,39 +41,9 @@ export function AppLayout() {
             <span className="text-sm font-semibold text-slate-900">{APP_NAME}</span>
           </Link>
 
-          <div className="flex items-center gap-3">
-            {user ? (
-              <div className="text-right">
-                <p className="text-sm font-medium text-slate-900">{user.fullName}</p>
-                <p className="text-xs text-slate-500">{user.role}</p>
-              </div>
-            ) : null}
-            {/* Personal account settings, beside the password - not sections of
-                the application. 'My signature' in the main nav read as though it
-                were the employees' signatures, which live on their own records. */}
-            {can(PERMISSIONS.SIGNATURE_UPLOAD) ? (
-              <Link
-                to="/my-signature"
-                className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-              >
-                My signature
-              </Link>
-            ) : null}
-            <Link
-              to="/change-password"
-              className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-            >
-              Password
-            </Link>
-            <Button
-              variant="secondary"
-              busy={signingOut}
-              busyLabel="Signing out..."
-              onClick={() => void handleSignOut()}
-            >
-              Sign out
-            </Button>
-          </div>
+          {user ? (
+            <UserMenu user={user} signingOut={signingOut} onSignOut={() => void handleSignOut()} />
+          ) : null}
         </div>
 
         <nav aria-label="Main" className="mx-auto max-w-6xl px-6">
