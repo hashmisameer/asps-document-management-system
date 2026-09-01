@@ -11,6 +11,7 @@ import {
   type EmployeeListQuery,
   type EmployeeProfile,
   type EmployeeSortKey,
+  type JoinedWithinPeriod,
   type Paginated,
   type UpdateEmployeeInput,
 } from '@asps-dms/shared'
@@ -186,6 +187,20 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_[]/g, (character) => `\\${character}`)
 }
 
+/**
+ * Joining-date periods -> the SQL that expresses them.
+ *
+ * Written as DATEADD against the bound @today rather than GETDATE(), so the
+ * boundary is the same one the rest of the request uses and a query that runs
+ * across midnight cannot answer two different questions.
+ */
+const JOINED_WITHIN_SQL: Readonly<Record<JoinedWithinPeriod, string>> = {
+  week: 'DATEADD(DAY, -7, @today)',
+  month: 'DATEADD(MONTH, -1, @today)',
+  sixMonths: 'DATEADD(MONTH, -6, @today)',
+  year: 'DATEADD(YEAR, -1, @today)',
+}
+
 /** sortBy keys -> columns. The enum in the shared schema is the only way in. */
 const SORT_COLUMNS: Readonly<Record<EmployeeSortKey, string>> = {
   employeeCode: 'e.EmployeeCode',
@@ -216,6 +231,11 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
         " OR e.Department LIKE @search ESCAPE '\\' OR e.Designation LIKE @search ESCAPE '\\')",
     )
     request.input('search', sql.NVarChar(210), `%${escapeLike(query.search)}%`)
+  }
+  if (query.joinedWithin) {
+    // The period is an enum, and this is a lookup into a table of fixed SQL -
+    // nothing the caller sent reaches the query text.
+    conditions.push(`e.JoiningDate >= ${JOINED_WITHIN_SQL[query.joinedWithin]}`)
   }
 
   // Literals only: every condition above is a fixed string naming a parameter,

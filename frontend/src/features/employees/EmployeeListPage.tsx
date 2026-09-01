@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { PERMISSIONS, type EmployeeListItem, type EmployeeSortKey } from '@asps-dms/shared'
+import {
+  PERMISSIONS,
+  type EmployeeListItem,
+  type EmployeeSortKey,
+  type JoinedWithinPeriod,
+} from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Badge } from '../../components/ui/Badge.js'
 import { Button } from '../../components/ui/Button.js'
@@ -12,6 +17,18 @@ import { ApiError } from '../../lib/apiError.js'
 import { formatDate } from '../../lib/format.js'
 import { useDebounced } from '../../lib/useDebounced.js'
 import { employeeKeys, fetchFacets, listEmployees, type EmployeeListParams } from './api.js'
+
+/**
+ * The joining-date periods, in the words the office uses.
+ *
+ * The values are the enum the API accepts; only the labels are for reading.
+ */
+const JOINED_WITHIN_CHOICES = [
+  { value: 'week', label: 'Last week' },
+  { value: 'month', label: 'Last month' },
+  { value: 'sixMonths', label: 'Last 6 months' },
+  { value: 'year', label: 'Last year' },
+] as const
 
 const PAGE_SIZE = 25
 
@@ -29,6 +46,7 @@ export function EmployeeListPage() {
   const [search, setSearch] = useState('')
   const [department, setDepartment] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
+  const [joinedWithin, setJoinedWithin] = useState<JoinedWithinPeriod | ''>('')
   const [sortBy, setSortBy] = useState<EmployeeSortKey>('employeeName')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
@@ -39,7 +57,7 @@ export function EmployeeListPage() {
   // that now returns 12 rows is an empty screen the user did not ask for.
   useEffect(() => {
     setPage(1)
-  }, [debouncedSearch, department, includeArchived, sortBy, sortDir])
+  }, [debouncedSearch, department, includeArchived, joinedWithin, sortBy, sortDir])
 
   const params: EmployeeListParams = {
     page,
@@ -48,6 +66,7 @@ export function EmployeeListPage() {
     sortDir,
     includeArchived,
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    ...(joinedWithin ? { joinedWithin } : {}),
     ...(department ? { department } : {}),
   }
 
@@ -112,6 +131,16 @@ export function EmployeeListPage() {
             value={department}
             options={(facets.data?.departments ?? []).map((value) => ({ value, label: value }))}
             onChange={(event) => setDepartment(event.target.value)}
+          />
+        </div>
+
+        <div className="min-w-44">
+          <Select
+            label="Joined"
+            placeholder="Any time"
+            value={joinedWithin}
+            options={JOINED_WITHIN_CHOICES}
+            onChange={(event) => setJoinedWithin(event.target.value as JoinedWithinPeriod | '')}
           />
         </div>
 

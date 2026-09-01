@@ -153,12 +153,25 @@ export const EMPLOYEE_SORT_KEYS = [
 
 export type EmployeeSortKey = (typeof EMPLOYEE_SORT_KEYS)[number]
 
+/**
+ * How far back to look at joining dates.
+ *
+ * A fixed list rather than two dates from the caller: 'who joined recently' is
+ * the question the office actually asks, and a pair of free dates would need
+ * validating, ordering and explaining to reach the same answer.
+ */
+export const JOINED_WITHIN_PERIODS = ['week', 'month', 'sixMonths', 'year'] as const
+
+export type JoinedWithinPeriod = (typeof JOINED_WITHIN_PERIODS)[number]
+
 export const employeeListQuerySchema = paginationQuerySchema.extend({
   department: z.string().trim().max(100).optional(),
   designation: z.string().trim().max(100).optional(),
   /** Archived employees are hidden by default; they are never deleted. */
   includeArchived: booleanQueryParam.default(false),
   sortBy: z.enum(EMPLOYEE_SORT_KEYS).default('employeeName'),
+  /** Absent means every employee, however long ago they joined. */
+  joinedWithin: z.enum(JOINED_WITHIN_PERIODS).optional(),
 })
 
 export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>
