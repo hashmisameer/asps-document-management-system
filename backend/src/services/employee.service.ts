@@ -154,7 +154,7 @@ function describeChanges(
   input: UpdateEmployeeInput,
 ): Record<string, { from: unknown; to: unknown }> {
   const changes: Record<string, { from: unknown; to: unknown }> = {}
-  const fields = ['employeeName', 'joiningDate', 'department', 'designation'] as const
+  const fields = ['employeeName', 'joiningDate', 'department', 'designation', 'gender'] as const
 
   for (const field of fields) {
     if (!(field in input)) continue

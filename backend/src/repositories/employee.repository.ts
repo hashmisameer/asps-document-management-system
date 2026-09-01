@@ -405,6 +405,10 @@ export async function update(employeeId: number, input: UpdateEmployeeInput): Pr
     assignments.push('Designation = @designation')
     request.input('designation', sql.NVarChar(100), input.designation ?? null)
   }
+  if ('gender' in input) {
+    assignments.push('Gender = @gender')
+    request.input('gender', sql.VarChar(10), input.gender ?? null)
+  }
   if ('phoneNumber' in input) {
     assignments.push('PhoneNumber = @phoneNumber')
     request.input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
