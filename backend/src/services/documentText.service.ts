@@ -1,4 +1,5 @@
 import { createCanvas } from '@napi-rs/canvas'
+import sharp from 'sharp'
 import { TEXT_SOURCES, type TextSource } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
@@ -180,8 +181,54 @@ async function readPdf(buffer: Buffer): Promise<ExtractedText> {
   }
 }
 
+/**
+ * The smallest width worth handing to OCR.
+ *
+ * Tesseract wants roughly 300 DPI. A photograph taken on a phone and sent
+ * through a messaging app arrives recompressed and downscaled, and at that size
+ * the digits in a date are a few pixels tall - readable to a person, not to OCR.
+ */
+const MIN_OCR_WIDTH = 2000
+
+/** A ceiling, so a 50 MP photograph does not become an enormous bitmap. */
+const MAX_OCR_WIDTH = 4000
+
+/**
+ * Prepares a photograph for OCR.
+ *
+ * An uploaded image used to go straight to Tesseract exactly as it arrived.
+ * That is fine for a flat-bed scan and poor for what people actually send: a
+ * photo of a form on a desk, lit unevenly and squeezed by WhatsApp.
+ *
+ * Rotated to its EXIF orientation, upscaled if small, greyscaled,
+ * contrast-normalised and sharpened - the things that most affect whether
+ * printed digits come back as digits. The output is PNG so the work is not
+ * undone by a second round of JPEG artefacts.
+ *
+ * If any of it fails the original buffer is used: preparation that cannot run
+ * must not turn a readable document into an unreadable one.
+ */
+async function prepareForOcr(buffer: Buffer): Promise<Buffer> {
+  try {
+    const metadata = await sharp(buffer, { failOn: 'none' }).metadata()
+    const width = metadata.width ?? 0
+
+    let pipeline = sharp(buffer, { failOn: 'none' }).rotate()
+    if (width > 0 && width < MIN_OCR_WIDTH) {
+      pipeline = pipeline.resize({ width: Math.min(MIN_OCR_WIDTH, MAX_OCR_WIDTH) })
+    } else if (width > MAX_OCR_WIDTH) {
+      pipeline = pipeline.resize({ width: MAX_OCR_WIDTH })
+    }
+
+    return await pipeline.greyscale().normalise().sharpen().png().toBuffer()
+  } catch (error) {
+    logger.warn({ err: error }, 'Could not prepare the image for OCR; reading it as it arrived')
+    return buffer
+  }
+}
+
 async function readImage(buffer: Buffer): Promise<ExtractedText> {
-  const text = await recognise(buffer)
+  const text = await recognise(await prepareForOcr(buffer))
   return {
     text,
     source: text.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,

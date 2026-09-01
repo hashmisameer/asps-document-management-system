@@ -64,6 +64,16 @@ const envSchema = z
        minutes. */
     IDENTITY_CHECK_MAX_PAGES: z.coerce.number().int().min(1).max(50).default(5),
     IDENTITY_CHECK_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(600_000).default(90_000),
+    /**
+     * Logs the text a document was read as, when a check fails.
+     *
+     * OFF, and meant to stay off outside a developer's machine: it puts the
+     * contents of an employee's document into a log file, which is the one
+     * place this system otherwise never puts them. It exists because "the date
+     * is right there on the card" and "OCR returned DATE OF J0lNlNG" look
+     * identical from the outside, and only one of them is a bug worth chasing.
+     */
+    IDENTITY_CHECK_LOG_TEXT: booleanish.default('false'),
     /* Where tesseract.js finds eng.traineddata and its WASM core.
        LEAVE THESE UNSET IN DEVELOPMENT and it downloads them from a CDN. On the
        company server, which has no route to the internet, they must be vendored

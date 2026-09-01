@@ -161,6 +161,17 @@ export async function checkUpload(
     'Identity check completed',
   )
 
+  // Only on a failure, only when switched on, and never in passing traffic.
+  // Without this, "the date is printed right there" and "OCR returned DATE OF
+  // J0lNlNG" are indistinguishable from the outside, and only one of them is a
+  // bug. See IDENTITY_CHECK_LOG_TEXT - it puts document contents in a log.
+  if (!result.passed && env.IDENTITY_CHECK_LOG_TEXT) {
+    logger.warn(
+      { employeeId: employee.employeeId, source: result.source, text: extracted.text },
+      'Identity check failed; this is what the document was read as',
+    )
+  }
+
   return result
 }
 
