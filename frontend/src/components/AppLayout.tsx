@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { PERMISSIONS } from '@asps-dms/shared'
 import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
@@ -14,7 +15,7 @@ import { UserMenu } from './UserMenu.js'
  * nothing here.
  */
 export function AppLayout() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, can } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -42,7 +43,7 @@ export function AppLayout() {
           </Link>
 
           {user ? (
-            <UserMenu user={user} signingOut={signingOut} onSignOut={() => void handleSignOut()} />
+            <UserMenu user={user} canSign={can(PERMISSIONS.SIGNATURE_UPLOAD)} signingOut={signingOut} onSignOut={() => void handleSignOut()} />
           ) : null}
         </div>
 

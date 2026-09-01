@@ -7,7 +7,6 @@ import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
 import { SignatureCard } from '../signatures/SignatureCard.js'
-import { AuthoriserSignatureCard } from '../signatures/AuthoriserSignatureCard.js'
 import { PhotoCard } from './PhotoCard.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDate } from '../../lib/format.js'
@@ -133,16 +132,13 @@ export function EmployeeDetailPage() {
       </div>
       <Details profile={profile} />
       <Counts profile={profile} />
-      {/* Both signatures a document can carry, side by side: the employee's,
-          and the one belonging to whoever is signed in and will authorise it. */}
+      {/* The employee's own signature, and nothing else. The authoriser's is the
+          signed-in user's, the same on every record, and putting it here read as
+          though it belonged to this employee. It lives in the account menu. */}
       <section className="mt-6">
-        <h2 className="text-sm font-semibold text-slate-900">Signatures</h2>
-        <p className="mt-1 text-xs text-slate-600">
-          Two people sign a document: the employee, and whoever authorises it.
-        </p>
-        <div className="mt-2 grid gap-4 lg:grid-cols-2 lg:items-start">
+        <h2 className="text-sm font-semibold text-slate-900">Signature</h2>
+        <div className="mt-2">
           <SignatureCard employeeId={employeeId} employeeName={profile.employeeName} />
-          <AuthoriserSignatureCard employeeName={profile.employeeName} />
         </div>
       </section>
 

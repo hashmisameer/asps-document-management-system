@@ -15,10 +15,13 @@ import type { AuthUser } from '@asps-dms/shared'
  */
 export function UserMenu({
   user,
+  canSign,
   signingOut,
   onSignOut,
 }: {
   user: AuthUser
+  /** Only somebody who authorises documents has a signature to set. */
+  canSign: boolean
   signingOut: boolean
   onSignOut: () => void
 }) {
@@ -76,6 +79,20 @@ export function UserMenu({
               {user.username} &middot; {user.role}
             </p>
           </div>
+
+          {/* The signed-in user's OWN signature - a personal setting, like the
+              password. It was on the employee page and read as though it were
+              that employee's, which is exactly what it is not. */}
+          {canSign ? (
+            <Link
+              to="/my-signature"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              My signature
+            </Link>
+          ) : null}
 
           <Link
             to="/change-password"
