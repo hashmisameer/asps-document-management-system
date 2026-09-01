@@ -9,6 +9,7 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
+import { ReportsPage } from './pages/ReportsPage.js'
 import { MySignaturePage } from './pages/MySignaturePage.js'
 import { PlacementEditorPage } from './features/signatures/PlacementEditorPage.js'
 import { DashboardPage } from './pages/DashboardPage.js'
@@ -103,7 +104,7 @@ export default function App() {
           path="reports"
           element={
             <ProtectedRoute permission={PERMISSIONS.REPORT_READ}>
-              <ComingSoonPage title="Reports" milestone="Milestone 5" />
+              <ReportsPage />
             </ProtectedRoute>
           }
         />
