@@ -1,20 +1,28 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { computeDueDate, createEmployeeSchema, type Employee } from '@asps-dms/shared'
+import { GENDERS, computeDueDate, createEmployeeSchema, type Employee } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
+import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
-import { RequiredDocuments, type DueDateOverrides } from './RequiredDocuments.js'
+import {
+  RequiredDocuments,
+  missingMandatory,
+  type DueDateOverrides,
+  type SelectedFiles,
+} from './RequiredDocuments.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
-import { updateDocumentDeadline } from '../documents/api.js'
+import { updateDocumentDeadline, uploadDocument } from '../documents/api.js'
 import { fetchEmployeeDocuments, listDocumentTypes, documentTypeKeys } from './api.js'
 
-type Field = 'employeeCode' | 'employeeName' | 'joiningDate' | 'department' | 'designation'
+type Field = 'gender' | 'employeeCode' | 'employeeName' | 'joiningDate' | 'department' | 'designation'
 
-const EMPTY = { employeeCode: '', employeeName: '', joiningDate: '', department: '', designation: '' }
+const GENDER_CHOICES = GENDERS.map((value) => ({ value, label: value }))
+
+const EMPTY = { gender: '', employeeCode: '', employeeName: '', joiningDate: '', department: '', designation: '' }
 
 /**
  * Add or edit an employee.
@@ -38,6 +46,9 @@ export function EmployeeFormPage() {
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string>>>({})
   const [failure, setFailure] = useState<ApiError | null>(null)
   const [overrides, setOverrides] = useState<DueDateOverrides>({})
+  // The mandatory documents, held until there is a record to attach them to.
+  const [files, setFiles] = useState<SelectedFiles>({})
+  const [triedToSave, setTriedToSave] = useState(false)
   // Set once the record exists. Until then there are no document rows to
   // upload into, which is why this is two steps rather than one form.
   const [created, setCreated] = useState<Employee | null>(null)
@@ -58,6 +69,7 @@ export function EmployeeFormPage() {
   useEffect(() => {
     if (!existing.data) return
     setValues({
+      gender: existing.data.gender ?? '',
       employeeCode: existing.data.employeeCode,
       employeeName: existing.data.employeeName,
       joiningDate: existing.data.joiningDate,
@@ -102,12 +114,39 @@ export function EmployeeFormPage() {
     }
   }
 
+  /**
+   * Sends the documents that were attached on the form.
+   *
+   * They could not be uploaded before now: the checklist rows are created with
+   * the employee, so there was nothing to attach them to. A failure is not
+   * silent here - unlike a deadline, a missing identity document is the thing
+   * that was insisted on - so it is reported on the next step, where the row
+   * shows as still pending and can be uploaded again.
+   */
+  const uploadHeldFiles = async (employee: Employee) => {
+    const chosen = Object.entries(files)
+    if (chosen.length === 0) return
+
+    const documents = await fetchEmployeeDocuments(employee.employeeId)
+    for (const [typeId, file] of chosen) {
+      const document = documents.find((d) => d.documentTypeId === Number(typeId))
+      if (!document) continue
+      try {
+        await uploadDocument(document.documentId, file)
+      } catch {
+        // Left for the checklist to show. Throwing here would lose the employee
+        // record that was just created successfully.
+      }
+    }
+  }
+
   const save = useMutation({
     mutationFn: async (input: ReturnType<typeof createEmployeeSchema.parse>) =>
       isEdit ? updateEmployee(employeeId, input) : createEmployee(input),
     onSuccess: async (employee) => {
       if (!isEdit) {
         await applyDueDateOverrides(employee)
+        await uploadHeldFiles(employee)
       }
       // The list counts and the detail both change on a save, so the whole
       // 'employees' prefix goes rather than only the row that was edited.
@@ -164,6 +203,14 @@ export function EmployeeFormPage() {
     }
 
     setFieldErrors({})
+
+    // The two identity documents are the point of the record: an employee whose
+    // Aadhaar and PAN were "coming later" is exactly what this stops.
+    if (!isEdit && missingMandatory(typesQuery.data, files).length > 0) {
+      setTriedToSave(true)
+      return
+    }
+
     save.mutate(parsed.data)
   }
 
@@ -191,20 +238,29 @@ export function EmployeeFormPage() {
   }
 
   return (
-    <main className={isEdit ? 'mx-auto w-full max-w-2xl' : 'mx-auto w-full max-w-5xl'}>
-      <h1 className="text-xl font-semibold text-slate-900">
-        {isEdit ? `Edit ${existing.data?.employeeName ?? 'employee'}` : 'Add employee'}
-      </h1>
-      {isEdit ? (
-        <p className="mt-1 font-mono text-xs text-slate-500">{existing.data?.employeeCode}</p>
-      ) : (
-        <p className="mt-1 text-sm text-slate-600">
-          The employee code is generated automatically, and the document checklist is created with
-          the record.
-        </p>
-      )}
+    <main className={isEdit ? 'mx-auto w-full max-w-2xl' : 'mx-auto w-full max-w-6xl'}>
+      <Link
+        to={isEdit ? `/employees/${employeeId}` : '/employees'}
+        className="text-sm text-slate-600 hover:text-slate-900"
+      >
+        &larr; {isEdit ? 'Back to the employee' : 'Employees'}
+      </Link>
 
-      <div className={isEdit ? 'mt-4' : 'mt-4 grid gap-6 lg:grid-cols-2 lg:items-start'}>
+      <header className="mt-2">
+        <h1 className="text-xl font-semibold text-slate-900">
+          {isEdit ? `Edit ${existing.data?.employeeName ?? 'employee'}` : 'Add employee'}
+        </h1>
+        {isEdit ? (
+          <p className="mt-1 font-mono text-xs text-slate-500">{existing.data?.employeeCode}</p>
+        ) : (
+          <p className="mt-1 text-sm text-slate-600">
+            The checklist is created with the record. The two identity documents are attached now;
+            the rest have deadlines and follow later.
+          </p>
+        )}
+      </header>
+
+      <div className={isEdit ? 'mt-6' : 'mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]'}>
       <form
         onSubmit={handleSubmit}
         noValidate
@@ -216,10 +272,12 @@ export function EmployeeFormPage() {
           </Alert>
         ) : null}
 
+        <h2 className="text-sm font-semibold text-slate-900">Employee details</h2>
+
         {isEdit ? null : (
           <TextField
             label="Employee ID"
-            hint="Optional - leave blank and one is generated (EMP001, EMP002...). It cannot be changed later."
+            hint="The company's own number, as printed on the service card. It cannot be changed later."
             autoComplete="off"
             value={values.employeeCode}
             error={fieldErrors.employeeCode}
@@ -266,7 +324,24 @@ export function EmployeeFormPage() {
           onChange={set('designation')}
         />
 
-        <div className="flex items-center gap-3">
+        <Select
+          label="Gender"
+          value={values.gender}
+          options={GENDER_CHOICES}
+          placeholder="Not recorded"
+          onChange={set('gender')}
+        />
+
+        {!isEdit && triedToSave && missingMandatory(typesQuery.data, files).length > 0 ? (
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-status-rejected">
+            Attach {missingMandatory(typesQuery.data, files)
+              .map((type) => type.documentName)
+              .join(' and ')}{' '}
+            before creating this employee.
+          </p>
+        ) : null}
+
+        <div className="mt-2 flex items-center gap-3 border-t border-slate-100 pt-4">
           <Button type="submit" busy={save.isPending} busyLabel="Saving...">
             {isEdit ? 'Save changes' : 'Create employee'}
           </Button>
@@ -284,6 +359,16 @@ export function EmployeeFormPage() {
       {isEdit ? null : (
         <RequiredDocuments
           joiningDate={values.joiningDate}
+          files={files}
+          showMissing={triedToSave}
+          onFile={(documentTypeId, file) =>
+            setFiles((current) => {
+              const next = { ...current }
+              if (file) next[documentTypeId] = file
+              else delete next[documentTypeId]
+              return next
+            })
+          }
           overrides={overrides}
           onOverride={(documentTypeId, dueDate) =>
             setOverrides((current) => ({ ...current, [documentTypeId]: dueDate }))

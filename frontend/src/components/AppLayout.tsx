@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { PERMISSIONS } from '@asps-dms/shared'
 import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
@@ -14,7 +15,7 @@ import { Button } from './ui/Button.js'
  * nothing here.
  */
 export function AppLayout() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, can } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -47,6 +48,17 @@ export function AppLayout() {
                 <p className="text-sm font-medium text-slate-900">{user.fullName}</p>
                 <p className="text-xs text-slate-500">{user.role}</p>
               </div>
+            ) : null}
+            {/* Personal account settings, beside the password - not sections of
+                the application. 'My signature' in the main nav read as though it
+                were the employees' signatures, which live on their own records. */}
+            {can(PERMISSIONS.SIGNATURE_UPLOAD) ? (
+              <Link
+                to="/my-signature"
+                className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+              >
+                My signature
+              </Link>
             ) : null}
             <Link
               to="/change-password"

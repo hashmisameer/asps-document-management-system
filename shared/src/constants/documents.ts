@@ -159,3 +159,8 @@ export const ALLOWED_SIGNATURE_MIME_TYPES = ['image/png', 'image/jpeg'] as const
 
 export const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
 export const MAX_SIGNATURE_SIZE_BYTES = 2 * 1024 * 1024 // 2 MB
+
+/** As Form-V records it. 'Not recorded' is absence, never a fourth value. */
+export const GENDERS = ['Male', 'Female', 'Other'] as const
+
+export type Gender = (typeof GENDERS)[number]

@@ -8,28 +8,50 @@ import { documentTypeKeys, listDocumentTypes } from './api.js'
  *
  * Creating an employee materialises one checklist row per active document type,
  * so this is not a preview of a decision anybody makes here - it is what is
- * about to happen. Showing it beforehand means the person filling the form
- * knows what they will be collecting rather than finding out on the next screen.
+ * about to happen.
+ *
+ * The MANDATORY ones must be attached before the record can be created. They
+ * cannot be uploaded before it exists - there is no row to attach them to - so
+ * the files are held here and sent the moment it does. An employee whose
+ * identity documents were "going to be added later" is the record this rule
+ * exists to prevent.
  *
  * Each date can be overridden. The default is computeDueDate, the same function
  * the server uses when it writes the deadline, so a row left alone gets exactly
- * the date it would have got anyway. A row that is changed is applied as a
- * deliberate deadline override once the employee exists - there is nothing to
- * override before that, because the document row does not exist yet.
+ * the date it would have got anyway.
  */
 
 export interface DueDateOverrides {
   [documentTypeId: number]: string
 }
 
+export interface SelectedFiles {
+  [documentTypeId: number]: File
+}
+
+/** The types that must be attached before an employee can be created. */
+export function missingMandatory(
+  types: readonly DocumentType[] | undefined,
+  files: SelectedFiles,
+): DocumentType[] {
+  return (types ?? []).filter((type) => type.isMandatory && !files[type.documentTypeId])
+}
+
 export function RequiredDocuments({
   joiningDate,
   overrides,
   onOverride,
+  files,
+  onFile,
+  showMissing,
 }: {
   joiningDate: string
   overrides: DueDateOverrides
   onOverride: (documentTypeId: number, dueDate: string) => void
+  files: SelectedFiles
+  onFile: (documentTypeId: number, file: File | null) => void
+  /** True once someone has tried to save, so a gap is called out rather than pre-empted. */
+  showMissing: boolean
 }) {
   const types = useQuery({
     queryKey: documentTypeKeys.all,
@@ -55,7 +77,7 @@ export function RequiredDocuments({
       ? computeDueDate(validJoiningDate, type.deadlineValue, type.deadlineUnit)
       : null) ?? ''
 
-  const mandatory = types.data.filter((type) => type.isMandatory).length
+  const mandatory = types.data.filter((type) => type.isMandatory)
 
   return (
     <section className="rounded-card border border-slate-200 bg-white p-6 shadow-sm">
@@ -63,44 +85,75 @@ export function RequiredDocuments({
         Documents to collect ({types.data.length})
       </h2>
       <p className="mt-1 text-xs text-slate-600">
-        {mandatory} of them are mandatory.{' '}
+        {mandatory.map((type) => type.documentName).join(' and ')} must be attached now. The rest
+        can follow, and{' '}
         {validJoiningDate
-          ? 'Each date is set from the joining date; change any of them if this employee was agreed something else.'
-          : 'Enter a joining date to fill in the dates, or set them by hand.'}
+          ? 'each date below is set from the joining date - change any of them if this employee was agreed something else.'
+          : 'their dates fill in once a joining date is entered.'}
       </p>
 
       <ul className="mt-3 divide-y divide-slate-100">
-        {types.data.map((type) => (
-          <li
-            key={type.documentTypeId}
-            className="flex flex-wrap items-center justify-between gap-2 py-2"
-          >
-            <span className="text-sm text-slate-800">
-              {type.documentName}
-              {type.isMandatory ? (
-                <span className="ml-2 align-middle">
-                  <Badge tone="pending">Mandatory</Badge>
+        {types.data.map((type) => {
+          const chosen = files[type.documentTypeId]
+          const missing = showMissing && type.isMandatory && !chosen
+
+          return (
+            <li key={type.documentTypeId} className="py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm text-slate-800">
+                  {type.documentName}
+                  {type.isMandatory ? (
+                    <span className="ml-2 align-middle">
+                      <Badge tone="pending">Required now</Badge>
+                    </span>
+                  ) : null}
                 </span>
+
+                <span className="flex items-center gap-2">
+                  <Badge tone={chosen ? 'verified' : 'neutral'}>
+                    {chosen ? 'Attached' : 'Pending'}
+                  </Badge>
+                  <input
+                    type="date"
+                    aria-label={`Due date for ${type.documentName}`}
+                    value={overrides[type.documentTypeId] ?? defaultFor(type)}
+                    onChange={(event) => onOverride(type.documentTypeId, event.target.value)}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
+                  />
+                </span>
+              </div>
+
+              {/* Only the mandatory ones are collected here. Offering a picker
+                  against all ten would turn adding an employee into a filing
+                  session, and the rest have deadlines precisely because they
+                  arrive later. */}
+              {type.isMandatory ? (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    aria-label={`${type.documentName} file`}
+                    onChange={(event) =>
+                      onFile(type.documentTypeId, event.target.files?.[0] ?? null)
+                    }
+                    className="text-xs text-slate-600 file:mr-2 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-2 file:py-1 file:text-xs file:text-slate-800"
+                  />
+                  {chosen ? (
+                    <span className="truncate text-xs text-slate-500" title={chosen.name}>
+                      {chosen.name}
+                    </span>
+                  ) : null}
+                  {missing ? (
+                    <span className="text-xs font-medium text-status-rejected">
+                      {type.documentName} is required
+                    </span>
+                  ) : null}
+                </div>
               ) : null}
-            </span>
-
-            <span className="flex items-center gap-2">
-              <Badge tone="neutral">Pending</Badge>
-              <input
-                type="date"
-                aria-label={`Due date for ${type.documentName}`}
-                value={overrides[type.documentTypeId] ?? defaultFor(type)}
-                onChange={(event) => onOverride(type.documentTypeId, event.target.value)}
-                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-800"
-              />
-            </span>
-          </li>
-        ))}
+            </li>
+          )
+        })}
       </ul>
-
-      <p className="mt-3 text-xs text-slate-500">
-        Files are uploaded on the next step, once the record exists.
-      </p>
     </section>
   )
 }

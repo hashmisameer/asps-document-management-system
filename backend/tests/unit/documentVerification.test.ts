@@ -29,6 +29,7 @@ function employee(overrides: Partial<Employee> = {}): Employee {
     designation: 'Accounts Officer',
     phoneNumber: '9876543210',
     dateOfBirth: '1990-08-15',
+    gender: null,
     postAppliedFor: null,
     categoryOfWorkmen: null,
     aadhaarNumber: '123456789012',

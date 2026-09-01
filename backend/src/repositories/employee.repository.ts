@@ -48,6 +48,7 @@ interface EmployeeRow extends EmployeeCountsRow {
   Designation: string | null
   PhoneNumber: string | null
   DateOfBirth: Date | null
+  Gender: string | null
   PostAppliedFor: string | null
   CategoryOfWorkmen: string | null
   AadhaarNumber: string | null
@@ -69,7 +70,7 @@ interface EmployeeProfileRow extends EmployeeRow {
 const SELECT_EMPLOYEE_COLUMNS = `
              e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
              e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
-             e.PostAppliedFor, e.CategoryOfWorkmen, e.AadhaarNumber, e.PanNumber,
+             e.Gender, e.PostAppliedFor, e.CategoryOfWorkmen, e.AadhaarNumber, e.PanNumber,
              e.UanNumber, e.EsiNumber, e.AppointmentLetterDate,
              e.PhotoMimeType, e.PhotoUploadedAt,
              e.IsActive, e.CreatedAt, e.UpdatedAt`
@@ -83,7 +84,7 @@ const SELECT_EMPLOYEE_COLUMNS = `
 const SELECT_EMPLOYEE_LIST_COLUMNS = `
              e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
              e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
-             e.PostAppliedFor, e.CategoryOfWorkmen,
+             e.Gender, e.PostAppliedFor, e.CategoryOfWorkmen,
              CAST(NULL AS VARCHAR(20)) AS AadhaarNumber,
              CAST(NULL AS VARCHAR(10)) AS PanNumber,
              CAST(NULL AS VARCHAR(20)) AS UanNumber,
@@ -154,6 +155,7 @@ function toEmployee(row: EmployeeRow): Employee {
     designation: row.Designation,
     phoneNumber: row.PhoneNumber,
     dateOfBirth: row.DateOfBirth === null ? null : formatDateOnly(row.DateOfBirth),
+    gender: (row.Gender as Employee['gender']) ?? null,
     postAppliedFor: row.PostAppliedFor,
     categoryOfWorkmen: row.CategoryOfWorkmen,
     aadhaarNumber: row.AadhaarNumber,
@@ -310,6 +312,7 @@ export async function create(
     .input('designation', sql.NVarChar(100), input.designation ?? null)
     .input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
     .input('dateOfBirth', sql.Date, input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null)
+    .input('gender', sql.VarChar(10), input.gender ?? null)
     .input('postAppliedFor', sql.NVarChar(100), input.postAppliedFor ?? null)
     .input('categoryOfWorkmen', sql.NVarChar(100), input.categoryOfWorkmen ?? null)
     .input('aadhaarNumber', sql.VarChar(20), input.aadhaarNumber ?? null)
@@ -340,13 +343,13 @@ export async function create(
 
       INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, JoiningDate,
                                  Department, Designation, PhoneNumber, DateOfBirth,
-                                 PostAppliedFor, CategoryOfWorkmen, AadhaarNumber,
+                                 Gender, PostAppliedFor, CategoryOfWorkmen, AadhaarNumber,
                                  PanNumber, UanNumber, EsiNumber, AppointmentLetterDate,
                                  CreatedBy)
       OUTPUT INSERTED.EmployeeId, INSERTED.EmployeeCode
       VALUES (@employeeCode, @employeeName, @joiningDate,
               @department, @designation, @phoneNumber, @dateOfBirth,
-              @postAppliedFor, @categoryOfWorkmen, @aadhaarNumber,
+              @gender, @postAppliedFor, @categoryOfWorkmen, @aadhaarNumber,
               @panNumber, @uanNumber, @esiNumber, @appointmentLetterDate,
               @createdBy);`)
 

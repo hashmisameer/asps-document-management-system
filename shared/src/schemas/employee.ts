@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { GENDERS } from '../constants/documents.js'
 import {
   booleanQueryParam,
   dateOnlySchema,
@@ -61,6 +62,7 @@ export const employeeIdentitySchema = z.object({
     .transform((value) => (value.length === 0 ? null : value))
     .nullable()
     .optional(),
+  gender: z.enum(GENDERS).nullable().optional(),
   uanNumber: digitsOnly(12, 'UAN'),
   esiNumber: z
     .string()

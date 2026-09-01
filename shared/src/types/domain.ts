@@ -1,5 +1,5 @@
 import type { Role } from '../constants/roles.js'
-import type { DocumentStatus, SignatureStatus, SignerRole } from '../constants/documents.js'
+import type { DocumentStatus, Gender, SignatureStatus, SignerRole } from '../constants/documents.js'
 import type { DeadlineState, DeadlineUnit } from '../constants/deadlines.js'
 import type { DocumentField, FieldCheckResult, TextSource } from '../constants/documentFields.js'
 
@@ -58,6 +58,7 @@ export interface Employee {
    */
   phoneNumber: string | null
   dateOfBirth: string | null
+  gender: Gender | null
   postAppliedFor: string | null
   categoryOfWorkmen: string | null
   aadhaarNumber: string | null

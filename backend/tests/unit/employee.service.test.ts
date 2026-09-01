@@ -101,6 +101,7 @@ function profile(overrides: Partial<EmployeeProfile> = {}): EmployeeProfile {
     designation: null,
     phoneNumber: null,
     dateOfBirth: null,
+    gender: null,
     postAppliedFor: null,
     categoryOfWorkmen: null,
     aadhaarNumber: null,
