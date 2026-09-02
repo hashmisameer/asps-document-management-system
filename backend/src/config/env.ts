@@ -78,6 +78,14 @@ const envSchema = z
        LEAVE THESE UNSET IN DEVELOPMENT and it downloads them from a CDN. On the
        company server, which has no route to the internet, they must be vendored
        locally and these must point at them, or every OCR pass fails. */
+    /**
+     * The languages OCR reads, as tesseract.js wants them: 'eng+hin'.
+     *
+     * The company's appointment letter is printed in Hindi, so English alone
+     * returns nothing from it. Each language is another model to load and
+     * another file to vendor onto the offline server.
+     */
+    OCR_LANGUAGES: z.string().min(3).default('eng+hin'),
     TESSERACT_LANG_PATH: z.string().min(1).optional(),
     TESSERACT_CORE_PATH: z.string().min(1).optional(),
     TESSERACT_CACHE_PATH: z.string().min(1).optional(),

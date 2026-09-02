@@ -76,7 +76,15 @@ async function getOcrWorker(): Promise<import('tesseract.js').Worker> {
   if (ocrWorker) return ocrWorker
 
   const { createWorker } = await import('tesseract.js')
-  ocrWorker = await createWorker('eng', 1, {
+  // English AND Hindi. The company's own appointment letter is printed in
+  // Hindi, and with 'eng' alone Tesseract returns nothing usable from it - not
+  // a bad reading, no reading, which the check then reports as a document that
+  // mentions none of the employee's details.
+  //
+  // Configurable because it is a trade: each language is a model to load and a
+  // file to vendor onto the offline server, and an office with no Hindi
+  // paperwork should not pay for one.
+  ocrWorker = await createWorker(env.OCR_LANGUAGES, 1, {
     // Unset in development, where tesseract.js fetches these from a CDN. On the
     // company server, which has no route to the internet, they must point at a
     // local copy or every OCR pass fails.

@@ -317,7 +317,19 @@ export function matchesDocumentType(
   const flatten = (value: string): string =>
     value
       .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, ' ')
+      // An apostrophe joins a word rather than breaking it. "EMPLOYEE'S STATE
+      // INSURANCE" has to match the keyword "EMPLOYEES STATE INSURANCE", and it
+      // would not if the apostrophe became a space.
+      .replace(/['’ʼ]/g, '')
+      // Everything else that is not a letter or a digit is a break. \p{L} rather
+      // than A-Z, so Devanagari survives: a Hindi appointment letter is matched
+      // on its own words rather than being transliterated first.
+      //
+      // Combining marks fall outside \p{L}, so a Devanagari word breaks into its
+      // consonants - 'नियुक्ति' becomes 'न य क त'. That is fine, and deliberate:
+      // both the document and the keyword are flattened the same way, and it
+      // makes the comparison tolerant of the matras OCR most often drops.
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
       .trim()
 
   const haystack = flatten(documentText)

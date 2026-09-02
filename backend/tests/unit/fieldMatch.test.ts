@@ -259,3 +259,35 @@ describe('matchesDocumentType', () => {
     expect(matchesDocumentType('   \n  ', AADHAAR)).toBe(false)
   })
 })
+
+describe('recognising the forms as they are actually printed', () => {
+  const ESIC = [
+    'EMPLOYEES STATE INSURANCE CORPORATION',
+    'EMPLOYEES STATE INSURANCE',
+    'ESIC',
+    'कर्मचारी राज्य बीमा',
+  ]
+  const APPOINTMENT = ['APPOINTMENT LETTER', 'नियुक्ति पत्र', 'नियुक्ति']
+
+  it("reads an apostrophe as part of a word, not a break", () => {
+    // ESIC is Employee's State Insurance Corporation. Treating the apostrophe
+    // as a separator made 'EMPLOYEE S' and the keyword 'EMPLOYEES' two
+    // different things, and the form went unrecognised.
+    expect(matchesDocumentType("Employee's State Insurance Corporation", ESIC)).toBe(true)
+    expect(matchesDocumentType('Employee’s State Insurance', ESIC)).toBe(true)
+  })
+
+  it('recognises a form printed in Hindi', () => {
+    // The company's appointment letter carries no English at all, so the type
+    // could never be matched on 'APPOINTMENT LETTER'.
+    expect(matchesDocumentType('नियुक्ति पत्र\nदिनांक 01/08/2026', APPOINTMENT)).toBe(true)
+    expect(matchesDocumentType('नियुक्तिपत्र', APPOINTMENT)).toBe(true)
+    expect(matchesDocumentType('कर्मचारी राज्य बीमा निगम', ESIC)).toBe(true)
+  })
+
+  it('still refuses a Hindi form filed as the wrong type', () => {
+    // Being lenient about script must not become lenient about which document
+    // it is: that is the whole point of the check.
+    expect(matchesDocumentType('कर्मचारी राज्य बीमा', APPOINTMENT)).toBe(false)
+  })
+})
