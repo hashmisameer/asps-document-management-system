@@ -1,5 +1,5 @@
 import type { EmployeeDocument, UploadDocumentInput } from '@asps-dms/shared'
-import { api } from '../../lib/api.js'
+import { api, DOCUMENT_READ_TIMEOUT_MS } from '../../lib/api.js'
 
 /**
  * Document endpoints.
@@ -36,6 +36,8 @@ export async function uploadDocument(
   const response = await api.post<{ document: EmployeeDocument }>(
     `/documents/${documentId}/file`,
     form,
+    // The server reads the document before storing it; see the constant.
+    { timeout: DOCUMENT_READ_TIMEOUT_MS },
   )
   return response.data.document
 }

@@ -324,7 +324,7 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
                 <Button
                   variant="secondary"
                   busy={upload.isPending}
-                  busyLabel="Uploading..."
+                  busyLabel="Reading the document..."
                   disabled={busy}
                   onClick={() => fileInput.current?.click()}
                 >

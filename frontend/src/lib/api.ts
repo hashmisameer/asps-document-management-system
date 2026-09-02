@@ -13,6 +13,24 @@ import { toApiError } from './apiError.js'
  * cookie behaves identically in both and there is no build-time host to get
  * wrong.
  */
+/**
+ * How long to wait for a request that READS a document.
+ *
+ * Uploading a scan is not a normal request. The server OCRs it before storing
+ * anything, which takes 30 to 40 seconds for a photographed form - longer since
+ * Hindi was added, because every page is now read twice.
+ *
+ * The general 30 second timeout was cutting those off while the server was
+ * still working, and the server then finished and SAVED THE DOCUMENT: the
+ * upload succeeded and the screen said it had failed, which invites somebody to
+ * upload it again.
+ *
+ * Comfortably past IDENTITY_CHECK_TIMEOUT_MS (90s), so the server's own limit is
+ * what gives up first and the reason reaches the person as a message rather
+ * than as a dead request.
+ */
+export const DOCUMENT_READ_TIMEOUT_MS = 150_000
+
 export const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
