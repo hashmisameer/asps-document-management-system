@@ -108,12 +108,22 @@ async function runIdentityCheck(
   }
 
   const documentType = await documentTypeRepository.findById(record.documentTypeId)
-  if (!documentType || documentType.requiredFields.length === 0) return notChecked
+  if (
+    !documentType ||
+    (documentType.requiredFields.length === 0 && documentType.recognitionKeywords.length === 0)
+  ) {
+    return notChecked
+  }
 
   const employee = await employeeRepository.findById(record.employeeId)
   if (!employee) throw new NotFoundError('That employee does not exist.')
 
-  const result = await checkUpload(employee, documentType.requiredFields, file)
+  const result = await checkUpload(
+    employee,
+    documentType.requiredFields,
+    file,
+    documentType.recognitionKeywords,
+  )
   if (result === null) return notChecked
 
   if (result.passed) {
@@ -146,7 +156,7 @@ async function runIdentityCheck(
       },
     })
 
-    throw new IdentityCheckError(describeFailure(result), {
+    throw new IdentityCheckError(describeFailure(result, documentType.documentName), {
       source: result.source,
       unreadable: result.unreadable,
       checks: result.checks,

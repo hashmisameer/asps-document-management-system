@@ -66,9 +66,20 @@ describe('employee documents, end to end', () => {
       .sort()
     expect(mandatory).toEqual(['Aadhaar Card', 'PAN Card'])
 
-    // Optional does not mean undated: every row still carries a deadline.
+    // Optional does not mean undated: every OPTIONAL row carries a deadline.
+    //
+    // The two mandatory cards deliberately do not. They are attached before the
+    // record exists, so either the file was there or the record predates the
+    // rule - neither is a document running late, and a due date for them made
+    // the report, the dashboard and the reminder all describe a lateness that
+    // cannot happen.
     const dated = checklist.body.documents.filter((d: { dueDate: string | null }) => d.dueDate)
-    expect(dated).toHaveLength(checklist.body.documents.length)
+    const undated = checklist.body.documents.filter((d: { dueDate: string | null }) => !d.dueDate)
+
+    expect(dated).toHaveLength(checklist.body.documents.length - 2)
+    expect(
+      undated.map((d: { documentName: string }) => d.documentName).sort(),
+    ).toEqual(['Aadhaar Card', 'PAN Card'])
   })
 
   it('accepts a document that confirms the employee, and refuses one that does not', async () => {

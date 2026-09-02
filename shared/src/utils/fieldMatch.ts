@@ -291,3 +291,40 @@ export function matchField(
       return matchPan(expected, documentText)
   }
 }
+
+/**
+ * Whether a document reads as the TYPE it is being filed as.
+ *
+ * The field checks answer "is this about the right person". They cannot answer
+ * "is this the right document", because an employee's name and code appear on
+ * every document they own - so an Aadhaar card filed against the PAN Card row
+ * passes every field check there is.
+ *
+ * One keyword is enough. Several are configured per type precisely because OCR
+ * loses characters: a real service card came back as 'SERVICE CAR', which fails
+ * on that phrase and matches 'FORM V' from the same page.
+ *
+ * Punctuation and spacing are flattened on both sides before comparing, so
+ * 'FORM - V', 'FORM-V' and 'FORM  V' are one phrase, and a keyword cannot fail
+ * over a hyphen a scanner did or did not see.
+ */
+export function matchesDocumentType(
+  documentText: string,
+  keywords: readonly string[],
+): boolean {
+  if (keywords.length === 0) return true
+
+  const flatten = (value: string): string =>
+    value
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim()
+
+  const haystack = flatten(documentText)
+  if (haystack.length === 0) return false
+
+  return keywords.some((keyword) => {
+    const needle = flatten(keyword)
+    return needle.length > 0 && haystack.includes(needle)
+  })
+}

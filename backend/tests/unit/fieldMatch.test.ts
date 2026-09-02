@@ -7,6 +7,7 @@ import {
   matchDigits,
   matchField,
   matchPan,
+  matchesDocumentType,
   matchWords,
   normalizeText,
 } from '@asps-dms/shared'
@@ -215,5 +216,46 @@ describe('matchField', () => {
     // asps-dms:allow-secret - the documented placeholder PAN, not anyone's.
     expect(matchField(DOCUMENT_FIELDS.PAN_NUMBER, 'ABCDE1234F', 'PAN ABCDE1234F')).toBe(true)
     expect(matchField(DOCUMENT_FIELDS.UAN_NUMBER, '100200300400', 'UAN 1002 0030 0400')).toBe(true)
+  })
+})
+
+describe('matchesDocumentType', () => {
+  // The check the field comparisons cannot make. An employee's name and code
+  // are printed on every document they own, so an Aadhaar card filed against
+  // the PAN Card row passes every field check there is.
+  const AADHAAR = ['AADHAAR', 'AADHAR', 'UNIQUE IDENTIFICATION AUTHORITY', 'UIDAI']
+  const PAN = ['INCOME TAX DEPARTMENT', 'PERMANENT ACCOUNT NUMBER']
+
+  it('recognises a document by any one of its phrases', () => {
+    expect(matchesDocumentType('GOVERNMENT OF INDIA\nAADHAAR\n1234 5678 9012', AADHAAR)).toBe(true)
+    expect(matchesDocumentType('UNIQUE IDENTIFICATION AUTHORITY OF INDIA', AADHAAR)).toBe(true)
+  })
+
+  it('refuses a document filed as the wrong type', () => {
+    const panCard = 'INCOME TAX DEPARTMENT\nPERMANENT ACCOUNT NUMBER\nPFCPS3190K'
+    expect(matchesDocumentType(panCard, AADHAAR)).toBe(false)
+    expect(matchesDocumentType(panCard, PAN)).toBe(true)
+  })
+
+  it('ignores punctuation and spacing on both sides', () => {
+    // A real service card was read as 'FORM -V'; the keyword is 'FORM V'.
+    expect(matchesDocumentType('FORM -V   SERVICE CARD', ['FORM V'])).toBe(true)
+    expect(matchesDocumentType('BIO — DATA FORM', ['BIO DATA'])).toBe(true)
+  })
+
+  it('survives OCR losing a character, because there is more than one phrase', () => {
+    // The same card came back as 'SERVICE CAR'.
+    expect(matchesDocumentType('FORM -V SERVICE CAR', ['SERVICE CARD', 'FORM V'])).toBe(true)
+  })
+
+  it('accepts anything when no keywords are configured', () => {
+    // Not recognised is not the same as recognised and wrong. A type with no
+    // reliable wording opts out rather than refusing everything.
+    expect(matchesDocumentType('anything at all', [])).toBe(true)
+  })
+
+  it('refuses when nothing could be read', () => {
+    expect(matchesDocumentType('', AADHAAR)).toBe(false)
+    expect(matchesDocumentType('   \n  ', AADHAAR)).toBe(false)
   })
 })

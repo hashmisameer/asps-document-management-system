@@ -26,6 +26,7 @@ interface DocumentTypeRow {
   DeadlineUnit: string | null
   SortOrder: number
   RequiredFields: string | null
+  RecognitionKeywords: string | null
   CreatedAt: Date
   UpdatedAt: Date
 }
@@ -33,7 +34,8 @@ interface DocumentTypeRow {
 const SELECT_DOCUMENT_TYPE = `
     SELECT  dt.DocumentTypeId, dt.DocumentName, dt.DocumentCode, dt.IsMandatory,
             dt.IsActive, dt.RequiresSignature, dt.DeadlineValue, dt.DeadlineUnit,
-            dt.SortOrder, dt.RequiredFields, dt.CreatedAt, dt.UpdatedAt
+            dt.SortOrder, dt.RequiredFields, dt.RecognitionKeywords,
+            dt.CreatedAt, dt.UpdatedAt
     FROM    dbo.DocumentTypes AS dt`
 
 function toDeadlineUnit(value: string | null): DeadlineUnit | null {
@@ -51,6 +53,22 @@ function toDeadlineUnit(value: string | null): DeadlineUnit | null {
  * how to compare cannot be checked, and carrying it forward would either crash
  * the check or - worse - quietly count as satisfied.
  */
+/**
+ * The recognition phrases, split and tidied.
+ *
+ * Unlike the field codes beside them these are free text - whatever wording a
+ * real document turns out to carry - so there is nothing to validate against
+ * and nothing to warn about. Blank entries are dropped so a trailing comma in
+ * the configuration cannot become a keyword that matches everything.
+ */
+function parseKeywords(value: string | null): string[] {
+  if (!value) return []
+  return value
+    .split(',')
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => keyword.length > 0)
+}
+
 function parseRequiredFields(value: string | null): DocumentField[] {
   if (!value) return []
   const known = new Set<string>(ALL_DOCUMENT_FIELDS)
@@ -80,6 +98,7 @@ function toDocumentType(row: DocumentTypeRow): DocumentType {
     deadlineUnit: toDeadlineUnit(row.DeadlineUnit),
     sortOrder: row.SortOrder,
     requiredFields: parseRequiredFields(row.RequiredFields),
+    recognitionKeywords: parseKeywords(row.RecognitionKeywords),
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }

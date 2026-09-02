@@ -146,7 +146,12 @@ beforeEach(() => {
   db.insertAudit.mockResolvedValue(undefined)
   db.touchSession.mockResolvedValue(undefined)
   db.findById.mockResolvedValue(documentRecord)
-  db.findDocumentType.mockResolvedValue({ documentTypeId: 1, requiredFields: [] })
+  db.findDocumentType.mockResolvedValue({
+    documentTypeId: 1,
+    documentName: 'Test Document',
+    requiredFields: [],
+    recognitionKeywords: [],
+  })
   db.findEmployee.mockResolvedValue(null)
   db.findStoredFile.mockResolvedValue(storedFile)
   db.storedFileExists.mockResolvedValue(true)

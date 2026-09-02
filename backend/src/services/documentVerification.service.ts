@@ -4,6 +4,7 @@ import {
   FIELD_CHECK_RESULTS,
   TEXT_SOURCES,
   matchField,
+  matchesDocumentType,
   type DocumentField,
   type Employee,
   type FieldCheck,
@@ -102,8 +103,22 @@ export function compareWithRecord(
   fields: readonly DocumentField[],
   text: string,
   source: TextSource,
+  recognitionKeywords: readonly string[] = [],
 ): IdentityCheck {
   const unreadable = source === TEXT_SOURCES.NONE || text.trim().length === 0
+
+  // Is this the document it is being filed as?
+  //
+  // Asked first, and separately from the field checks, because those cannot
+  // answer it: an employee's name and code are printed on every document they
+  // own, so an Aadhaar card filed against the PAN Card row passes all of them.
+  //
+  // null when the type carries no keywords - not recognised is a different
+  // answer from recognised and wrong, and only the second refuses anything.
+  const typeRecognised =
+    recognitionKeywords.length === 0 || unreadable
+      ? null
+      : matchesDocumentType(text, recognitionKeywords)
 
   const checks: FieldCheck[] = fields.map((field) => {
     const value = recordedValue(employee, field)
@@ -121,9 +136,11 @@ export function compareWithRecord(
     }
   })
 
-  const passed = checks.every((check) => check.result !== FIELD_CHECK_RESULTS.NOT_FOUND)
+  const passed =
+    typeRecognised !== false &&
+    checks.every((check) => check.result !== FIELD_CHECK_RESULTS.NOT_FOUND)
 
-  return { passed, source, checks, unreadable }
+  return { passed, source, checks, unreadable, typeRecognised }
 }
 
 /**
@@ -141,12 +158,21 @@ export async function checkUpload(
   employee: Employee,
   fields: readonly DocumentField[],
   file: { buffer: Buffer; mimeType: string },
+  recognitionKeywords: readonly string[] = [],
 ): Promise<IdentityCheck | null> {
   if (!env.IDENTITY_CHECK_ENABLED) return null
-  if (fields.length === 0) return null
+  // Nothing to check only when the type asks for NEITHER - no fields to confirm
+  // and no wording to recognise it by.
+  if (fields.length === 0 && recognitionKeywords.length === 0) return null
 
   const extracted = await extractText(file.buffer, file.mimeType)
-  const result = compareWithRecord(employee, fields, extracted.text, extracted.source)
+  const result = compareWithRecord(
+    employee,
+    fields,
+    extracted.text,
+    extracted.source,
+    recognitionKeywords,
+  )
 
   logger.info(
     {
@@ -182,7 +208,22 @@ export async function checkUpload(
  * the right one, badly scanned. It says which details could not be confirmed,
  * so the person can look at the page and see for themselves.
  */
-export function describeFailure(check: IdentityCheck): string {
+export function describeFailure(check: IdentityCheck, documentName?: string): string {
+  // Said first, because it is the more useful thing to be told. "This is not a
+  // PAN card" sends somebody to find the right file; "the PAN number was not
+  // found" sends them to squint at the wrong one.
+  if (check.typeRecognised === false) {
+    // 'an Aadhaar Card', not 'a Aadhaar Card'. A refusal is read by somebody who
+    // is already mildly annoyed; it should not also read as broken English.
+    const named = documentName
+      ? `${/^[AEIOU]/i.test(documentName) ? 'an' : 'a'} ${documentName}`
+      : 'the right document'
+    return (
+      `This does not look like ${named}. ` +
+      'Check that the right file was chosen, then upload it again or accept it with a reason.'
+    )
+  }
+
   if (check.unreadable) {
     return (
       'No text could be read from this file, so it could not be checked against ' +

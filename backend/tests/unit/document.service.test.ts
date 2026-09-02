@@ -150,7 +150,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.insertAudit.mockResolvedValue(undefined)
   db.findById.mockResolvedValue(record())
-  db.findDocumentType.mockResolvedValue({ documentTypeId: 1, requiredFields: [] })
+  db.findDocumentType.mockResolvedValue({
+    documentTypeId: 1,
+    documentName: 'Test Document',
+    requiredFields: [],
+    recognitionKeywords: [],
+  })
   db.findEmployee.mockResolvedValue(null)
   db.extractText.mockResolvedValue({ text: '', source: 'None', pagesRead: 0 })
   db.attachFile.mockResolvedValue(undefined)
@@ -226,6 +231,7 @@ describe('uploadFile', () => {
       db.findDocumentType.mockResolvedValue({
         documentTypeId: 1,
         requiredFields: ['EmployeeName', 'EmployeeCode'],
+        recognitionKeywords: [],
       })
       db.findEmployee.mockResolvedValue({
         employeeId: 42,

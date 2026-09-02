@@ -121,6 +121,11 @@ export interface DocumentType {
    * uploaded. Empty means the type is not checked.
    */
   requiredFields: DocumentField[]
+  /**
+   * Phrases that identify a document AS this type; one is enough. Empty means
+   * the type is not recognised, which is not the same as recognised and wrong.
+   */
+  recognitionKeywords: string[]
   createdAt: string
   updatedAt: string
 }
@@ -144,6 +149,14 @@ export interface IdentityCheck {
   checks: FieldCheck[]
   /** True when the document yielded no readable text at all. */
   unreadable: boolean
+  /**
+   * Whether the document reads as the TYPE it was filed as.
+   *
+   * null when the type carries no recognition keywords, or nothing could be
+   * read - "not recognised" is a different answer from "recognised and wrong",
+   * and only the second refuses anything.
+   */
+  typeRecognised: boolean | null
 }
 
 export interface DocumentIdentityCheck {
