@@ -31,6 +31,15 @@ documentRouter.post(
   documentController.upload,
 )
 
+/* Removing the FILE, not the checklist row: the document is still expected of
+   this employee and keeps its deadline. Gated on DOCUMENT_REPLACE - taking a
+   file off is replacing it with nothing. */
+documentRouter.delete(
+  '/:documentId/file',
+  requirePermission(PERMISSIONS.DOCUMENT_REPLACE),
+  documentController.removeFile,
+)
+
 documentRouter.post(
   '/:documentId/verify',
   requirePermission(PERMISSIONS.DOCUMENT_VERIFY),

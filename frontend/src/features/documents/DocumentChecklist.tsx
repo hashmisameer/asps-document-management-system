@@ -23,7 +23,7 @@ import { employeeKeys } from '../employees/api.js'
 import { skipSignature } from '../signatures/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
-import { documentFileUrl, uploadDocument } from './api.js'
+import { documentFileUrl, removeDocumentFile, uploadDocument } from './api.js'
 import { identityFailureOf, unconfirmedLabels, type IdentityFailure } from './identityFailure.js'
 
 /**
@@ -95,6 +95,9 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   const fileInput = useRef<HTMLInputElement>(null)
 
   const [failure, setFailure] = useState<string | null>(null)
+  // Asked before removing, because there is no undo on the screen: the bytes
+  // are still on disk, but nothing in the application will put them back.
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
 
   // An upload the identity check refused, held with the file that was refused
   // so that accepting it re-sends the same bytes rather than asking the person
@@ -136,6 +139,16 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
       }
       onError(error)
     },
+  })
+
+  const remove = useMutation({
+    mutationFn: () => removeDocumentFile(item.documentId),
+    onSuccess: async () => {
+      setFailure(null)
+      setConfirmingRemove(false)
+      await refresh()
+    },
+    onError,
   })
 
   const skip = useMutation({
@@ -194,7 +207,7 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED &&
     item.signatureStatus !== SIGNATURE_STATUS.SKIPPED
 
-  const busy = upload.isPending || skip.isPending
+  const busy = upload.isPending || skip.isPending || remove.isPending
 
   return (
     <>
@@ -320,6 +333,16 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
               </>
             ) : null}
 
+            {hasFile && can(PERMISSIONS.DOCUMENT_REPLACE) ? (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setConfirmingRemove((current) => !current)}
+              >
+                Remove
+              </Button>
+            ) : null}
+
             {canSign ? (
               <Link
                 to={`/documents/${item.documentId}/signature`}
@@ -343,6 +366,29 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
           </div>
         </td>
       </tr>
+
+      {confirmingRemove ? (
+        <tr>
+          <td colSpan={5} className="bg-slate-50 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="flex-1 text-sm text-slate-800">
+                Remove {item.originalFileName} from {item.documentName}? The row goes back to
+                Pending and keeps its date, and any signature placed on it is cleared.
+              </p>
+              <Button
+                busy={remove.isPending}
+                busyLabel="Removing..."
+                onClick={() => remove.mutate()}
+              >
+                Remove the file
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmingRemove(false)}>
+                Cancel
+              </Button>
+            </div>
+          </td>
+        </tr>
+      ) : null}
 
       {refused ? (
         <tr>

@@ -21,6 +21,8 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_VERIFIED: 'DOCUMENT_VERIFIED',
   DOCUMENT_REJECTED: 'DOCUMENT_REJECTED',
   DOCUMENT_ARCHIVED: 'DOCUMENT_ARCHIVED',
+  /** The file taken off a checklist row, returning it to Pending. */
+  DOCUMENT_FILE_REMOVED: 'DOCUMENT_FILE_REMOVED',
   /** An upload the identity check refused, accepted anyway with a reason. */
   DOCUMENT_IDENTITY_OVERRIDDEN: 'DOCUMENT_IDENTITY_OVERRIDDEN',
   /** An upload the identity check refused, and which was not overridden. */

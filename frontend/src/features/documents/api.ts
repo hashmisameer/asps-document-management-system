@@ -79,3 +79,16 @@ export const documentFileUrl = {
   preview: (documentId: number) => `/api/documents/${documentId}/preview`,
   download: (documentId: number) => `/api/documents/${documentId}/download`,
 }
+
+/**
+ * Takes the file off a document, returning the row to Pending.
+ *
+ * The checklist row survives: the document is still expected of this employee
+ * and keeps its deadline. Only the file it was satisfied by is removed.
+ */
+export async function removeDocumentFile(documentId: number): Promise<EmployeeDocument> {
+  const response = await api.delete<{ document: EmployeeDocument }>(
+    `/documents/${documentId}/file`,
+  )
+  return response.data.document
+}

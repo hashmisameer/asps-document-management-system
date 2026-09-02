@@ -20,6 +20,7 @@ import {
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
+import * as signaturePlacementRepository from '../repositories/signaturePlacement.repository.js'
 import type {
   AttachIdentityCheck,
   EmployeeDocumentRecord,
@@ -494,4 +495,69 @@ function deliveryFileName(
   const extension = relativePath.slice(relativePath.lastIndexOf('.'))
   const cleanName = documentName.replace(/[^\w\s.-]/g, '').trim()
   return `${employeeCode} - ${cleanName}${extension}`
+}
+
+/**
+ * Takes the file off a document, returning the row to Pending.
+ *
+ * The remedy for a file uploaded against the wrong row or the wrong employee.
+ * With no rejection step there is otherwise no way to undo it, and replacing a
+ * wrong file with a right one is not always possible - the right one may not
+ * have arrived yet.
+ *
+ * Requires DOCUMENT_REPLACE, because that is what this is: replacing a file with
+ * nothing. Somebody trusted to overwrite a document is trusted to remove one.
+ *
+ * The bytes stay on disk. Only the current file is ever served, so an unlinked
+ * one costs a little space and is the only thing standing between a mis-click
+ * and a document nobody kept a copy of.
+ */
+export async function removeFile(
+  documentId: number,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<EmployeeDocument> {
+  const record = await loadRecord(documentId)
+
+  if (!roleHasPermission(actor.role, PERMISSIONS.DOCUMENT_REPLACE)) {
+    throw new ForbiddenError('You do not have permission to remove a document.')
+  }
+  if (record.originalFileName === null) {
+    throw new ConflictError('There is no file on this document to remove.')
+  }
+
+  // The placements describe pages in a file that is about to stop being served,
+  // so they go with it rather than being left pointing at nothing.
+  await signaturePlacementRepository.replaceForDocument(
+    documentId,
+    record.employeeId,
+    [],
+    actor.userId,
+  )
+
+  const cleared = await employeeDocumentRepository.clearFile(
+    documentId,
+    record.requiresSignature ? SIGNATURE_STATUS.PENDING_DETECTION : SIGNATURE_STATUS.NOT_REQUIRED,
+  )
+  if (!cleared) {
+    // Somebody removed or replaced it between the read and the write.
+    throw new ConflictError('That document changed while you were working on it.')
+  }
+
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.DOCUMENT_FILE_REMOVED,
+    entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
+    entityId: documentId,
+    ipAddress: context.ipAddress,
+    // The file name is recorded because it is the only way to answer "what was
+    // taken off this row" once the row no longer mentions it.
+    metadata: {
+      employeeCode: record.employeeCode,
+      documentName: record.documentName,
+      removedFileName: record.originalFileName,
+    },
+  })
+
+  return getById(documentId)
 }

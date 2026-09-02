@@ -137,3 +137,16 @@ export const download: RequestHandler = async (req, res) => {
   )
   sendFile(res, delivery, 'attachment')
 }
+
+/**
+ * Removes the file from a document, returning the row to Pending.
+ *
+ * DELETE on the file rather than on the document: the checklist row itself is
+ * not being deleted - it is still expected of this employee, and still has its
+ * deadline.
+ */
+export const removeFile: RequestHandler = async (req, res) => {
+  const { documentId } = parseParams(req, documentParamsSchema)
+  const document = await documentService.removeFile(documentId, actorOf(req), requestContext(req))
+  res.json({ document })
+}

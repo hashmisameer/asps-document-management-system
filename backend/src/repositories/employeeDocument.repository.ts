@@ -498,3 +498,55 @@ export async function setSignatureStatus(
 
   return (result.rowsAffected[0] ?? 0) > 0
 }
+
+/**
+ * Takes the file off a checklist row, returning it to Pending.
+ *
+ * For a document uploaded against the wrong employee or the wrong row - the
+ * mistake that has no other remedy now that there is no rejection step.
+ *
+ * The FILE ITSELF is left on disk, exactly as a replaced one is. Only the
+ * current file is ever served, and the previous bytes are there if removing it
+ * turns out to have been the mistake rather than the upload.
+ *
+ * Everything that described that file goes with it: its identity check, its
+ * signature work and its processed copy. A placement describes a page in a file
+ * that is no longer there, and an identity check that a file passed says
+ * nothing about the row once the file is gone.
+ *
+ * The due date is untouched. It belongs to the checklist row - what is expected
+ * of this employee by when - and not to whichever file happened to satisfy it.
+ */
+export async function clearFile(documentId: number, signatureStatus: string): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request
+    .input('documentId', sql.Int, documentId)
+    .input('status', sql.VarChar(20), DOCUMENT_STATUS.PENDING)
+    .input('signatureStatus', sql.VarChar(20), signatureStatus).query(`
+      UPDATE dbo.EmployeeDocuments
+      SET    OriginalFileName = NULL,
+             StoredFileName   = NULL,
+             OriginalFilePath = NULL,
+             ProcessedFilePath = NULL,
+             FileSizeBytes    = NULL,
+             MimeType         = NULL,
+             Sha256           = NULL,
+             PageCount        = NULL,
+             Status           = @status,
+             SignatureStatus  = @signatureStatus,
+             RejectionReason  = NULL,
+             UploadedBy       = NULL,
+             UploadedAt       = NULL,
+             VerifiedBy       = NULL,
+             VerifiedAt       = NULL,
+             IdentityCheckStatus    = NULL,
+             IdentityCheckSource    = NULL,
+             IdentityCheckDetail    = NULL,
+             IdentityCheckedAt      = NULL,
+             IdentityOverrideBy     = NULL,
+             IdentityOverrideReason = NULL,
+             UpdatedAt        = SYSUTCDATETIME()
+      WHERE  DocumentId = @documentId AND IsActive = 1 AND OriginalFilePath IS NOT NULL`)
+
+  return (result.rowsAffected[0] ?? 0) > 0
+}
