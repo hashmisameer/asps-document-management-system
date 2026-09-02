@@ -26,10 +26,19 @@
    compliance failure against the employee record - the two ID cards are.
 
    RequiredFields is the identity check: which of the employee's own details the
-   document must confirm before it can be uploaded. A document whose text names
-   a different person, or a different employee code, is refused. The two
-   identity cards have no field list because none was specified for them, and
-   NULL means "not checked" rather than "checked against nothing".
+   document must confirm before it can be uploaded, compared against the values
+   typed when the employee was created. A document whose text names a different
+   person, or a different employee code, is refused.
+
+   As specified by the office on 2026-09-02: name, code and joining date on the
+   four forms that carry all three, and the name alone on the rest.
+
+   THE TWO ID CARDS ARE NOT TEXT-CHECKED. A photograph of a laminated PAN card
+   put through this system's OCR came back as 2,173 characters of noise - not a
+   wrong document, an unread one - and the check refused it every time. They are
+   attached before an employee can be created, by a person holding the card, and
+   that is the verification for these two. NULL means "not checked", which is a
+   different answer from "checked against nothing".
 
    ASSUMPTION - RequiresSignature is 1 for the company's own forms and 0 for the
    Aadhaar and PAN cards, which are the employee's identity documents rather
@@ -55,10 +64,10 @@ MERGE dbo.DocumentTypes AS target
 USING (VALUES
     -- DocumentCode, DocumentName, IsMandatory, RequiresSignature, DeadlineValue, DeadlineUnit, SortOrder, RequiredFields
     ('APPOINTMENT_LETTER', N'Appointment Letter', 0, 1,  7, 'DAY',    10,
-     N'EmployeeName,JoiningDate,EmployeeCode'),
+     N'EmployeeName,EmployeeCode,JoiningDate'),
 
     ('BIO_DATA',           N'Bio Data Form',      0, 1,  7, 'DAY',    20,
-     N'PostAppliedFor,EmployeeCode,EmployeeName,Phone,JoiningDate'),
+     N'EmployeeName,EmployeeCode,JoiningDate'),
 
     ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  NULL, NULL,   30,
      NULL),
@@ -70,10 +79,10 @@ USING (VALUES
      N'EmployeeName'),
 
     ('ESIC_FORM',          N'ESIC Form',          0, 1, 10, 'DAY',    60,
-     N'EmployeeName,DateOfBirth,Phone'),
+     N'EmployeeName'),
 
     ('SERVICE_CARD',       N'Service Card',       0, 1,  7, 'DAY',    70,
-     N'EmployeeCode,EmployeeName,JoiningDate,Designation,AadhaarNumber,PanNumber,CategoryOfWorkmen,UanNumber,EsiNumber'),
+     N'EmployeeName,EmployeeCode,JoiningDate'),
 
     ('GRATUITY_FORM',      N'Form of Gratuity',   0, 1,  7, 'DAY',    80,
      N'EmployeeName'),
@@ -83,7 +92,7 @@ USING (VALUES
 
     -- Six months from joining, not days: confirmation follows the probation period.
     ('CONFIRMATION_LETTER', N'Confirmation Letter', 0, 1, 6, 'MONTH', 100,
-     N'EmployeeName,Phone,AppointmentLetterDate,EmployeeCode')
+     N'EmployeeName,EmployeeCode,JoiningDate')
 ) AS source (DocumentCode, DocumentName, IsMandatory, RequiresSignature,
              DeadlineValue, DeadlineUnit, SortOrder, RequiredFields)
     ON target.DocumentCode = source.DocumentCode
