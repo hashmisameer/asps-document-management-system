@@ -1,5 +1,6 @@
 import {
   DOCUMENT_STATUS,
+  EMPLOYEE_STATUS_FILTERS,
   SIGNATURE_STATUS,
   formatDateOnly,
   parseDateOnly,
@@ -11,11 +12,16 @@ import {
   type EmployeeListQuery,
   type EmployeeProfile,
   type EmployeeSortKey,
+  type EmploymentStatus,
+  type ExitReason,
   type JoinedWithinPeriod,
+  type MarkEmployeeLeftInput,
   type Paginated,
   type UpdateEmployeeInput,
 } from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
+import { escapeLike } from '../utils/sqlLike.js'
+import { EFFECTIVE_LEFT, IDENTITY_CARD_CODES_SQL } from './employeeScope.js'
 
 /**
  * dbo.Employees access.
@@ -48,6 +54,8 @@ interface EmployeeRow extends EmployeeCountsRow {
   Department: string | null
   Designation: string | null
   PhoneNumber: string | null
+  Address: string | null
+  Email: string | null
   DateOfBirth: Date | null
   Gender: string | null
   PostAppliedFor: string | null
@@ -59,6 +67,11 @@ interface EmployeeRow extends EmployeeCountsRow {
   AppointmentLetterDate: Date | null
   PhotoMimeType: string | null
   PhotoUploadedAt: Date | null
+  EmploymentStatus: EmploymentStatus
+  ResignationDate: Date | null
+  LastWorkingDate: Date | null
+  ExitReason: ExitReason | null
+  ExitNotes: string | null
   IsActive: boolean
   CreatedAt: Date
   UpdatedAt: Date
@@ -70,10 +83,12 @@ interface EmployeeProfileRow extends EmployeeRow {
 
 const SELECT_EMPLOYEE_COLUMNS = `
              e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
-             e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
+             e.Department, e.Designation, e.PhoneNumber, e.Address, e.Email, e.DateOfBirth,
              e.Gender, e.PostAppliedFor, e.CategoryOfWorkmen, e.AadhaarNumber, e.PanNumber,
              e.UanNumber, e.EsiNumber, e.AppointmentLetterDate,
              e.PhotoMimeType, e.PhotoUploadedAt,
+             e.EmploymentStatus, e.ResignationDate, e.LastWorkingDate,
+             e.ExitReason, e.ExitNotes,
              e.IsActive, e.CreatedAt, e.UpdatedAt`
 
 /**
@@ -84,7 +99,7 @@ const SELECT_EMPLOYEE_COLUMNS = `
  */
 const SELECT_EMPLOYEE_LIST_COLUMNS = `
              e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.JoiningDate,
-             e.Department, e.Designation, e.PhoneNumber, e.DateOfBirth,
+             e.Department, e.Designation, e.PhoneNumber, e.Address, e.Email, e.DateOfBirth,
              e.Gender, e.PostAppliedFor, e.CategoryOfWorkmen,
              CAST(NULL AS VARCHAR(20)) AS AadhaarNumber,
              CAST(NULL AS VARCHAR(10)) AS PanNumber,
@@ -92,6 +107,8 @@ const SELECT_EMPLOYEE_LIST_COLUMNS = `
              CAST(NULL AS VARCHAR(25)) AS EsiNumber,
              e.AppointmentLetterDate,
              e.PhotoMimeType, e.PhotoUploadedAt,
+             e.EmploymentStatus, e.ResignationDate, e.LastWorkingDate,
+             e.ExitReason, e.ExitNotes,
              e.IsActive, e.CreatedAt, e.UpdatedAt`
 
 /**
@@ -155,6 +172,8 @@ function toEmployee(row: EmployeeRow): Employee {
     department: row.Department,
     designation: row.Designation,
     phoneNumber: row.PhoneNumber,
+    address: row.Address,
+    email: row.Email,
     dateOfBirth: row.DateOfBirth === null ? null : formatDateOnly(row.DateOfBirth),
     gender: (row.Gender as Employee['gender']) ?? null,
     postAppliedFor: row.PostAppliedFor,
@@ -167,24 +186,15 @@ function toEmployee(row: EmployeeRow): Employee {
       row.AppointmentLetterDate === null ? null : formatDateOnly(row.AppointmentLetterDate),
     hasPhoto: row.PhotoUploadedAt !== null,
     photoUpdatedAt: row.PhotoUploadedAt?.toISOString() ?? null,
+    employmentStatus: row.EmploymentStatus,
+    resignationDate: row.ResignationDate === null ? null : formatDateOnly(row.ResignationDate),
+    lastWorkingDate: row.LastWorkingDate === null ? null : formatDateOnly(row.LastWorkingDate),
+    exitReason: row.ExitReason,
+    exitNotes: row.ExitNotes,
     isActive: row.IsActive,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }
-}
-
-/**
- * Escapes the wildcards LIKE would otherwise read as syntax.
- *
- * Without this, a search for '100%' matches every employee and a stray '['
- * opens a character class that swallows the rest of the term. Only the three
- * pattern characters and the escape character itself are escaped: ']' outside a
- * class is already a literal, and escaping characters that are not special is
- * not something to rely on. The escape character is declared with ESCAPE in the
- * clause itself.
- */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_[]/g, (character) => `\\${character}`)
 }
 
 /**
@@ -203,6 +213,10 @@ const JOINED_WITHIN_SQL: Readonly<Record<JoinedWithinPeriod, string>> = {
 
 /** sortBy keys -> columns. The enum in the shared schema is the only way in. */
 const SORT_COLUMNS: Readonly<Record<EmployeeSortKey, string>> = {
+  /* Counted in the OUTER APPLY above rather than stored: descending puts the
+     employee with the most outstanding documents first, which is the order
+     somebody working through the Incomplete list reads it in. */
+  documentsPending: '(c.Total - c.Completed)',
   employeeCode: 'e.EmployeeCode',
   employeeName: 'e.EmployeeName',
   joiningDate: 'e.JoiningDate',
@@ -215,7 +229,24 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
   const request = bindCountParams(await createRequest(), todayDateOnly())
   const conditions: string[] = []
 
-  if (!query.includeArchived) conditions.push('e.IsActive = 1')
+  // 'Only the archived' is a different question from 'archived as well', and
+  // the dashboard's Archived tile asks the first one.
+  if (query.archivedOnly) conditions.push('e.IsActive = 0')
+  else if (!query.includeArchived) conditions.push('e.IsActive = 1')
+
+  // Still here, on the way out, or both. Filtering only; no row is ever removed.
+  //
+  // LEFT here means AN EXIT HAS BEEN RECORDED, not that the last day has already
+  // passed. Somebody marked as leaving on the 30th is still working until then,
+  // and the first thing whoever recorded it does is look for them under 'Left' -
+  // finding an empty list reads as the exit not having saved. They appear under
+  // 'Active' too, deliberately: they are still employed, still owe documents and
+  // must not drop off the list that is used to chase them.
+  if (query.status === EMPLOYEE_STATUS_FILTERS.ACTIVE) {
+    conditions.push(`NOT ${EFFECTIVE_LEFT}`)
+  } else if (query.status === EMPLOYEE_STATUS_FILTERS.LEFT) {
+    conditions.push('e.ResignationDate IS NOT NULL')
+  }
 
   if (query.department) {
     conditions.push('e.Department = @department')
@@ -236,6 +267,85 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
     // The period is an enum, and this is a lookup into a table of fixed SQL -
     // nothing the caller sent reaches the query text.
     conditions.push(`e.JoiningDate >= ${JOINED_WITHIN_SQL[query.joinedWithin]}`)
+  }
+
+  /*
+   * The dashboard's filters.
+   *
+   * Every predicate below is written to match the one the tile counted with,
+   * because a tile saying 5 that opens a list of 4 is read as the list being
+   * wrong - and one of them IS wrong. dashboard.repository.ts holds the other
+   * copy of each; they are asserted against each other in the tests.
+   */
+
+  if (query.gender) {
+    // Not a fourth gender: 'notRecorded' is the absence of one, which is a real
+    // answer and is why the dashboard shows it rather than folding it in.
+    if (query.gender === 'notRecorded') {
+      conditions.push('e.Gender IS NULL')
+    } else {
+      conditions.push('e.Gender = @gender')
+      request.input('gender', sql.VarChar(10), query.gender)
+    }
+  }
+
+  if (query.leftThisYear) {
+    conditions.push(
+      'e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today' +
+        ' AND YEAR(e.LastWorkingDate) = YEAR(@today)',
+    )
+  }
+
+  /*
+   * An employee whose Aadhaar or PAN has never come in.
+   *
+   * By CODE rather than by the mandatory flag. It was the flag, which picked out
+   * the two cards only for as long as they were the only mandatory documents -
+   * eight of the ten are mandatory now, and this quietly became 'missing
+   * anything at all'.
+   */
+  if (query.missingIdCard) {
+    conditions.push(`EXISTS (
+      SELECT 1
+      FROM   dbo.EmployeeDocuments AS idc
+      INNER JOIN dbo.DocumentTypes AS idt ON idt.DocumentTypeId = idc.DocumentTypeId
+      WHERE  idc.EmployeeId = e.EmployeeId
+        AND  idc.IsActive = 1
+        AND  idt.DocumentCode IN (${IDENTITY_CARD_CODES_SQL})
+        AND  idc.OriginalFilePath IS NULL
+    )`)
+  }
+
+  if (query.withoutSignature) {
+    conditions.push(`NOT EXISTS (
+      SELECT 1 FROM dbo.EmployeeSignatures AS sig
+      WHERE  sig.EmployeeId = e.EmployeeId AND sig.IsActive = 1
+    )`)
+  }
+
+  /*
+   * Whether their checklist is finished.
+   *
+   * OUTSTANDING is the same expression the counters above use - a row whose
+   * status is not one of the three that mean a file arrived and was not
+   * rejected - and the same one the dashboard counts these cards with. A
+   * REJECTED document is outstanding: the file was refused, so the paper is
+   * still to be collected.
+   *
+   * EXISTS and NOT EXISTS over one condition, so 'complete' and 'incomplete'
+   * between them return every employee the other filters allow and never the
+   * same one twice.
+   */
+  if (query.checklist) {
+    const OUTSTANDING = `SELECT 1
+      FROM   dbo.EmployeeDocuments AS cd
+      WHERE  cd.EmployeeId = e.EmployeeId
+        AND  cd.IsActive = 1
+        AND  cd.Status NOT IN (@stUploaded, @stUnderReview, @stVerified)`
+
+    conditions.push(
+      query.checklist === 'incomplete' ? `EXISTS (${OUTSTANDING})` : `NOT EXISTS (${OUTSTANDING})`,
+    )
   }
 
   // Literals only: every condition above is a fixed string naming a parameter,
@@ -331,6 +441,8 @@ export async function create(
     .input('department', sql.NVarChar(100), input.department ?? null)
     .input('designation', sql.NVarChar(100), input.designation ?? null)
     .input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
+    .input('address', sql.NVarChar(500), input.address ?? null)
+    .input('email', sql.NVarChar(200), input.email ?? null)
     .input('dateOfBirth', sql.Date, input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null)
     .input('gender', sql.VarChar(10), input.gender ?? null)
     .input('postAppliedFor', sql.NVarChar(100), input.postAppliedFor ?? null)
@@ -362,13 +474,13 @@ export async function create(
       END
 
       INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, JoiningDate,
-                                 Department, Designation, PhoneNumber, DateOfBirth,
+                                 Department, Designation, PhoneNumber, Address, Email, DateOfBirth,
                                  Gender, PostAppliedFor, CategoryOfWorkmen, AadhaarNumber,
                                  PanNumber, UanNumber, EsiNumber, AppointmentLetterDate,
                                  CreatedBy)
       OUTPUT INSERTED.EmployeeId, INSERTED.EmployeeCode
       VALUES (@employeeCode, @employeeName, @joiningDate,
-              @department, @designation, @phoneNumber, @dateOfBirth,
+              @department, @designation, @phoneNumber, @address, @email, @dateOfBirth,
               @gender, @postAppliedFor, @categoryOfWorkmen, @aadhaarNumber,
               @panNumber, @uanNumber, @esiNumber, @appointmentLetterDate,
               @createdBy);`)
@@ -412,6 +524,14 @@ export async function update(employeeId: number, input: UpdateEmployeeInput): Pr
   if ('phoneNumber' in input) {
     assignments.push('PhoneNumber = @phoneNumber')
     request.input('phoneNumber', sql.VarChar(20), input.phoneNumber ?? null)
+  }
+  if ('address' in input) {
+    assignments.push('Address = @address')
+    request.input('address', sql.NVarChar(500), input.address ?? null)
+  }
+  if ('email' in input) {
+    assignments.push('Email = @email')
+    request.input('email', sql.NVarChar(200), input.email ?? null)
   }
   if ('dateOfBirth' in input) {
     assignments.push('DateOfBirth = @dateOfBirth')
@@ -483,6 +603,88 @@ export async function setActive(employeeId: number, isActive: boolean): Promise<
       WHERE  EmployeeId = @employeeId AND IsActive <> @isActive`)
 
   return (result.rowsAffected[0] ?? 0) > 0
+}
+
+/**
+ * Records that an employee has left.
+ *
+ * The STATUS is derived, not passed in: somebody who resigns today with a last
+ * working day at the end of the month is still working here, and saying
+ * otherwise would stop their checklist a month early and take them off the
+ * active headcount while they are still turning up. It flips on its own once
+ * that date has passed, because `list` and the dashboard read the column and
+ * `refreshEmploymentStatus` moves it.
+ *
+ * Nothing is deleted and nothing is archived. The employee stays exactly where
+ * they were, with a leaving date on them.
+ */
+export async function markLeft(
+  employeeId: number,
+  input: MarkEmployeeLeftInput,
+  today: string,
+): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request
+    .input('employeeId', sql.Int, employeeId)
+    .input('resignationDate', sql.Date, parseDateOnly(input.resignationDate))
+    .input('lastWorkingDate', sql.Date, parseDateOnly(input.lastWorkingDate))
+    .input('exitReason', sql.VarChar(20), input.exitReason)
+    .input('exitNotes', sql.NVarChar(1000), input.exitNotes ?? null)
+    .input('today', sql.Date, parseDateOnly(today)).query(`
+      UPDATE dbo.Employees
+      SET    ResignationDate  = @resignationDate,
+             LastWorkingDate  = @lastWorkingDate,
+             ExitReason       = @exitReason,
+             ExitNotes        = @exitNotes,
+             EmploymentStatus = CASE WHEN @lastWorkingDate < @today THEN 'LEFT' ELSE 'ACTIVE' END,
+             UpdatedAt        = SYSUTCDATETIME()
+      WHERE  EmployeeId = @employeeId`)
+
+  return (result.rowsAffected[0] ?? 0) > 0
+}
+
+/**
+ * Undoes an exit, putting the employee back exactly as they were.
+ *
+ * Clears the dates as well as the status, so an employee marked as having left
+ * by mistake is not left carrying a resignation date nobody can see the effect
+ * of. What happened is not erased - the audit trail keeps the exit, this undo,
+ * and who did each.
+ */
+export async function undoExit(employeeId: number): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request.input('employeeId', sql.Int, employeeId).query(`
+      UPDATE dbo.Employees
+      SET    EmploymentStatus = 'ACTIVE',
+             ResignationDate  = NULL,
+             LastWorkingDate  = NULL,
+             ExitReason       = NULL,
+             ExitNotes        = NULL,
+             UpdatedAt        = SYSUTCDATETIME()
+      WHERE  EmployeeId = @employeeId
+        AND (EmploymentStatus = 'LEFT' OR ResignationDate IS NOT NULL)`)
+
+  return (result.rowsAffected[0] ?? 0) > 0
+}
+
+/**
+ * Turns ACTIVE into LEFT for anyone whose last working day has now passed.
+ *
+ * An exit is recorded in advance and takes effect on a date, so something has to
+ * notice the date arriving. This is that, and it is written to be safe to run at
+ * any time and as often as anyone likes.
+ */
+export async function refreshEmploymentStatus(today: string): Promise<number> {
+  const request = await createRequest()
+  const result = await request.input('today', sql.Date, parseDateOnly(today)).query(`
+      UPDATE dbo.Employees
+      SET    EmploymentStatus = 'LEFT',
+             UpdatedAt = SYSUTCDATETIME()
+      WHERE  EmploymentStatus = 'ACTIVE'
+        AND  LastWorkingDate IS NOT NULL
+        AND  LastWorkingDate < @today`)
+
+  return result.rowsAffected[0] ?? 0
 }
 
 /**

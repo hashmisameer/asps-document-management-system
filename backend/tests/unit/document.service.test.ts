@@ -32,6 +32,8 @@ const db = vi.hoisted(() => ({
   findDocumentType: vi.fn(),
   findEmployee: vi.fn(),
   extractText: vi.fn(),
+  recordIdentityCheck: vi.fn(),
+  readStoredFile: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
@@ -43,6 +45,7 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
   listForEmployee: vi.fn(),
   createChecklist: vi.fn(),
   listDocumentTypeIdsForEmployee: vi.fn(),
+  recordIdentityCheck: db.recordIdentityCheck,
 }))
 
 vi.mock('../../src/services/storage.service.js', () => ({
@@ -50,6 +53,7 @@ vi.mock('../../src/services/storage.service.js', () => ({
   discardStoredFile: db.discardStoredFile,
   openStoredFile: db.openStoredFile,
   storedFileExists: db.storedFileExists,
+  readStoredFile: db.readStoredFile,
   ensureStorageReady: vi.fn(),
   checkStorageWritable: vi.fn(),
   resolveWithinRoot: vi.fn(),
@@ -116,6 +120,9 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     documentId: 5,
     employeeId: 42,
     employeeCode: 'EMP001',
+    // Still here, so their deadlines are still running.
+    employeeHasLeft: false,
+    deadlineUnit: null,
     employeeName: 'Ravi Kumar',
     documentTypeId: 1,
     documentName: 'PAN Card',
@@ -228,6 +235,22 @@ describe('uploadFile', () => {
   describe('the identity check', () => {
     /** A document type that asks for the two details every form carries. */
     function checkedType() {
+      // The reading now happens against the STORED file, so the completion path
+      // needs somewhere to read it from.
+      db.findStoredFile.mockResolvedValue({
+        documentId: 5,
+        employeeId: 42,
+        storedFileName: 'stored.pdf',
+        originalFilePath: 'documents/42/stored.pdf',
+        processedFilePath: null,
+        originalFileName: 'pan.pdf',
+        mimeType: 'application/pdf',
+        documentName: 'PAN Card',
+        employeeCode: 'EMP007',
+      })
+      db.readStoredFile.mockResolvedValue(Buffer.from('stored bytes'))
+      db.recordIdentityCheck.mockResolvedValue(true)
+
       db.findDocumentType.mockResolvedValue({
         documentTypeId: 1,
         requiredFields: ['EmployeeName', 'EmployeeCode'],
@@ -255,31 +278,29 @@ describe('uploadFile', () => {
       })
     }
 
-    it('refuses a document that names somebody else, before it reaches the store', async () => {
+    /**
+     * The reading no longer happens inside the upload.
+     *
+     * It used to, and whoever pressed Upload waited for all of it - one measured
+     * request sat open for 62 seconds. The file is stored first now and read
+     * afterwards, so the upload's job is to answer quickly and say that a
+     * reading is under way; the verdict lands on the row a few seconds later.
+     */
+    it('answers immediately, without reading the document', async () => {
       checkedType()
-      db.extractText.mockResolvedValue({
-        text: 'PAN CARD - ANITA DESAI - EMP113',
-        source: 'PdfText',
-        pagesRead: 1,
-      })
 
-      await expect(
-        documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context),
-      ).rejects.toMatchObject({
-        statusCode: 422,
-        code: API_ERROR_CODES.IDENTITY_CHECK_FAILED,
-      })
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
 
-      expect(db.storeDocument).not.toHaveBeenCalled()
-      expect(db.attachFile).not.toHaveBeenCalled()
-      // The refusal leaves no document behind, so the trail is the only record
-      // that it happened at all.
-      expect(db.insertAudit).toHaveBeenCalledWith(
-        expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_REFUSED }),
+      // Stored, and marked as being read. NOT refused, and not waited for.
+      expect(db.storeDocument).toHaveBeenCalled()
+      expect(db.attachFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identity: expect.objectContaining({ status: 'Checking', overrideBy: null }),
+        }),
       )
     })
 
-    it('records the check on the document when it passes', async () => {
+    it('records what the reading found, once it finishes', async () => {
       checkedType()
       db.extractText.mockResolvedValue({
         text: 'PAN CARD - RAVI KUMAR - EMP 007',
@@ -287,46 +308,46 @@ describe('uploadFile', () => {
         pagesRead: 1,
       })
 
-      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+      await documentService.completeIdentityCheck(5, 'stored.pdf', hr, context)
 
-      expect(db.attachFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          identity: expect.objectContaining({
-            status: 'Passed',
-            source: 'PdfText',
-            overrideBy: null,
-          }),
-        }),
+      expect(db.recordIdentityCheck).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: 5, status: 'Passed', source: 'PdfText' }),
       )
     })
 
-    it('accepts a failed check with a reason, and records who accepted it', async () => {
+    it('records a refusal against the document, which now exists to record it on', async () => {
       checkedType()
       db.extractText.mockResolvedValue({
-        text: 'a scan so poor that nothing legible came off it',
-        source: 'Ocr',
+        text: 'PAN CARD - ANITA DESAI - EMP113',
+        source: 'PdfText',
         pagesRead: 1,
       })
 
-      await documentService.uploadFile(
-        5,
-        uploadedFile(),
-        { ...uploadInput, identityOverrideReason: 'Scan is faint; verified against the original' },
-        hr,
-        context,
-      )
+      await documentService.completeIdentityCheck(5, 'stored.pdf', hr, context)
 
-      expect(db.attachFile).toHaveBeenCalledWith(
+      expect(db.recordIdentityCheck).toHaveBeenCalledWith(
         expect.objectContaining({
-          identity: expect.objectContaining({
-            status: 'Overridden',
-            overrideBy: hr.userId,
-            overrideReason: 'Scan is faint; verified against the original',
-          }),
+          status: 'Failed',
+          // The sentence HR reads is stored with the row rather than rebuilt on
+          // the screen, so it cannot drift from what was actually found.
+          reason: expect.stringContaining('employee name'),
         }),
       )
       expect(db.insertAudit).toHaveBeenCalledWith(
-        expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_OVERRIDDEN }),
+        expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_IDENTITY_REFUSED }),
+      )
+    })
+
+    it('never leaves the row saying Checking when the reading itself fails', async () => {
+      checkedType()
+      db.extractText.mockRejectedValue(new Error('the OCR worker died'))
+
+      await documentService.completeIdentityCheck(5, 'stored.pdf', hr, context)
+
+      // The upload already succeeded and the file is safe; all that is lost is
+      // the reading. A row stuck on 'Checking' is a spinner nobody can clear.
+      expect(db.recordIdentityCheck).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'Failed' }),
       )
     })
 

@@ -1,0 +1,365 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { EMPLOYEE_STATUS_FILTERS, type EmployeeListQuery } from '@asps-dms/shared'
+
+/**
+ * Who this system counts, and whether every reader agrees.
+ *
+ * Two things are held together here.
+ *
+ * THE SCOPE - nobody who has left, nothing on an archived record - which every
+ * count, list, report and email has to apply, and which has one definition in
+ * employeeScope.ts. The last block below runs each reader and insists on it.
+ *
+ * And THE TILES against the lists they open, counted the same way.
+ *
+ * Every tile is now a link, which turns a cosmetic difference into a visible
+ * bug: a tile that says 5 opening a list of 4 reads as the list having lost
+ * somebody. The two numbers come from different queries in different files, so
+ * the only way to hold them together is to compare the SQL - which is what this
+ * does. It captures the statement each side builds and asserts that the
+ * predicates are the same text.
+ *
+ * Whitespace is squashed before comparing: the dashboard writes its predicates
+ * across several lines and the lists write them on one, and that is not a
+ * difference anybody cares about.
+ */
+
+const captured = vi.hoisted(() => ({ statements: [] as string[], inputs: new Map<string, unknown>() }))
+
+vi.mock('../../src/database/pool.js', async () => {
+  const mssql = await import('mssql')
+  const request = {
+    input(name: string, _type: unknown, value: unknown) {
+      captured.inputs.set(name, value)
+      return request
+    },
+    query(text: string) {
+      captured.statements.push(text)
+      return Promise.resolve({ recordset: [] })
+    },
+  }
+  return {
+    createRequest: () => Promise.resolve(request),
+    getPool: () => Promise.resolve({ request: () => request }),
+    sql: mssql.default ?? mssql,
+  }
+})
+
+const dashboard = await import('../../src/repositories/dashboard.repository.js')
+const employees = await import('../../src/repositories/employee.repository.js')
+const documents = await import('../../src/repositories/employeeDocument.repository.js')
+const reports = await import('../../src/repositories/report.repository.js')
+const reminders = await import('../../src/repositories/reminder.repository.js')
+const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE } = await import(
+  '../../src/repositories/employeeScope.js'
+)
+
+const squash = (sql: string): string => sql.replace(/\s+/g, ' ').trim()
+
+/** The last statement built, with its whitespace flattened. */
+function lastSql(): string {
+  const statement = captured.statements[captured.statements.length - 1]
+  if (statement === undefined) throw new Error('no statement was built')
+  return squash(statement)
+}
+
+/**
+ * The dashboard's one query.
+ *
+ * It is allowed to fail on the way out - the fake returns no rows and the
+ * repository quite rightly objects to that. What is under test is the statement
+ * it built on the way in.
+ */
+async function dashboardSql(): Promise<string> {
+  await dashboard.getSummary(7).catch(() => undefined)
+  return lastSql()
+}
+
+const listQuery = (overrides: Partial<EmployeeListQuery> = {}): EmployeeListQuery => ({
+  page: 1,
+  pageSize: 25,
+  sortBy: 'employeeName',
+  sortDir: 'asc',
+  status: EMPLOYEE_STATUS_FILTERS.ACTIVE,
+  includeArchived: false,
+  archivedOnly: false,
+  missingIdCard: false,
+  withoutSignature: false,
+  leftThisYear: false,
+  ...overrides,
+})
+
+async function employeeListSql(overrides: Partial<EmployeeListQuery> = {}): Promise<string> {
+  await employees.list(listQuery(overrides)).catch(() => undefined)
+  return lastSql()
+}
+
+/**
+ * Just the WHERE clause of a list query.
+ *
+ * The SELECT names every column on the table, so asserting that a query does
+ * NOT mention e.LastWorkingDate has to look at what it FILTERS on rather than
+ * at what it reads.
+ */
+function whereOf(sql: string): string {
+  const from = sql.indexOf(' WHERE ')
+  if (from === -1) return ''
+  const to = sql.indexOf(' ORDER BY ', from)
+  return to === -1 ? sql.slice(from) : sql.slice(from, to)
+}
+
+async function documentListSql(
+  state: 'all' | 'received' | 'pending' | 'overdue' | 'dueSoon',
+): Promise<string> {
+  await documents
+    .listAll({ page: 1, pageSize: 25, sortBy: 'dueDate', sortDir: 'asc', state })
+    .catch(() => undefined)
+  return lastSql()
+}
+
+beforeEach(() => {
+  captured.statements = []
+  captured.inputs.clear()
+})
+
+describe('the document tiles and the documents list', () => {
+  /**
+   * Each tile's predicate, exactly as dashboard.repository.ts writes it.
+   *
+   * These strings are the contract. If somebody changes how a tile counts and
+   * not how its list selects, this is what notices.
+   */
+  const PREDICATES = {
+    received: 'd.OriginalFilePath IS NOT NULL',
+    pending: 'd.OriginalFilePath IS NULL',
+    overdue: 'd.OriginalFilePath IS NULL AND d.DueDate IS NOT NULL AND d.DueDate < @today',
+    dueSoon:
+      'd.OriginalFilePath IS NULL AND d.DueDate IS NOT NULL AND d.DueDate >= @today' +
+      ' AND d.DueDate <= DATEADD(DAY, @dueSoonDays, @today)',
+  } as const
+
+  it('counts each state with the predicate the dashboard counts it with', async () => {
+    const summary = await dashboardSql()
+
+    for (const [state, predicate] of Object.entries(PREDICATES)) {
+      expect(summary, `dashboard tile: ${state}`).toContain(predicate)
+      expect(await documentListSql(state as keyof typeof PREDICATES), `list: ${state}`).toContain(
+        predicate,
+      )
+    }
+  })
+
+  it('leaves out the people the dashboard leaves out', async () => {
+    // Somebody who has left cannot bring a document in, so their outstanding
+    // paperwork is not counted on the dashboard - and must not appear in the
+    // list either, or the list would be longer than the tile.
+    const list = await documentListSql('pending')
+
+    expect(list).toContain('e.IsActive = 1')
+    expect(list).toContain('(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today)')
+    expect(list).toContain('d.IsActive = 1')
+  })
+
+  it('counts rows rather than people, which is why the tiles open this list', async () => {
+    // One row per employee per document type: 'Still to come 57' is 57 of
+    // these, not 57 employees.
+    const list = await documentListSql('all')
+
+    expect(list).toContain('FROM dbo.EmployeeDocuments AS d')
+    expect(list).toContain('INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId')
+    // And it names the document, so a printed or read line says which one.
+    expect(list).toContain('dt.DocumentName')
+  })
+})
+
+describe('the employee tiles and the employee list', () => {
+  /**
+   * Total = Active + Left, proved on the predicates rather than on a fixture.
+   *
+   * The three subqueries partition the same set: Total is IsActive = 1, and the
+   * other two are that same condition split by whether the last working day has
+   * passed. Nothing can be in both and nothing can be in neither, so the
+   * arithmetic on the screen holds whatever is in the table.
+   */
+  it('counts Total as exactly Active plus Left, with the archived left out', async () => {
+    const summary = await dashboardSql()
+
+    expect(summary).toContain('FROM dbo.Employees WHERE IsActive = 1) AS ActiveAndLeft')
+
+    // The two halves: both inside IsActive = 1, split on the same condition.
+    expect(summary).toContain(`${COUNTABLE_EMPLOYEE}) AS Total`)
+    expect(summary).toContain(
+      'WHERE IsActive = 1 AND LastWorkingDate IS NOT NULL AND LastWorkingDate < @today) AS [Left]',
+    )
+
+    // Archived records are in none of the three - they are struck-out entries,
+    // not people who worked here.
+    expect(summary).toContain('FROM dbo.Employees WHERE IsActive = 0) AS Archived')
+  })
+
+  it('opens Total on the same employees it counted', async () => {
+    const where = whereOf(await employeeListSql({ status: EMPLOYEE_STATUS_FILTERS.ALL }))
+
+    // 'all' adds no condition of its own, so the filter is IsActive = 1 - the
+    // tile's own predicate, and nothing else. Anything more would make the list
+    // shorter than the number that opened it.
+    expect(where).toContain('e.IsActive = 1')
+    expect(where).not.toContain('e.LastWorkingDate')
+    expect(where).not.toContain('e.ResignationDate')
+  })
+
+  it('opens Active on the same employees the tile counted', async () => {
+    const summary = await dashboardSql()
+    const list = await employeeListSql()
+
+    // The dashboard says 'has not left yet' one way round and the list says it
+    // the other; they are the same condition by De Morgan, and both are here so
+    // that changing one without the other is visible.
+    expect(summary).toContain(COUNTABLE_EMPLOYEE)
+    expect(list).toContain('e.IsActive = 1')
+    expect(list).toContain('NOT (e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today)')
+  })
+
+  it('opens Left this year on the year the dashboard counted', async () => {
+    const summary = await dashboardSql()
+    const list = await employeeListSql({
+      status: EMPLOYEE_STATUS_FILTERS.LEFT,
+      leftThisYear: true,
+    })
+
+    expect(summary).toContain('YEAR(LastWorkingDate) = YEAR(@today)')
+    expect(list).toContain(
+      'e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today AND YEAR(e.LastWorkingDate) = YEAR(@today)',
+    )
+    // Archived records are out of the count, so they are out of the list too.
+    expect(list).toContain('e.IsActive = 1')
+  })
+
+  it('opens Archived on the archived records only', async () => {
+    const summary = await dashboardSql()
+    const list = await employeeListSql({
+      archivedOnly: true,
+      status: EMPLOYEE_STATUS_FILTERS.ALL,
+    })
+
+    expect(summary).toContain('FROM dbo.Employees WHERE IsActive = 0')
+    expect(list).toContain('e.IsActive = 0')
+    expect(list).not.toContain('e.IsActive = 1')
+  })
+
+  it('opens Missing an ID card on the employees the tile counted', async () => {
+    const summary = await dashboardSql()
+    const list = await employeeListSql({ missingIdCard: true })
+
+    // The two cards BY CODE, on both sides. It was the mandatory flag, which
+    // picked them out only while they were the only mandatory documents -
+    // eight of the ten are mandatory now.
+    expect(summary).toContain("dt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
+    expect(squash(list)).toContain("idt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
+    expect(squash(list)).toContain('idc.OriginalFilePath IS NULL')
+    expect(list).toContain('EXISTS')
+  })
+
+  it('opens Pending employee signature on the employees who have never signed', async () => {
+    const summary = await dashboardSql()
+    const list = await employeeListSql({ withoutSignature: true })
+
+    expect(summary).toContain('NOT EXISTS (SELECT 1 FROM dbo.EmployeeSignatures')
+    expect(squash(list)).toContain('NOT EXISTS ( SELECT 1 FROM dbo.EmployeeSignatures AS sig')
+    // An enrolled signature that was later replaced leaves an inactive row
+    // behind; both sides count only the live one.
+    expect(squash(list)).toContain('sig.IsActive = 1')
+  })
+
+  it('splits by gender the way the dashboard splits it', async () => {
+    const summary = await dashboardSql()
+
+    expect(summary).toContain("Gender = 'Male'")
+    expect(summary).toContain('Gender IS NULL')
+
+    // A recorded gender is bound, never written into the statement.
+    const male = await employeeListSql({ gender: 'Male' })
+    expect(male).toContain('e.Gender = @gender')
+    expect(captured.inputs.get('gender')).toBe('Male')
+
+    // 'Not recorded' is the absence of one, so there is nothing to bind.
+    const missing = await employeeListSql({ gender: 'notRecorded' })
+    expect(missing).toContain('e.Gender IS NULL')
+  })
+})
+
+describe('one definition of who is countable', () => {
+  /**
+   * Every count, list, report and email, asked the same question.
+   *
+   * The rule - nobody who has left, nothing on an archived record - held only
+   * because a dozen queries each remembered to write it out. This is what makes
+   * the next screen inherit it: whatever a reader is for, its SQL has to carry
+   * the shared fragment. A new query that forgets fails here rather than in the
+   * office, six weeks later, when somebody asks why a man who left in March is
+   * on the chase list.
+   */
+  const readers: [string, () => Promise<unknown>, string][] = [
+    ['the dashboard', () => dashboard.getSummary(7), COUNTABLE_EMPLOYEE],
+    [
+      'the documents list',
+      () =>
+        documents.listAll({ page: 1, pageSize: 25, sortBy: 'dueDate', sortDir: 'asc', state: 'all' }),
+      COUNTABLE_DOCUMENT,
+    ],
+    ['the by-document report', () => reports.byDocumentType(), COUNTABLE_DOCUMENT],
+    [
+      'the outstanding report',
+      () => reports.outstanding({ onlyOverdue: false, onlyMandatory: false }),
+      COUNTABLE_DOCUMENT,
+    ],
+    [
+      'the employees behind one document',
+      () =>
+        reports.employeesForDocumentType({
+          documentTypeId: 1,
+          outstandingOnly: true,
+          onlyOverdue: false,
+          sortBy: 'daysOverdue',
+          sortDir: 'asc',
+          page: 1,
+          pageSize: 25,
+        }),
+      COUNTABLE_DOCUMENT,
+    ],
+    [
+      'the printed chase list',
+      () =>
+        reports.allEmployeesForDocumentType({
+          documentTypeId: 1,
+          outstandingOnly: true,
+          onlyOverdue: false,
+          sortBy: 'daysOverdue',
+          sortDir: 'asc',
+        }),
+      COUNTABLE_DOCUMENT,
+    ],
+    ["the daily digest's spreadsheet", () => reminders.findPendingDocuments(), COUNTABLE_DOCUMENT],
+  ]
+
+  for (const [name, run, fragment] of readers) {
+    it(`${name} counts only employees who are here`, async () => {
+      await run().catch(() => undefined)
+
+      expect(lastSql(), name).toContain(squash(fragment))
+      // The fragment reads @today, so whoever uses it must bind it. The digest
+      // did not, and asked the driver for a variable it had never declared.
+      expect(captured.inputs.has('today'), `${name} binds @today`).toBe(true)
+    })
+  }
+
+  it('leaves the employee list the filters somebody chose for themselves', async () => {
+    // The list is the one screen where somebody may deliberately ask for
+    // leavers or archived records - that is what the filters are for - so it
+    // composes the same two halves rather than taking the fragment whole.
+    const list = await employeeListSql()
+
+    expect(list).toContain('e.IsActive = 1')
+    expect(list).toContain('NOT (e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today)')
+  })
+})

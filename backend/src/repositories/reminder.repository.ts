@@ -1,4 +1,5 @@
 import { getPool } from '../database/pool.js'
+import { COUNTABLE_DOCUMENT, bindToday } from './employeeScope.js'
 
 /**
  * The documents a reminder is about: those with no file uploaded.
@@ -33,15 +34,21 @@ interface Row {
 
 export async function findPendingDocuments(): Promise<PendingDocumentRow[]> {
   const pool = await getPool()
-  const result = await pool.request().query<Row>(`
+  /* The scope predicate reads @today, so the value travels with it. Binding it
+     here rather than at each call site is the point of bindToday: this query
+     asked for @today without ever declaring it, which the driver refuses. */
+  const result = await bindToday(pool.request()).query<Row>(`
     SELECT  e.EmployeeId, e.EmployeeCode, e.EmployeeName,
             dt.DocumentName, dt.IsMandatory, d.DueDate
     FROM    dbo.EmployeeDocuments AS d
     INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
     INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
     WHERE   d.OriginalFilePath IS NULL
-      AND   d.IsActive = 1
-      AND   e.IsActive = 1
+      /* Nobody chases a leaver for a form, and nothing is chased on an
+         archived record. Their documents stop being outstanding the day they
+         go, and an email that keeps arriving about them is the digest training
+         people to ignore it. */
+      AND   ${COUNTABLE_DOCUMENT}
       AND   dt.IsActive = 1
     ORDER BY e.EmployeeCode, dt.SortOrder
   `)

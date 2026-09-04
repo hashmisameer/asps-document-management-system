@@ -86,6 +86,8 @@ function documentType(overrides: Partial<DocumentType> = {}): DocumentType {
     sortOrder: 10,
     requiredFields: [],
     recognitionKeywords: [],
+    refuseOnCheckFailure: false,
+    requiredAtCreation: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -101,6 +103,8 @@ function profile(overrides: Partial<EmployeeProfile> = {}): EmployeeProfile {
     department: 'Accounts',
     designation: null,
     phoneNumber: null,
+    address: null,
+    email: null,
     dateOfBirth: null,
     gender: null,
     postAppliedFor: null,
@@ -112,6 +116,13 @@ function profile(overrides: Partial<EmployeeProfile> = {}): EmployeeProfile {
     appointmentLetterDate: null,
     hasPhoto: false,
     photoUpdatedAt: null,
+    // Nobody in these fixtures has left; the exit feature adds these and every
+    // employee already on file defaults to still being here.
+    employmentStatus: 'ACTIVE' as const,
+    resignationDate: null,
+    lastWorkingDate: null,
+    exitReason: null,
+    exitNotes: null,
     isActive: true,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
@@ -127,6 +138,9 @@ function checklistRecord(overrides: Partial<EmployeeDocumentRecord> = {}): Emplo
     documentId: 5,
     employeeId: 42,
     employeeCode: 'EMP001',
+    // Still here, so their deadlines are still running.
+    employeeHasLeft: false,
+    deadlineUnit: null,
     employeeName: 'Ravi Kumar',
     documentTypeId: 1,
     documentName: 'PAN Card',
@@ -164,12 +178,17 @@ beforeEach(() => {
 
 describe('create', () => {
   const input = {
-    employeeCode: 'EMP001',
-    employeeName: 'Ravi Kumar',
-    joiningDate: '2026-09-01',
-    department: 'Accounts',
-    designation: null,
-  }
+        employeeCode: 'EMP001',
+        employeeName: 'Ravi Kumar',
+        joiningDate: '2026-09-01',
+        department: 'Accounts',
+        designation: 'Officer',
+        address: 'C-145, Sector 63, Noida',
+    email: null,
+        phoneNumber: '9876543210',
+        dateOfBirth: '1990-08-15',
+        gender: 'Male' as const,
+      }
 
   it('materialises the checklist with due dates from the shared deadline rules', async () => {
     db.listActiveTypes.mockResolvedValue([

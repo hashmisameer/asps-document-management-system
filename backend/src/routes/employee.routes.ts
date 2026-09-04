@@ -25,6 +25,24 @@ employeeRouter.get(
   employeeController.facets,
 )
 
+/**
+ * The printed forms.
+ *
+ * '/print' is declared beside '/facets', before the parameterised routes, for
+ * the reason given above: a literal path under a router that also matches
+ * '/:employeeId' has to come first.
+ *
+ * A POST, and a list of ids in the body rather than in the query string: a
+ * hundred ids makes a URL long enough for something in front of the server to
+ * truncate, and a truncated selection prints the wrong people rather than
+ * failing. Both routes take EMPLOYEE_READ, so a Viewer can print.
+ */
+employeeRouter.post(
+  '/print',
+  requirePermission(PERMISSIONS.EMPLOYEE_READ),
+  employeeController.printForms,
+)
+
 employeeRouter.post('/', requirePermission(PERMISSIONS.EMPLOYEE_CREATE), employeeController.create)
 
 employeeRouter.get(
@@ -49,6 +67,30 @@ employeeRouter.post(
   employeeController.archive,
 )
 
+/**
+ * Recording that an employee has left, and undoing it.
+ *
+ * A sub-resource of its own, and NOT part of archive: leaving the company and
+ * the office being finished with the record are different things, and someone
+ * who has left is normally not archived at all - their provident fund and
+ * gratuity papers have to be produced for years afterwards.
+ *
+ * DELETE removes the EXIT, never the employee. The dates come off and the
+ * status goes back to ACTIVE; both the exit and the undo stay in the audit
+ * trail, which is the only place either is permanent.
+ */
+employeeRouter.post(
+  '/:employeeId/exit',
+  requirePermission(PERMISSIONS.EMPLOYEE_EXIT),
+  employeeController.markLeft,
+)
+
+employeeRouter.delete(
+  '/:employeeId/exit',
+  requirePermission(PERMISSIONS.EMPLOYEE_EXIT),
+  employeeController.undoExit,
+)
+
 employeeRouter.post(
   '/:employeeId/restore',
   requirePermission(PERMISSIONS.EMPLOYEE_ARCHIVE),
@@ -59,6 +101,12 @@ employeeRouter.get(
   '/:employeeId/documents',
   requirePermission(PERMISSIONS.DOCUMENT_READ),
   employeeController.listDocuments,
+)
+
+employeeRouter.get(
+  '/:employeeId/print',
+  requirePermission(PERMISSIONS.EMPLOYEE_READ),
+  employeeController.printForm,
 )
 
 /* The signature belongs to the employee, not to any one document: it is

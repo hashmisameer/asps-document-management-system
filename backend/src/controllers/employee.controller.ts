@@ -1,9 +1,11 @@
-import type { Request, RequestHandler } from 'express'
+import type { Request, RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import {
   createEmployeeSchema,
   employeeListQuerySchema,
   idParamSchema,
+  markEmployeeLeftSchema,
+  printEmployeeFormsSchema,
   updateEmployeeSchema,
   type AuthUser,
 } from '@asps-dms/shared'
@@ -87,6 +89,35 @@ export const restore: RequestHandler = async (req, res) => {
   res.json({ employee })
 }
 
+/**
+ * Records that an employee has left.
+ *
+ * A PUT rather than a POST: sending it twice with the same dates leaves the same
+ * record, and correcting a date is the same call again with the right one.
+ */
+export const markLeft: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  const input = parseBody(req, markEmployeeLeftSchema)
+  const employee = await employeeService.markLeft(
+    employeeId,
+    input,
+    actorOf(req),
+    requestContext(req),
+  )
+  res.json({ employee })
+}
+
+/** Undoes an exit recorded by mistake. The audit trail keeps both halves. */
+export const undoExit: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  const employee = await employeeService.undoExit(
+    employeeId,
+    actorOf(req),
+    requestContext(req),
+  )
+  res.json({ employee })
+}
+
 export const listDocuments: RequestHandler = async (req, res) => {
   const { employeeId } = parseParams(req, employeeParamsSchema)
   res.json({ documents: await employeeService.listDocuments(employeeId) })
@@ -125,4 +156,41 @@ export const downloadPhoto: RequestHandler = async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store')
   res.setHeader('X-Content-Type-Options', 'nosniff')
   stream.pipe(res)
+}
+
+/**
+ * Sends a generated PDF as a download.
+ *
+ * `no-store`, like every other personal file this API serves: a form carrying
+ * somebody's date of birth and address must not sit in a shared cache. The name
+ * is built server-side and is already reduced to plain ASCII, so it needs no
+ * RFC 5987 encoding to survive the header.
+ */
+function sendPdf(res: Response, fileName: string, pdf: Buffer): void {
+  res.setHeader('Content-Type', 'application/pdf')
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+  res.setHeader('Content-Length', String(pdf.length))
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.end(pdf)
+}
+
+/**
+ * One employee's form.
+ *
+ * EMPLOYEE_READ rather than a permission of its own: the sheet says nothing the
+ * employee's own screen does not already show this reader, and a Viewer walking
+ * to the printer with a checklist is exactly the case this was asked for.
+ */
+export const printForm: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  const { fileName, pdf } = await employeeService.printForms([employeeId], actorOf(req))
+  sendPdf(res, fileName, pdf)
+}
+
+/** Several employees' forms, in one PDF, each starting on its own page. */
+export const printForms: RequestHandler = async (req, res) => {
+  const { employeeIds } = parseBody(req, printEmployeeFormsSchema)
+  const { fileName, pdf } = await employeeService.printForms(employeeIds, actorOf(req))
+  sendPdf(res, fileName, pdf)
 }
