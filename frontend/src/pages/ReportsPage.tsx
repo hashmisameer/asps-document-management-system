@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { EXIT_REASON_LABEL } from '@asps-dms/shared'
 import { Alert } from '../components/ui/Alert.js'
 import { Badge } from '../components/ui/Badge.js'
 import { Button } from '../components/ui/Button.js'
@@ -11,9 +12,11 @@ import { formatDate } from '../lib/format.js'
 import { fetchFacets, employeeKeys } from '../features/employees/api.js'
 import {
   fetchByDocumentType,
+  fetchExits,
   fetchOutstanding,
   reportKeys,
   type DocumentTypeReportRow,
+  type ExitReportRow,
   type OutstandingReportRow,
 } from '../features/reports/api.js'
 
@@ -75,6 +78,26 @@ export function ReportsPage() {
     queryKey: reportKeys.outstanding(filters),
     queryFn: () => fetchOutstanding(filters),
   })
+
+  const exits = useQuery({ queryKey: reportKeys.exits, queryFn: fetchExits })
+
+  const exportExits = (rows: ExitReportRow[]) => {
+    downloadCsv(
+      `asps-dms-exits-${today()}.csv`,
+      toCsv(rows, [
+        { header: 'Employee ID', value: (r) => r.employeeCode },
+        { header: 'Name', value: (r) => r.employeeName },
+        { header: 'Department', value: (r) => r.department ?? '' },
+        { header: 'Designation', value: (r) => r.designation ?? '' },
+        { header: 'Joined', value: (r) => formatDate(r.joiningDate) },
+        { header: 'Resigned', value: (r) => formatDate(r.resignationDate) },
+        { header: 'Last working day', value: (r) => formatDate(r.lastWorkingDate) },
+        { header: 'Reason', value: (r) => EXIT_REASON_LABEL[r.exitReason] },
+        { header: 'Days worked', value: (r) => r.daysWorked },
+        { header: 'Status', value: (r) => (r.hasGone ? 'Left' : 'On notice') },
+      ]),
+    )
+  }
 
   const exportByType = (rows: DocumentTypeReportRow[]) => {
     downloadCsv(
@@ -159,7 +182,14 @@ export function ReportsPage() {
               {byType.data?.map((row) => (
                 <tr key={row.documentTypeId}>
                   <td className="px-4 py-2">
-                    <span className="font-medium text-slate-900">{row.documentName}</span>
+                    {/* Opens the employees behind this row. The count beside it
+                        is what that list must come back with. */}
+                    <Link
+                      to={`/reports/by-document-type/${row.documentTypeId}`}
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      {row.documentName}
+                    </Link>
                     {row.isMandatory ? (
                       <span className="ml-2 align-middle">
                         <Badge tone="pending">Mandatory</Badge>
@@ -313,6 +343,94 @@ export function ReportsPage() {
                   <td className="max-w-md px-4 py-2 text-xs text-slate-600">{row.documents}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Who has left. Read from the employee records rather than derived from
+          documents, so it goes on working long after a leaver's checklist has
+          stopped being anybody's concern. */}
+      <section className="mt-8">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">Exits</h2>
+          {exits.data && exits.data.exits.length > 0 ? (
+            <Button variant="secondary" onClick={() => exportExits(exits.data.exits)}>
+              Export CSV
+            </Button>
+          ) : null}
+        </div>
+
+        {exits.error ? (
+          <div className="mt-2">
+            <Alert title="Could not load exits">{failure(exits.error)}</Alert>
+          </div>
+        ) : null}
+
+        {exits.data && exits.data.byDepartment.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {exits.data.byDepartment.map((row) => (
+              <span
+                key={row.department ?? 'none'}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
+              >
+                {row.department ?? 'No department'}
+                <span className="ml-2 font-semibold text-slate-900">{row.exits}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="mt-3 overflow-x-auto rounded-card border border-slate-200 bg-white shadow-sm">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-slate-200 text-xs tracking-wide text-slate-500 uppercase">
+              <tr>
+                <th scope="col" className="px-4 py-2 font-medium">Employee</th>
+                <th scope="col" className="px-4 py-2 font-medium">Department</th>
+                <th scope="col" className="px-4 py-2 font-medium">Joined</th>
+                <th scope="col" className="px-4 py-2 font-medium">Last working day</th>
+                <th scope="col" className="px-4 py-2 font-medium">Reason</th>
+                <th scope="col" className="px-4 py-2 text-right font-medium">Days worked</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {exits.data?.exits.map((row) => (
+                <tr key={row.employeeId}>
+                  <td className="px-4 py-2">
+                    <Link
+                      to={`/employees/${row.employeeId}`}
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      {row.employeeName}
+                    </Link>
+                    <span className="ml-2 font-mono text-xs text-slate-500">
+                      {row.employeeCode}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-slate-700">{row.department ?? '-'}</td>
+                  <td className="px-4 py-2 text-slate-700">{formatDate(row.joiningDate)}</td>
+                  <td className="px-4 py-2 text-slate-700">
+                    {formatDate(row.lastWorkingDate)}
+                    {row.hasGone ? null : (
+                      <span className="ml-2 text-xs text-amber-700">on notice</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-slate-700">
+                    {EXIT_REASON_LABEL[row.exitReason]}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                    {row.daysWorked}
+                  </td>
+                </tr>
+              ))}
+
+              {exits.data && exits.data.exits.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                    Nobody has left yet.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
