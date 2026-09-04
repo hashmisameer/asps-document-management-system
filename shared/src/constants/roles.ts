@@ -25,6 +25,10 @@ export const PERMISSIONS = {
   EMPLOYEE_CREATE: 'employee:create',
   EMPLOYEE_UPDATE: 'employee:update',
   EMPLOYEE_ARCHIVE: 'employee:archive',
+  /* Recording that somebody has left, and undoing it. Separate from archiving:
+     one says they stopped working here, the other says the office has finished
+     with the record. */
+  EMPLOYEE_EXIT: 'employee:exit',
 
   DOCUMENT_READ: 'document:read',
   DOCUMENT_PREVIEW: 'document:preview',
@@ -46,9 +50,6 @@ export const PERMISSIONS = {
   DOCUMENT_TYPE_READ: 'documentType:read',
   DOCUMENT_TYPE_MANAGE: 'documentType:manage',
 
-  /** Sending the pending-documents digest by email, now rather than on schedule. */
-  REMINDER_SEND: 'reminder:send',
-
   REPORT_READ: 'report:read',
   AUDIT_READ: 'audit:read',
   USER_MANAGE: 'user:manage',
@@ -62,6 +63,7 @@ const HR_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.EMPLOYEE_CREATE,
   PERMISSIONS.EMPLOYEE_UPDATE,
   PERMISSIONS.EMPLOYEE_ARCHIVE,
+  PERMISSIONS.EMPLOYEE_EXIT,
   PERMISSIONS.DOCUMENT_READ,
   PERMISSIONS.DOCUMENT_PREVIEW,
   PERMISSIONS.DOCUMENT_DOWNLOAD,
@@ -78,7 +80,6 @@ const HR_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.SIGNATURE_SKIP,
   PERMISSIONS.DOCUMENT_TYPE_READ,
   PERMISSIONS.DOCUMENT_TYPE_MANAGE,
-  PERMISSIONS.REMINDER_SEND,
   PERMISSIONS.REPORT_READ,
   PERMISSIONS.AUDIT_READ,
   PERMISSIONS.SETTINGS_MANAGE,

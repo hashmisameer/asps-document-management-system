@@ -10,7 +10,7 @@ import * as audit from './audit.service.js'
 /**
  * Sending the pending-documents digest.
  *
- * One email to every address in REMINDER_RECIPIENTS, listing the employees who
+ * One email to every address in REPORT_RECIPIENTS, listing the employees who
  * still owe documents and naming those documents. It repeats on every run until
  * the file is uploaded, because the digest is built from the current state each
  * time - nothing records that a reminder was sent, so nothing can fall out of
@@ -75,10 +75,10 @@ export async function sendPendingDocumentReminders(
   } = {},
 ): Promise<ReminderResult> {
   const dryRun = options.dryRun ?? false
-  const recipients = env.REMINDER_RECIPIENTS
+  const recipients = env.REPORT_RECIPIENTS
 
   const rows = await reminderRepository.findPendingDocuments()
-  const digest = buildDigest(rows, { includeNotYetDue: env.REMINDER_INCLUDE_NOT_YET_DUE })
+  const digest = buildDigest(rows, { includeNotYetDue: env.REPORT_INCLUDE_NOT_YET_DUE })
 
   if (!digest) {
     logger.info({ pendingRows: rows.length }, 'No pending documents; no reminder sent')
@@ -89,18 +89,14 @@ export async function sendPendingDocumentReminders(
     return { sent: false, digest, recipients, dryRun: true }
   }
 
-  // A dry run works whatever this says - seeing what would go out is how the
-  // wording gets checked before anyone is on the receiving end of it. Actually
-  // sending is off until somebody turns it on, so a freshly deployed server
-  // cannot start emailing the office by itself.
-  if (!env.REMINDER_ENABLED) {
-    throw new ConflictError(
-      'Reminder emails are switched off. Set REMINDER_ENABLED=true to send them.',
-    )
-  }
-
+  // A dry run works whatever is configured - seeing what would go out is how
+  // the wording gets checked before anybody is on the receiving end of it.
+  // Sending needs somewhere to send to, which a freshly deployed server does
+  // not have, so it cannot start emailing the office by itself.
   if (recipients.length === 0) {
-    throw new ConflictError('No reminder recipients are configured, so there is nobody to email.')
+    throw new ConflictError(
+      'No addresses are configured in REPORT_RECIPIENTS, so there is nobody to email.',
+    )
   }
 
   await getTransport().sendMail({

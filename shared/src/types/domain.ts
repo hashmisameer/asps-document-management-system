@@ -2,6 +2,7 @@ import type { Role } from '../constants/roles.js'
 import type { DocumentStatus, Gender, SignatureStatus, SignerRole } from '../constants/documents.js'
 import type { DeadlineState, DeadlineUnit } from '../constants/deadlines.js'
 import type { DocumentField, FieldCheckResult, TextSource } from '../constants/documentFields.js'
+import type { EmploymentStatus, ExitReason } from '../constants/employment.js'
 
 /**
  * API-facing domain shapes.
@@ -57,6 +58,8 @@ export interface Employee {
    * in a list response, never logged, and never written to audit metadata.
    */
   phoneNumber: string | null
+  email: string | null
+  address: string | null
   dateOfBirth: string | null
   gender: Gender | null
   postAppliedFor: string | null
@@ -71,6 +74,23 @@ export interface Employee {
       authenticated route, never embedded in this payload. */
   hasPhoto: boolean
   photoUpdatedAt: string | null
+
+  /**
+   * Whether they still work here, and the exit if they do not.
+   *
+   * Separate from `isActive`, which is the archive flag. Somebody who has left
+   * is normally NOT archived: their provident fund and gratuity records have to
+   * be produced for years afterwards, so the record stays in plain view.
+   *
+   * The status turns to LEFT only once the last working date has passed. Between
+   * resigning and that date they are still employed - still paid, still on the
+   * checklist - which is why the two dates are recorded separately.
+   */
+  employmentStatus: EmploymentStatus
+  resignationDate: string | null
+  lastWorkingDate: string | null
+  exitReason: ExitReason | null
+  exitNotes: string | null
 
   isActive: boolean
   createdAt: string
@@ -126,6 +146,25 @@ export interface DocumentType {
    * the type is not recognised, which is not the same as recognised and wrong.
    */
   recognitionKeywords: string[]
+  /**
+   * A document of this type is NOT kept when the check refuses it.
+   *
+   * The reading happens after the file is stored, so 'do not upload it' has to
+   * mean 'take it back off again'. Set for the two identity cards, where a name
+   * that does not match means the wrong person's card; everywhere else a failed
+   * check stays on the record for somebody to look at.
+   */
+  refuseOnCheckFailure: boolean
+  /**
+   * Needed in hand BEFORE the employee record can be created.
+   *
+   * Not the same as `isMandatory`, which says the document must be collected -
+   * chased, counted, allowed to go overdue. This says the record cannot exist
+   * without it. The two were one flag, so the Aadhaar and PAN cards being
+   * mandatory also meant nobody could be entered without them, which was never
+   * the office's rule.
+   */
+  requiredAtCreation: boolean
   createdAt: string
   updatedAt: string
 }
@@ -143,8 +182,16 @@ export interface FieldCheck {
 }
 
 export interface IdentityCheck {
-  /** False when any required field was not confirmed - which refuses the upload. */
+  /** False when the document could not be tied to this employee - refuses the upload. */
   passed: boolean
+  /**
+   * At least one IDENTIFYING field - name, code, Aadhaar or PAN - was found.
+   *
+   * This is what actually decides an upload. A field that merely describes the
+   * employment can be missing from a document that is unambiguously the right
+   * person's, and reporting it is useful where refusing over it is not.
+   */
+  identityConfirmed: boolean
   source: TextSource
   checks: FieldCheck[]
   /** True when the document yielded no readable text at all. */
@@ -160,12 +207,27 @@ export interface IdentityCheck {
 }
 
 export interface DocumentIdentityCheck {
-  status: 'Passed' | 'Overridden' | 'NotChecked'
+  /**
+   * Where the reading has got to.
+   *
+   * 'Checking' means the file is safely stored and is being read now. Reading
+   * takes between four and sixty seconds, and it used to happen inside the
+   * upload request - whoever pressed Upload waited for the whole of it. The file
+   * is stored first now, so the answer arrives afterwards and the row changes
+   * under them.
+   *
+   * 'Failed' means the reading finished and the document did not match. It is a
+   * question for a person, not a refusal: the document is already on file, and
+   * whoever is holding it accepts it with a reason or replaces it.
+   */
+  status: 'Passed' | 'Overridden' | 'NotChecked' | 'Checking' | 'Failed'
   source: TextSource | null
   checks: FieldCheck[]
   checkedAt: string | null
   overriddenByName: string | null
   overrideReason: string | null
+  /** Why it failed, in a sentence, ready to show. Only set when status is 'Failed'. */
+  failureReason: string | null
 }
 
 export interface EmployeeDocument {
@@ -188,6 +250,19 @@ export interface EmployeeDocument {
   signatureStatus: SignatureStatus
 
   dueDate: string | null
+  /**
+   * How the deadline was set - which is how it is counted back on screen.
+   *
+   * The confirmation letter is six MONTHS after joining and is read in months;
+   * everything else is read in days. Carried on the row so the browser can say
+   * either without a second request for the document type.
+   *
+   * Display only. It follows the type's CURRENT setting while the due date on
+   * this row is the one that was written when the employee was created, so
+   * changing a deadline in Settings changes how an existing row is phrased and
+   * never when it falls due.
+   */
+  deadlineUnit: DeadlineUnit | null
   deadlineState: DeadlineState
   /** Positive = days remaining. Negative = days overdue. Null = no deadline. */
   daysRemaining: number | null

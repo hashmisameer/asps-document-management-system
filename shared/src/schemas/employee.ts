@@ -1,8 +1,13 @@
 import { z } from 'zod'
 import { GENDERS } from '../constants/documents.js'
 import {
+  ALL_EXIT_REASONS,
+  EMPLOYEE_STATUS_FILTERS,
+} from '../constants/employment.js'
+import {
   booleanQueryParam,
   dateOnlySchema,
+  idParamSchema,
   optionalShortText,
   paginationQuerySchema,
 } from './common.js'
@@ -36,6 +41,25 @@ const digitsOnly = (length: number, label: string) =>
  * so an incomplete employee record never looks like a bad scan.
  */
 export const employeeIdentitySchema = z.object({
+  /**
+   * Where the employee lives, as written on their forms.
+   *
+   * Free text and generous in length: an address on these forms runs to a
+   * village, a district and a state, and refusing the way somebody writes their
+   * own address teaches them to fight the form.
+   */
+  address: optionalShortText(500),
+  /** Optional everywhere: most workmen here are reached by telephone. */
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .refine((value) => value.length === 0 || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value), {
+      message: 'Enter a valid email address',
+    })
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional(),
   phoneNumber: z
     .string()
     .trim()
@@ -117,6 +141,19 @@ export const createEmployeeSchema = employeeIdentitySchema.extend({
     .min(1, 'Employee name is required')
     .max(150, 'Employee name must be 150 characters or fewer'),
   joiningDate: dateOnlySchema,
+  /**
+   * OPTIONAL, restored on 2026-09-03.
+   *
+   * They were briefly required. The office asked for that and then asked for it
+   * back: a new employee is often entered from a single form that carries a
+   * name, a code and a joining date, and refusing the record until somebody
+   * invents a department teaches them to type something untrue.
+   *
+   * Only THREE things are genuinely required to create an employee - the code,
+   * the name and the joining date - because those are what everything else
+   * hangs off: documents are matched against the first two and every deadline
+   * is computed from the third.
+   */
   department: optionalShortText(100),
   designation: optionalShortText(100),
 })
@@ -143,6 +180,10 @@ export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>
  * caller sends is ever concatenated into SQL.
  */
 export const EMPLOYEE_SORT_KEYS = [
+  /* Not a column on the employee - it is counted from their checklist. Sorting
+     by it puts the people with the most outstanding at the top, which is the
+     order somebody chasing documents wants to read. */
+  'documentsPending',
   'employeeCode',
   'employeeName',
   'joiningDate',
@@ -162,6 +203,17 @@ export type EmployeeSortKey = (typeof EMPLOYEE_SORT_KEYS)[number]
  */
 export const JOINED_WITHIN_PERIODS = ['week', 'month', 'sixMonths', 'year'] as const
 
+/**
+ * Filtering by gender, including by its absence.
+ *
+ * 'notRecorded' is not a fourth gender - GENDERS has three and that is what the
+ * record holds. It is the filter for employees nobody has recorded one for, who
+ * are reported on the dashboard rather than quietly folded into a side.
+ */
+export const GENDER_FILTERS = [...GENDERS, 'notRecorded'] as const
+
+export type GenderFilter = (typeof GENDER_FILTERS)[number]
+
 export type JoinedWithinPeriod = (typeof JOINED_WITHIN_PERIODS)[number]
 
 export const employeeListQuerySchema = paginationQuerySchema.extend({
@@ -169,9 +221,124 @@ export const employeeListQuerySchema = paginationQuerySchema.extend({
   designation: z.string().trim().max(100).optional(),
   /** Archived employees are hidden by default; they are never deleted. */
   includeArchived: booleanQueryParam.default(false),
+  /**
+   * Which employees to list: those still here, those who have left, or both.
+   *
+   * Defaults to those still here, because that is who the day's work is about.
+   * Nothing is hidden by it - 'all' and 'left' are one click away, and no filter
+   * removes a row from the database.
+   */
+  status: z.enum([
+    EMPLOYEE_STATUS_FILTERS.ACTIVE,
+    EMPLOYEE_STATUS_FILTERS.LEFT,
+    EMPLOYEE_STATUS_FILTERS.ALL,
+  ]).default(EMPLOYEE_STATUS_FILTERS.ACTIVE),
   sortBy: z.enum(EMPLOYEE_SORT_KEYS).default('employeeName'),
   /** Absent means every employee, however long ago they joined. */
   joinedWithin: z.enum(JOINED_WITHIN_PERIODS).optional(),
+
+  /*
+   * The filters the dashboard tiles open the list with.
+   *
+   * Each one is the SAME predicate the tile counted, so a tile that says 5 and
+   * a list that shows 4 is a bug rather than a difference of definition. They
+   * are ordinary filters as well - nothing here is only reachable from a tile.
+   */
+
+  /** 'notRecorded' is the absence of a gender, which is a real answer here. */
+  gender: z.enum(GENDER_FILTERS).optional(),
+  /**
+   * Employees missing at least one MANDATORY document.
+   *
+   * Mandatory means the two identity cards, so this is the 'Missing an ID card'
+   * tile: somebody whose Aadhaar or PAN has never come in.
+   */
+  missingIdCard: booleanQueryParam.default(false),
+  /** Employees who have never signed on the pad. */
+  withoutSignature: booleanQueryParam.default(false),
+  /**
+   * Whether their checklist is finished.
+   *
+   * EVERY document on it counts, optional ones included - 'optional' says
+   * whether a document must be chased, not whether it is on the list. The two
+   * values partition the employees a filter would otherwise return, which is
+   * what lets the dashboard's two cards add up to the number of active staff.
+   */
+  checklist: z.enum(['complete', 'incomplete']).optional(),
+  /**
+   * Of those who have gone, the ones who went THIS calendar year.
+   *
+   * Counted from the last working date rather than the resignation date: the
+   * year somebody left is the year they stopped coming in.
+   */
+  leftThisYear: booleanQueryParam.default(false),
+  /**
+   * Archived records ONLY, rather than archived alongside the rest.
+   *
+   * Separate from includeArchived because they answer different questions -
+   * 'show me everything' and 'show me the ones the office has finished with'.
+   */
+  archivedOnly: booleanQueryParam.default(false),
 })
 
 export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>
+
+/**
+ * Recording that an employee has left.
+ *
+ * The two dates are both required and are not the same question. Somebody
+ * resigns on the 1st and works until the 30th; for those thirty days they are
+ * still employed and still on the checklist. Ordering between them, and against
+ * the joining date, is checked in the service where the joining date is known -
+ * a schema cannot see it - and again by the database.
+ */
+export const markEmployeeLeftSchema = z.object({
+  resignationDate: dateOnlySchema,
+  lastWorkingDate: dateOnlySchema,
+  exitReason: z.enum(ALL_EXIT_REASONS as [string, ...string[]]),
+  /** Optional, and the place for anything the four reasons do not cover. */
+  /**
+   * Optional, and optional means null as well as absent.
+   *
+   * It was `.optional()` alone, which in zod accepts `undefined` and REFUSES
+   * `null`. The dialog sends null for an empty box - the honest thing for a
+   * field the person deliberately left blank - so leaving the notes empty made
+   * the whole request fail validation, and marking somebody as left worked only
+   * if you happened to type a note.
+   */
+  exitNotes: z
+    .string()
+    .trim()
+    .max(1000)
+    .nullish()
+    .transform((value) => (value ? value : null)),
+})
+
+export type MarkEmployeeLeftInput = z.infer<typeof markEmployeeLeftSchema>
+
+/**
+ * How many forms one print may produce.
+ *
+ * A cap rather than no limit, because the whole selection is rendered into one
+ * response: HR selecting a filtered list of four hundred people and waiting on
+ * a request that builds four hundred pages is a request that looks broken long
+ * before it finishes. A hundred is comfortably more than the twenty-odd a
+ * department's worth of forms comes to, and the message says what to do.
+ */
+export const MAX_FORMS_PER_PRINT = 100
+
+/**
+ * The employees whose forms are wanted, in one PDF.
+ *
+ * A POST with a body rather than a list of ids in the query string: a hundred
+ * ids is a URL long enough that a proxy may truncate it, and a truncated
+ * selection prints the wrong people rather than failing.
+ */
+export const printEmployeeFormsSchema = z.object({
+  employeeIds: z
+    .array(idParamSchema)
+    .min(1, 'Select at least one employee to print.')
+    .max(MAX_FORMS_PER_PRINT, `Print at most ${MAX_FORMS_PER_PRINT} forms at a time.`),
+})
+
+export type PrintEmployeeFormsInput = z.infer<typeof printEmployeeFormsSchema>

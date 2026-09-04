@@ -4,7 +4,13 @@
  *   npm run db:status       - list migrations and whether each has been applied
  *   npm run db:migrate      - apply all pending migrations
  *   npm run db:seed         - apply seed data (idempotent)
- *   npm run db:create-user  - create a login (first admin, or a new user)
+ *   npm run user:add        - create a login (the first admin, or a new user)
+ *   npm run user:reset       - give an existing user a new temporary password
+ *   npm run user:list        - who has a login, and what they may do
+ *
+ * Accounts are made here rather than on a screen. There is no user-management
+ * page: five people work in this office, they are set up once, and a screen for
+ * it would be a permanent way in that is used twice a year.
  *
  * Exits non-zero on failure so it can be used in a deployment script.
  */
@@ -14,9 +20,24 @@ import { generateTemporaryPassword, hashPassword } from '../services/password.se
 import { closePool, getPool } from './pool.js'
 import { getStatus, runMigrations, runSeeds } from './migrate.js'
 
-type Command = 'status' | 'migrate' | 'seed' | 'check' | 'create-user'
+type Command =
+  | 'status'
+  | 'migrate'
+  | 'seed'
+  | 'check'
+  | 'create-user'
+  | 'reset-password'
+  | 'list-users'
 
-const COMMANDS: readonly Command[] = ['status', 'migrate', 'seed', 'check', 'create-user']
+const COMMANDS: readonly Command[] = [
+  'status',
+  'migrate',
+  'seed',
+  'check',
+  'create-user',
+  'reset-password',
+  'list-users',
+]
 
 function isCommand(value: string | undefined): value is Command {
   return typeof value === 'string' && (COMMANDS as readonly string[]).includes(value)
@@ -146,6 +167,72 @@ async function createUser(argv: string[]): Promise<void> {
   }
 }
 
+/**
+ * Gives an existing user a new temporary password.
+ *
+ * The password is generated and printed once, and the account must change it at
+ * the next sign-in - so somebody who has forgotten theirs is back in without
+ * anybody, including whoever ran this, keeping a password they can use.
+ *
+ * Any lock is lifted with it: a forgotten password is usually discovered by
+ * typing the wrong one five times.
+ */
+async function resetPassword(argv: string[]): Promise<void> {
+  const flags = readFlags(argv)
+  const username = flags.get('username')?.trim()
+
+  if (!username) {
+    throw new Error('Usage: npm run user:reset -- --username <name>')
+  }
+
+  const user = await userRepository.findByUsername(username)
+  if (!user) throw new Error(`There is no user named '${username}'`)
+
+  const password = generateTemporaryPassword()
+  await userRepository.updatePassword(user.userId, await hashPassword(password), true)
+
+  console.log(`Reset the password for ${user.username} (${user.fullName})`)
+  console.log(``)
+  console.log(`  Temporary password: ${password}`)
+  console.log(``)
+  console.log('  Shown once and not stored anywhere in this form. Hand it over in person,')
+  console.log('  not by email or chat. They must change it at their next sign-in.')
+}
+
+/** Who has a login. No passwords, no hashes - those never leave the database. */
+async function listUsers(): Promise<void> {
+  const pool = await getPool()
+  const result = await pool.request().query<{
+    Username: string
+    FullName: string
+    Role: string
+    IsActive: boolean
+    MustChangePassword: boolean
+    LastLoginAt: Date | null
+  }>(`
+    SELECT Username, FullName, Role, IsActive, MustChangePassword, LastLoginAt
+    FROM   dbo.Users
+    ORDER BY IsActive DESC, Role, Username`)
+
+  if (result.recordset.length === 0) {
+    console.log('There are no users yet. Create the first with: npm run user:add')
+    return
+  }
+
+  for (const row of result.recordset) {
+    const notes = [
+      row.IsActive ? null : 'disabled',
+      row.MustChangePassword ? 'must change password' : null,
+      row.LastLoginAt ? null : 'never signed in',
+    ].filter(Boolean)
+
+    console.log(
+      `${row.Username.padEnd(20)} ${row.Role.padEnd(7)} ${row.FullName}` +
+        (notes.length > 0 ? `  (${notes.join(', ')})` : ''),
+    )
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2]
 
@@ -191,6 +278,14 @@ async function main(): Promise<void> {
           ? '\nNo pending migrations.'
           : `\nApplied ${executed.length} migration(s):\n${executed.map((n) => `  - ${n}`).join('\n')}`,
       )
+      break
+    }
+    case 'reset-password': {
+      await resetPassword(process.argv.slice(3))
+      break
+    }
+    case 'list-users': {
+      await listUsers()
       break
     }
     case 'create-user': {

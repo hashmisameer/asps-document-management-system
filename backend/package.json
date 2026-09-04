@@ -14,8 +14,12 @@
     "test:watch": "vitest tests/unit",
     "db:migrate": "tsx src/database/cli.ts migrate",
     "db:status": "tsx src/database/cli.ts status",
+    "db:check": "tsx src/database/cli.ts check",
     "db:seed": "tsx src/database/cli.ts seed",
     "db:create-user": "tsx src/database/cli.ts create-user",
+    "user:add": "tsx src/database/cli.ts create-user",
+    "user:reset": "tsx src/database/cli.ts reset-password",
+    "user:list": "tsx src/database/cli.ts list-users",
     "send-reminders": "tsx src/scripts/sendReminders.ts"
   },
   "dependencies": {

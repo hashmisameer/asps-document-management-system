@@ -11,7 +11,7 @@
        5  PF form                            10 days
        6  ESIC form                          10 days
        7  Service Card                       7 days
-       8  Form of Gratuity                   7 days
+       8  Payment of Gratuity                7 days
        9  Form No. 16                        7 days
       10  Confirmation letter                6 months from date of joining
 
@@ -63,35 +63,40 @@ GO
 MERGE dbo.DocumentTypes AS target
 USING (VALUES
     -- DocumentCode, DocumentName, IsMandatory, RequiresSignature, DeadlineValue, DeadlineUnit, SortOrder, RequiredFields
-    ('APPOINTMENT_LETTER', N'Appointment Letter', 0, 1,  7, 'DAY',    10,
+    ('APPOINTMENT_LETTER', N'Appointment Letter', 1, 1,  7, 'DAY',    10,
      N'EmployeeName,EmployeeCode,JoiningDate'),
 
-    ('BIO_DATA',           N'Bio Data Form',      0, 1,  7, 'DAY',    20,
+    ('BIO_DATA',           N'Bio Data Form',      1, 1,  7, 'DAY',    20,
      N'EmployeeName,EmployeeCode,JoiningDate'),
 
+    -- The two identity cards and the two statutory forms carry NO deadline.
+    -- They are collected and chased by hand rather than by date: 0022 gave the
+    -- cards seven days, and the office decided against it on 2026-09-05.
     ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  NULL, NULL,   30,
-     NULL),
+     N'EmployeeName'),
 
     ('PAN_CARD',           N'PAN Card',           1, 0,  NULL, NULL,   40,
-     NULL),
-
-    ('PF_FORM',            N'PF Form',            0, 1, 10, 'DAY',    50,
      N'EmployeeName'),
 
-    ('ESIC_FORM',          N'ESIC Form',          0, 1, 10, 'DAY',    60,
+    -- Optional: filed with the government, not collected from the employee.
+    ('PF_FORM',            N'PF Form',            0, 1, NULL, NULL,   50,
      N'EmployeeName'),
 
-    ('SERVICE_CARD',       N'Service Card',       0, 1,  7, 'DAY',    70,
+    ('ESIC_FORM',          N'ESIC Form',          0, 1, NULL, NULL,   60,
+     N'EmployeeName'),
+
+    ('SERVICE_CARD',       N'Service Card',       1, 1,  7, 'DAY',    70,
      N'EmployeeName,EmployeeCode,JoiningDate'),
 
-    ('GRATUITY_FORM',      N'Form of Gratuity',   0, 1,  7, 'DAY',    80,
+    ('GRATUITY_FORM',      N'Payment of Gratuity',   1, 1,  7, 'DAY',    80,
      N'EmployeeName'),
 
-    ('FORM_16',            N'Form No. 16',        0, 1,  7, 'DAY',    90,
+    ('FORM_16',            N'Form No. 16',        1, 1,  7, 'DAY',    90,
      N'EmployeeName'),
 
-    -- Six months from joining, not days: confirmation follows the probation period.
-    ('CONFIRMATION_LETTER', N'Confirmation Letter', 0, 1, 6, 'MONTH', 100,
+    -- Six months from joining, not days: confirmation follows the probation
+    -- period. A short target month is clamped - 31 August is due 28 February.
+    ('CONFIRMATION_LETTER', N'Confirmation Letter', 1, 1, 6, 'MONTH', 100,
      N'EmployeeName,EmployeeCode,JoiningDate')
 ) AS source (DocumentCode, DocumentName, IsMandatory, RequiresSignature,
              DeadlineValue, DeadlineUnit, SortOrder, RequiredFields)

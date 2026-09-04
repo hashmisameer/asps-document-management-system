@@ -16,6 +16,16 @@ describe('navigation', () => {
     expect(labels(ROLES.VIEWER)).toEqual(['Dashboard', 'Employees', 'Reports'])
   })
 
+  it('offers no Settings, to anybody', () => {
+    // The checklist is decided in code - see documentChecklist.ts - and the
+    // email goes to the addresses in .env. There is nothing left to configure
+    // on a screen, and a screen that can change the checklist is one somebody
+    // changes by accident.
+    for (const role of [ROLES.HR, ROLES.VIEWER, ROLES.ADMIN]) {
+      expect(labels(role)).not.toContain('Settings')
+    }
+  })
+
   it('shows nothing at all when signed out', () => {
     expect(visibleNavItems(null)).toEqual([])
   })

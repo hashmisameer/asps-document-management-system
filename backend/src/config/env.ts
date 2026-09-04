@@ -86,15 +86,35 @@ const envSchema = z
      * another file to vendor onto the offline server.
      */
     OCR_LANGUAGES: z.string().min(3).default('eng+hin'),
+    /**
+     * The languages tried FIRST, before falling back to OCR_LANGUAGES.
+     *
+     * Every language model is another pass over the page: measured on the
+     * company's PF form, 'eng' read it in 7 seconds and 'eng+hin' in 15, and
+     * both found the same name, code and joining date. Nine of the ten document
+     * types are printed in English and were paying the Hindi tax on every
+     * upload.
+     *
+     * A page the fast pass cannot make sense of is read again with the full
+     * set, so nothing is lost - the Hindi appointment letter costs the extra
+     * pass instead of everything else costing it. Set this equal to
+     * OCR_LANGUAGES to switch the two-pass behaviour off.
+     */
+    OCR_PRIMARY_LANGUAGES: z.string().min(3).default('eng'),
     TESSERACT_LANG_PATH: z.string().min(1).optional(),
     TESSERACT_CORE_PATH: z.string().min(1).optional(),
     TESSERACT_CACHE_PATH: z.string().min(1).optional(),
     /**
-     * Reminder email.
+     * The daily report email.
      *
-     * REMINDER_RECIPIENTS is a comma-separated list, because the digest goes to
+     * REPORT_RECIPIENTS is a comma-separated list, because the digest goes to
      * several people at once and a list in configuration is the whole feature:
      * who is chased is an office decision, not a code change.
+     *
+     * THERE IS NO ON/OFF SWITCH. Sending is on when there is somewhere to send
+     * to - a relay in SMTP_HOST and at least one address here - and off when
+     * there is not, which is what a fresh checkout has. A separate flag was one
+     * more thing to set correctly before the office got its email.
      */
     /**
      * Optional shared code for the registration form.
@@ -104,8 +124,7 @@ const envSchema = z
      * shared more widely than the team is.
      */
     REGISTRATION_SECRET: z.string().min(8).optional(),
-    REMINDER_ENABLED: booleanish.default('false'),
-    REMINDER_RECIPIENTS: z
+    REPORT_RECIPIENTS: z
       .string()
       .default('')
       .transform((value) =>
@@ -115,6 +134,18 @@ const envSchema = z
           .filter((address) => address.length > 0),
       ),
     /**
+     * When the daily email goes out, as HH:MM on the server's own clock.
+     *
+     * The API sends it rather than a scheduled task on the machine: one place
+     * to configure it, and nobody has to remember to recreate a Windows task
+     * after a rebuild. It fires once a day and skips a day it has already sent,
+     * so a restart in the afternoon does not send a second copy.
+     */
+    REPORT_SEND_TIME: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'REPORT_SEND_TIME must be HH:MM, such as 09:00')
+      .default('09:00'),
+    /**
      * Whether a document that is not due yet is worth an email.
      *
      * Off by default. Every new employee starts with ten undated-but-future
@@ -122,7 +153,7 @@ const envSchema = z
      * copy of the checklist that nobody reads. A reminder starts when the
      * document's own date arrives, and repeats until the file is uploaded.
      */
-    REMINDER_INCLUDE_NOT_YET_DUE: booleanish.default('false'),
+    REPORT_INCLUDE_NOT_YET_DUE: booleanish.default('false'),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(25),
     SMTP_SECURE: booleanish.default('false'),
@@ -142,18 +173,14 @@ const envSchema = z
         message: 'Set either DB_INSTANCE or DB_PORT, not both',
       })
     }
-    if (v.REMINDER_ENABLED && !v.SMTP_HOST) {
+    // Half-configured is the case worth catching: addresses with no relay, or
+    // a relay with nobody to send to, is somebody expecting an email that will
+    // never arrive.
+    if (v.REPORT_RECIPIENTS.length > 0 && !v.SMTP_HOST) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SMTP_HOST'],
-        message: 'REMINDER_ENABLED needs SMTP_HOST; reminders have nowhere to go without it',
-      })
-    }
-    if (v.REMINDER_ENABLED && v.REMINDER_RECIPIENTS.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['REMINDER_RECIPIENTS'],
-        message: 'REMINDER_ENABLED needs at least one address in REMINDER_RECIPIENTS',
+        message: 'REPORT_RECIPIENTS needs SMTP_HOST; the daily email has nowhere to go without it',
       })
     }
     if (v.NODE_ENV === 'production' && !v.COOKIE_SECURE && v.COOKIE_SAME_SITE === 'none') {

@@ -6,7 +6,7 @@ import {
   type DeadlineUnit,
 } from '../constants/deadlines.js'
 import { DOCUMENT_STATUS, type DocumentStatus } from '../constants/documents.js'
-import { addDays, addMonths, daysBetween, todayDateOnly } from './dateOnly.js'
+import { addDays, addMonths, daysBetween, monthsBetween, todayDateOnly } from './dateOnly.js'
 
 /**
  * Computes a document's due date from the employee's joining date.
@@ -57,7 +57,36 @@ export interface DeadlineInfo {
 export function deriveDeadline(
   dueDate: string | null,
   status: DocumentStatus,
-  options: { today?: string; dueSoonThresholdDays?: number } = {},
+  options: {
+    today?: string
+    dueSoonThresholdDays?: number
+    /**
+     * The employee has left, so nothing of theirs is still owed.
+     *
+     * A deadline counts down towards somebody doing something. Once they have
+     * gone there is no longer anybody for it to count down towards, and a clock
+     * left running says 'Overdue by 200 days' about a form nobody is going to
+     * bring in - which is not a fact about the document, it is the system
+     * failing to notice. It also poisons every report it appears in, because
+     * that number grows for as long as the record exists.
+     *
+     * Deliberately NOT the same as a document being complete: the form really
+     * is missing and still reads as Pending. It has simply stopped being late.
+     */
+    employeeHasLeft?: boolean
+    /**
+     * How this document's deadline was set, which is how it is counted back.
+     *
+     * The confirmation letter is due six MONTHS after joining, and 'Due in 168
+     * days' is a number nobody converts in their head - the office thinks about
+     * that one in months and reads every other document in days. Passing the
+     * unit is what lets one function say both.
+     *
+     * Only the label changes. The state and daysRemaining are the same numbers
+     * whatever the unit, so nothing that sorts or counts is affected.
+     */
+    deadlineUnit?: DeadlineUnit | null
+  } = {},
 ): DeadlineInfo {
   const today = options.today ?? todayDateOnly()
   const threshold = options.dueSoonThresholdDays ?? DEFAULT_DUE_SOON_THRESHOLD_DAYS
@@ -65,37 +94,59 @@ export function deriveDeadline(
   if (isDocumentComplete(status)) {
     return { state: DEADLINE_STATE.COMPLETED, daysRemaining: null, label: 'Completed' }
   }
+  if (options.employeeHasLeft) {
+    return {
+      state: DEADLINE_STATE.NOT_APPLICABLE,
+      daysRemaining: null,
+      label: 'Not due - employee has left',
+    }
+  }
   if (dueDate === null) {
     return { state: DEADLINE_STATE.NOT_APPLICABLE, daysRemaining: null, label: 'No deadline' }
   }
 
   const daysRemaining = daysBetween(today, dueDate)
+  const inMonths = options.deadlineUnit === DEADLINE_UNITS.MONTH
 
   if (daysRemaining < 0) {
-    const overdueBy = Math.abs(daysRemaining)
     return {
       state: DEADLINE_STATE.OVERDUE,
       daysRemaining,
-      label: `Overdue by ${overdueBy} ${pluralDays(overdueBy)}`,
+      label: `Overdue by ${inMonths ? overdueFor(dueDate, today) : dayCount(-daysRemaining)}`,
     }
   }
   if (daysRemaining === 0) {
     return { state: DEADLINE_STATE.DUE_TODAY, daysRemaining, label: 'Due today' }
   }
-  if (daysRemaining <= threshold) {
-    return {
-      state: DEADLINE_STATE.DUE_SOON,
-      daysRemaining,
-      label: `Due in ${daysRemaining} ${pluralDays(daysRemaining)}`,
-    }
-  }
-  return {
-    state: DEADLINE_STATE.NOT_DUE,
-    daysRemaining,
-    label: `Due in ${daysRemaining} ${pluralDays(daysRemaining)}`,
-  }
+  const label = `Due in ${inMonths ? remainingFor(today, dueDate) : dayCount(daysRemaining)}`
+
+  return daysRemaining <= threshold
+    ? { state: DEADLINE_STATE.DUE_SOON, daysRemaining, label }
+    : { state: DEADLINE_STATE.NOT_DUE, daysRemaining, label }
 }
 
-function pluralDays(n: number): string {
-  return n === 1 ? 'day' : 'days'
+function dayCount(days: number): string {
+  return `${days} ${days === 1 ? 'day' : 'days'}`
+}
+
+function monthCount(months: number): string {
+  return `${months} ${months === 1 ? 'month' : 'months'}`
+}
+
+/**
+ * How long is left, for a document counted in months.
+ *
+ * Months until the last whole one has gone, then days. 'Due in 0 months' says
+ * nothing to somebody deciding whether to chase it this week, and the last few
+ * weeks before a confirmation letter falls due are exactly when it is chased.
+ */
+function remainingFor(today: string, dueDate: string): string {
+  const months = monthsBetween(today, dueDate)
+  return months >= 1 ? monthCount(months) : dayCount(daysBetween(today, dueDate))
+}
+
+/** The same, the other way round: months once a whole one has passed. */
+function overdueFor(dueDate: string, today: string): string {
+  const months = monthsBetween(dueDate, today)
+  return months >= 1 ? monthCount(months) : dayCount(daysBetween(dueDate, today))
 }

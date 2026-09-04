@@ -149,16 +149,67 @@ export function canTransitionSignature(from: SignatureStatus, to: SignatureStatu
  * Upload constraints - enforced on BOTH client and server
  * (Sections 18 and 70). The client check is convenience only.
  */
-export const ALLOWED_DOCUMENT_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as const
+/**
+ * What a document may be uploaded as.
+ *
+ * PDF and the two common photo formats, plus WebP and TIFF: WebP is what an
+ * Android phone and WhatsApp now produce, and TIFF is what an office scanner
+ * writes by default. Someone photographing an Aadhaar card has no say in which
+ * of these their phone chooses, and refusing the file teaches them to convert it
+ * somewhere else rather than to use this system.
+ *
+ * Every one of these is decoded by the same library the OCR path uses, so a file
+ * that is accepted here can also be read - verified rather than assumed.
+ *
+ * HEIC, which is what an iPhone produces by default, is NOT here: this build of
+ * sharp reports it as an input format but could not be made to handle one in
+ * testing, and accepting a file that is then unreadable is worse than refusing
+ * it plainly.
+ */
+export const ALLOWED_DOCUMENT_MIME_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/tiff',
+] as const
 
 export type AllowedDocumentMimeType = (typeof ALLOWED_DOCUMENT_MIME_TYPES)[number]
 
-export const ALLOWED_DOCUMENT_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'] as const
+export const ALLOWED_DOCUMENT_EXTENSIONS = [
+  '.pdf',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.tif',
+  '.tiff',
+] as const
 
 export const ALLOWED_SIGNATURE_MIME_TYPES = ['image/png', 'image/jpeg'] as const
 
 export const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
 export const MAX_SIGNATURE_SIZE_BYTES = 2 * 1024 * 1024 // 2 MB
+
+/**
+ * The two identity cards, by the code that identifies them for ever.
+ *
+ * Named here rather than inferred from `isMandatory`, which is a setting the
+ * office changes: with eight of the ten documents mandatory, 'mandatory' no
+ * longer picks out the cards, and anything that reasoned from it - the
+ * dashboard's 'Missing an ID card', the pickers on the Add Employee screen -
+ * quietly started meaning something else.
+ *
+ * A DocumentCode is the stable identifier; the name and every flag beside it
+ * can be edited in Settings, and this keeps working.
+ */
+export const IDENTITY_CARD_DOCUMENT_CODES = ['AADHAAR_CARD', 'PAN_CARD'] as const
+
+export type IdentityCardDocumentCode = (typeof IDENTITY_CARD_DOCUMENT_CODES)[number]
+
+export function isIdentityCard(documentCode: string): boolean {
+  return (IDENTITY_CARD_DOCUMENT_CODES as readonly string[]).includes(documentCode)
+}
 
 /** As Form-V records it. 'Not recorded' is absence, never a fourth value. */
 export const GENDERS = ['Male', 'Female', 'Other'] as const

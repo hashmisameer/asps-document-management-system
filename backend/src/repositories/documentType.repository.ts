@@ -1,5 +1,6 @@
 import {
   ALL_DOCUMENT_FIELDS,
+  checklistRuleFor,
   type DeadlineUnit,
   type DocumentField,
   type DocumentType,
@@ -27,6 +28,8 @@ interface DocumentTypeRow {
   SortOrder: number
   RequiredFields: string | null
   RecognitionKeywords: string | null
+  RefuseOnCheckFailure: boolean
+  RequiredAtCreation: boolean
   CreatedAt: Date
   UpdatedAt: Date
 }
@@ -35,6 +38,7 @@ const SELECT_DOCUMENT_TYPE = `
     SELECT  dt.DocumentTypeId, dt.DocumentName, dt.DocumentCode, dt.IsMandatory,
             dt.IsActive, dt.RequiresSignature, dt.DeadlineValue, dt.DeadlineUnit,
             dt.SortOrder, dt.RequiredFields, dt.RecognitionKeywords,
+            dt.RefuseOnCheckFailure, dt.RequiredAtCreation,
             dt.CreatedAt, dt.UpdatedAt
     FROM    dbo.DocumentTypes AS dt`
 
@@ -86,19 +90,34 @@ function parseRequiredFields(value: string | null): DocumentField[] {
   return parsed
 }
 
+/**
+ * A stored row, with the checklist's decisions laid over it.
+ *
+ * Whether a document is mandatory and when it falls due are decided in
+ * shared/src/constants/documentChecklist.ts, not in this table. The columns are
+ * still written - a migration keeps them in step so that SQL which filters on
+ * IsMandatory agrees with the application - but the list is what is believed.
+ *
+ * A type the list does not name keeps what the row says: this list speaks for
+ * the documents it names and does not silently take over the ones it does not.
+ */
 function toDocumentType(row: DocumentTypeRow): DocumentType {
+  const rule = checklistRuleFor(row.DocumentCode)
+
   return {
     documentTypeId: row.DocumentTypeId,
     documentName: row.DocumentName,
     documentCode: row.DocumentCode,
-    isMandatory: row.IsMandatory,
     isActive: row.IsActive,
     requiresSignature: row.RequiresSignature,
-    deadlineValue: row.DeadlineValue,
-    deadlineUnit: toDeadlineUnit(row.DeadlineUnit),
+    isMandatory: rule?.isMandatory ?? row.IsMandatory,
+    deadlineValue: rule === undefined ? row.DeadlineValue : rule.deadlineValue,
+    deadlineUnit: rule === undefined ? toDeadlineUnit(row.DeadlineUnit) : rule.deadlineUnit,
     sortOrder: row.SortOrder,
     requiredFields: parseRequiredFields(row.RequiredFields),
     recognitionKeywords: parseKeywords(row.RecognitionKeywords),
+    refuseOnCheckFailure: row.RefuseOnCheckFailure,
+    requiredAtCreation: row.RequiredAtCreation,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }

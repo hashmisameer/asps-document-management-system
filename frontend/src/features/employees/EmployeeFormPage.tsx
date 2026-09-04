@@ -1,23 +1,24 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GENDERS, computeDueDate, createEmployeeSchema, type Employee } from '@asps-dms/shared'
+import { createEmployeeSchema, type Employee } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { DateField } from '../../components/ui/DateField.js'
+import { Modal } from '../../components/ui/Modal.js'
 import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
+import { EDITABLE_EMPLOYEE_FIELDS } from './employeeFields.js'
+import { previewIdentity } from '../documents/api.js'
 import { ApiError } from '../../lib/apiError.js'
-import { parseDisplayDate } from '../../lib/format.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
 import {
   RequiredDocuments,
   missingMandatory,
-  type DueDateOverrides,
   type SelectedFiles,
 } from './RequiredDocuments.js'
 import { DocumentChecklist } from '../documents/DocumentChecklist.js'
-import { updateDocumentDeadline, uploadDocument } from '../documents/api.js'
+import { uploadDocument } from '../documents/api.js'
 import {
   fetchEmployeeDocuments,
   fetchReference,
@@ -26,9 +27,44 @@ import {
   referenceKeys,
 } from './api.js'
 
-type Field = 'gender' | 'employeeCode' | 'employeeName' | 'joiningDate' | 'department' | 'designation'
+type Field =
+  | 'gender'
+  | 'employeeCode'
+  | 'employeeName'
+  | 'joiningDate'
+  | 'department'
+  | 'designation'
+  | 'address'
+  | 'email'
+  | 'phoneNumber'
+  | 'dateOfBirth'
 
-const GENDER_CHOICES = GENDERS.map((value) => ({ value, label: value }))
+/**
+ * What a new employee must have before the record is worth creating.
+ *
+ * Derived from EMPLOYEE_FIELDS rather than listed again, so a field that stops
+ * being required stops being listed here too - this list was hand-written and
+ * would otherwise have gone on naming a mandatory address after the office had
+ * asked for it to be optional.
+ *
+ * The order follows the form, because it is also the order the summary lists
+ * them in: somebody reading 'these are missing' should be able to work down
+ * the page.
+ */
+const MANDATORY_FIELDS: { field: Field; label: string }[] = EDITABLE_EMPLOYEE_FIELDS.filter(
+  (field) => field.required,
+).map((field) => ({ field: field.key as Field, label: field.label }))
+
+/**
+ * A label with the asterisk that says the field must be filled in.
+ *
+ * The asterisk is part of the label rather than a separate element, so it is
+ * read out with the field name by a screen reader instead of being announced as
+ * a loose star, and so it cannot drift away from the label it belongs to.
+ */
+function required(label: string): string {
+  return `${label} *`
+}
 
 /**
  * The list, plus whatever the record already says.
@@ -46,7 +82,18 @@ function optionsFor(
   return all.map((name) => ({ value: name, label: name }))
 }
 
-const EMPTY = { gender: '', employeeCode: '', employeeName: '', joiningDate: '', department: '', designation: '' }
+const EMPTY = {
+  gender: '',
+  employeeCode: '',
+  employeeName: '',
+  joiningDate: '',
+  department: '',
+  designation: '',
+  address: '',
+  email: '',
+  phoneNumber: '',
+  dateOfBirth: '',
+}
 
 /**
  * Add or edit an employee.
@@ -69,13 +116,16 @@ export function EmployeeFormPage() {
   const [values, setValues] = useState(EMPTY)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string>>>({})
   const [failure, setFailure] = useState<ApiError | null>(null)
-  const [overrides, setOverrides] = useState<DueDateOverrides>({})
-  // What is typed in each due-date box, kept as typed so a half-finished
-  // '01/0' is not rewritten under the person's fingers.
-  const [dueText, setDueText] = useState<Record<number, string>>({})
   // The mandatory documents, held until there is a record to attach them to.
   const [files, setFiles] = useState<SelectedFiles>({})
   const [triedToSave, setTriedToSave] = useState(false)
+  // Named after what it is: the list of things still to fill in, shown as a
+  // dialog because a message at the bottom of a long form is read by nobody who
+  // is looking at the top of it.
+  const [missingFields, setMissingFields] = useState<string[]>([])
+  // Documents that could not be attached after the record was created. The
+  // employee exists either way; these are named rather than swallowed.
+  const [uploadFailures, setUploadFailures] = useState<string[]>([])
   // Set once the record exists. Until then there are no document rows to
   // upload into, which is why this is two steps rather than one form.
   const [created, setCreated] = useState<Employee | null>(null)
@@ -88,7 +138,7 @@ export function EmployeeFormPage() {
 
   const typesQuery = useQuery({
     queryKey: documentTypeKeys.all,
-    queryFn: listDocumentTypes,
+    queryFn: () => listDocumentTypes(),
     staleTime: 5 * 60 * 1000,
     enabled: !isEdit,
   })
@@ -108,44 +158,12 @@ export function EmployeeFormPage() {
       joiningDate: existing.data.joiningDate,
       department: existing.data.department ?? '',
       designation: existing.data.designation ?? '',
+      address: existing.data.address ?? '',
+      email: existing.data.email ?? '',
+      phoneNumber: existing.data.phoneNumber ?? '',
+      dateOfBirth: existing.data.dateOfBirth ?? '',
     })
   }, [existing.data])
-
-  /**
-   * Applies any deadline the person changed on the form.
-   *
-   * Only the rows they actually changed: a date left at its default is already
-   * exactly what the server computed, and PATCHing it would write a deliberate
-   * override into the audit trail for a decision nobody made.
-   *
-   * A failure here does not fail the creation. The employee exists and the
-   * dates are the standard ones, which is recoverable from the checklist;
-   * throwing away a saved record over a deadline would not be.
-   */
-  const applyDueDateOverrides = async (employee: Employee) => {
-    const changed = Object.entries(overrides).filter(([typeId, dueDate]) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return false
-      const type = typesQuery.data?.find((t) => t.documentTypeId === Number(typeId))
-      if (!type) return false
-      const standard = computeDueDate(employee.joiningDate, type.deadlineValue, type.deadlineUnit)
-      return dueDate !== standard
-    })
-    if (changed.length === 0) return
-
-    try {
-      const documents = await fetchEmployeeDocuments(employee.employeeId)
-      await Promise.all(
-        changed.map(([typeId, dueDate]) => {
-          const document = documents.find((d) => d.documentTypeId === Number(typeId))
-          if (!document) return Promise.resolve()
-          return updateDocumentDeadline(document.documentId, dueDate, 'Set when the employee was added')
-        }),
-      )
-    } catch {
-      // Left deliberately quiet, for the reason above. The checklist shows the
-      // dates that were actually stored.
-    }
-  }
 
   /**
    * Sends the documents that were attached on the form.
@@ -156,21 +174,36 @@ export function EmployeeFormPage() {
    * that was insisted on - so it is reported on the next step, where the row
    * shows as still pending and can be uploaded again.
    */
-  const uploadHeldFiles = async (employee: Employee) => {
+  const uploadHeldFiles = async (employee: Employee): Promise<string[]> => {
     const chosen = Object.entries(files)
-    if (chosen.length === 0) return
+    if (chosen.length === 0) return []
 
     const documents = await fetchEmployeeDocuments(employee.employeeId)
-    for (const [typeId, file] of chosen) {
+    const failedUploads: string[] = []
+
+    for (const [typeId, entry] of chosen) {
       const document = documents.find((d) => d.documentTypeId === Number(typeId))
       if (!document) continue
       try {
-        await uploadDocument(document.documentId, file)
-      } catch {
-        // Left for the checklist to show. Throwing here would lose the employee
-        // record that was just created successfully.
+        // The reason travels with the file. Without it the card would be read a
+        // second time on the server, fail again, and - for an identity card - be
+        // removed, silently undoing the decision a person just made.
+        await uploadDocument(document.documentId, entry.file, {
+          ...(entry.acceptedReason ? { identityOverrideReason: entry.acceptedReason } : {}),
+        })
+      } catch (error) {
+        // The employee record already exists and must not be lost. The failure
+        // is named on the next screen rather than swallowed, so nobody is left
+        // believing a card went on when it did not.
+        failedUploads.push(
+          `${documents.find((d) => d.documentTypeId === Number(typeId))?.documentName ?? 'A document'}: ${
+            error instanceof ApiError ? error.message : 'could not be uploaded'
+          }`,
+        )
       }
     }
+
+    return failedUploads
   }
 
   const save = useMutation({
@@ -178,8 +211,8 @@ export function EmployeeFormPage() {
       isEdit ? updateEmployee(employeeId, input) : createEmployee(input),
     onSuccess: async (employee) => {
       if (!isEdit) {
-        await applyDueDateOverrides(employee)
-        await uploadHeldFiles(employee)
+        const failures = await uploadHeldFiles(employee)
+        if (failures.length > 0) setUploadFailures(failures)
       }
       // The list counts and the detail both change on a save, so the whole
       // 'employees' prefix goes rather than only the row that was edited.
@@ -211,6 +244,109 @@ export function EmployeeFormPage() {
     setValues((current) => ({ ...current, [field]: event.target.value }))
   }
 
+  /**
+   * Reads an identity document and attaches it only if it names this employee.
+   *
+   * These two cards used to be attached on trust, because there is no employee
+   * record on this screen for the ordinary check to run against - so the one
+   * place a wrong card was easiest to pick was the one place nothing looked.
+   *
+   * The name is taken from the form as typed. Nothing is stored by this: the
+   * file is read, compared and forgotten, and only travels to the server for
+   * real once the employee exists.
+   */
+  const checkAndAttach = async (documentTypeId: number, file: File | null) => {
+    if (!file) {
+      setFiles((current) => {
+        const next = { ...current }
+        delete next[documentTypeId]
+        return next
+      })
+      return
+    }
+
+    const employeeName = values.employeeName.trim()
+    const documentName =
+      typesQuery.data?.find((type) => type.documentTypeId === documentTypeId)?.documentName ??
+      'this document'
+
+    if (employeeName.length === 0) {
+      setFiles((current) => ({
+        ...current,
+        [documentTypeId]: {
+          file,
+          state: 'refused',
+          problem: 'Enter the employee name first - these documents are checked against it.',
+        },
+      }))
+      return
+    }
+
+    setFiles((current) => ({ ...current, [documentTypeId]: { file, state: 'checking' } }))
+
+    try {
+      const result = await previewIdentity(file, employeeName, documentName)
+
+      if (result.matched) {
+        setFiles((current) => ({
+          ...current,
+          [documentTypeId]: { file, state: 'attached', checkedAgainst: employeeName },
+        }))
+        return
+      }
+
+      const problem = !result.readable
+        ? `The name could not be read from this ${documentName}. Check the file, or accept it with a reason.`
+        : result.nameFound
+          ? `This document appears to name ${result.nameFound}, but you entered ${employeeName}. Choose the right file.`
+          : `This ${documentName} does not appear to name ${employeeName}. Choose the right file.`
+
+      setFiles((current) => ({
+        ...current,
+        [documentTypeId]: {
+          file,
+          state: 'refused',
+          problem,
+          nameFound: result.nameFound,
+          checkedAgainst: employeeName,
+        },
+      }))
+    } catch (error) {
+      setFiles((current) => ({
+        ...current,
+        [documentTypeId]: {
+          file,
+          state: 'refused',
+          problem:
+            error instanceof ApiError
+              ? error.message
+              : 'This document could not be checked. Try again, or accept it with a reason.',
+        },
+      }))
+    }
+  }
+
+  /**
+   * Every attached identity document is checked again when the name changes.
+   *
+   * Somebody types a name, attaches both cards, then corrects a spelling - and
+   * without this the cards stay 'Attached' against a name they were never
+   * checked against, which is the same hole this screen had to begin with.
+   */
+  useEffect(() => {
+    const name = values.employeeName.trim()
+    if (name.length === 0) return
+
+    for (const [id, entry] of Object.entries(files)) {
+      if (entry.state === 'checking') continue
+      if (entry.checkedAgainst === name) continue
+      void checkAndAttach(Number(id), entry.file)
+    }
+    // Only when the NAME changes. `files` is read inside on purpose and left
+    // out of the dependencies: including it would restart the check that has
+    // just finished writing to it, for ever.
+  }, [values.employeeName])
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setFailure(null)
@@ -219,23 +355,26 @@ export function EmployeeFormPage() {
     // the input is obviously wrong and the answer is identical when it is not.
     const parsed = createEmployeeSchema.safeParse(values)
     if (!parsed.success) {
+      // Every field the schema complained about, not a hand-written subset: a
+      // field left out of this list is one that silently fails to go red, and
+      // the person is left pressing Save with nothing to correct.
       const issues: Partial<Record<Field, string>> = {}
       for (const issue of parsed.error.issues) {
         const field = issue.path[0]
-        if (
-          field === 'employeeName' ||
-          field === 'joiningDate' ||
-          field === 'department' ||
-          field === 'designation'
-        ) {
-          issues[field] ??= issue.message
-        }
+        if (typeof field === 'string') issues[field as Field] ??= issue.message
       }
       setFieldErrors(issues)
+      setTriedToSave(true)
+      setMissingFields(
+        MANDATORY_FIELDS.filter(({ field }) => issues[field] !== undefined).map(
+          ({ label }) => label,
+        ),
+      )
       return
     }
 
     setFieldErrors({})
+    setMissingFields([])
 
     // The two identity documents are the point of the record: an employee whose
     // Aadhaar and PAN were "coming later" is exactly what this stops.
@@ -307,62 +446,102 @@ export function EmployeeFormPage() {
 
         <h2 className="text-sm font-semibold text-slate-900">Employee details</h2>
 
-        {isEdit ? null : (
-          <TextField
-            label="Employee ID"
-            hint="The company's own number, as printed on the service card. It cannot be changed later."
-            autoComplete="off"
-            value={values.employeeCode}
-            error={fieldErrors.employeeCode}
-            onChange={set('employeeCode')}
-          />
-        )}
+        {/* Drawn from EMPLOYEE_FIELDS, which the profile also reads. The two
+            screens used to carry their own lists and drifted apart - the form
+            collected four details the profile never showed. Adding a field to
+            that list puts it on both. */}
+        {EDITABLE_EMPLOYEE_FIELDS.map((field) => {
+          // The employee code is set once and never changed, so on an edit it
+          // is not offered at all rather than offered and refused.
+          if (isEdit && field.immutable) return null
 
-        <TextField
-          label="Employee name"
-          autoComplete="off"
-          value={values.employeeName}
-          error={fieldErrors.employeeName}
-          onChange={set('employeeName')}
-        />
+          const value = values[field.key as keyof typeof values] ?? ''
+          const label = field.required ? required(field.label) : field.label
+          const error = fieldErrors[field.key as Field]
 
-        <DateField
-          label="Joining date"
-          value={values.joiningDate}
-          error={fieldErrors.joiningDate}
-          hint={
-            isEdit
-              ? 'Changing this does not move deadlines that have already been set.'
-              : 'Document deadlines are calculated from this date.'
+          if (field.input === 'date') {
+            return (
+              <DateField
+                key={field.key}
+                label={label}
+                value={value}
+                error={error}
+                hint={
+                  field.key === 'joiningDate' && isEdit
+                    ? 'Changing this does not move deadlines that have already been set.'
+                    : field.hint
+                }
+                onChange={set(field.key as Field)}
+              />
+            )
           }
-          onChange={set('joiningDate')}
-        />
 
-        <Select
-          label="Department"
-          placeholder="Not set"
-          value={values.department}
-          options={optionsFor(reference.data?.departments, values.department)}
-          error={fieldErrors.department}
-          onChange={set('department')}
-        />
+          if (field.input === 'select') {
+            const options =
+              field.key === 'department'
+                ? optionsFor(reference.data?.departments, values.department)
+                : field.key === 'designation'
+                  ? optionsFor(reference.data?.designations, values.designation)
+                  : (field.options ?? []).map((option) => ({ value: option, label: option }))
 
-        <Select
-          label="Designation"
-          placeholder="Not set"
-          value={values.designation}
-          options={optionsFor(reference.data?.designations, values.designation)}
-          error={fieldErrors.designation}
-          onChange={set('designation')}
-        />
+            return (
+              <Select
+                key={field.key}
+                label={label}
+                placeholder="Not set"
+                value={value}
+                options={options}
+                error={error}
+                onChange={set(field.key as Field)}
+              />
+            )
+          }
 
-        <Select
-          label="Gender"
-          value={values.gender}
-          options={GENDER_CHOICES}
-          placeholder="Not recorded"
-          onChange={set('gender')}
-        />
+          return (
+            <TextField
+              key={field.key}
+              label={label}
+              hint={field.hint}
+              autoComplete="off"
+              value={value}
+              error={error}
+              onChange={set(field.key as Field)}
+            />
+          )
+        })}
+
+        <Modal
+          open={uploadFailures.length > 0}
+          title="The employee was created, but a document did not attach"
+          description="The record is saved. These can be uploaded again from the employee's folder."
+          onClose={() => setUploadFailures([])}
+          footer={<Button onClick={() => setUploadFailures([])}>Open the employee</Button>}
+        >
+          <ul className="list-disc space-y-1 pl-5 text-sm text-slate-700">
+            {uploadFailures.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </Modal>
+
+        <Modal
+          open={missingFields.length > 0}
+          title="Some details are still missing"
+          description="An employee record is created once and read for years. These are the details every one of them needs."
+          onClose={() => setMissingFields([])}
+          footer={
+            <Button onClick={() => setMissingFields([])}>Back to the form</Button>
+          }
+        >
+          <ul className="list-disc space-y-1 pl-5 text-sm text-slate-700">
+            {missingFields.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+          <p className="mt-3 text-sm text-slate-600">
+            They are marked in red on the form.
+          </p>
+        </Modal>
 
         {!isEdit && triedToSave && missingMandatory(typesQuery.data, files).length > 0 ? (
           <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-status-rejected">
@@ -391,22 +570,19 @@ export function EmployeeFormPage() {
       {isEdit ? null : (
         <RequiredDocuments
           joiningDate={values.joiningDate}
-          dueText={dueText}
-          onDueDateText={(documentTypeId, text) => {
-            setDueText((current) => ({ ...current, [documentTypeId]: text }))
-            const iso = parseDisplayDate(text)
-            if (iso) setOverrides((current) => ({ ...current, [documentTypeId]: iso }))
-          }}
           files={files}
           showMissing={triedToSave}
-          onFile={(documentTypeId, file) =>
+          canCheck={values.employeeName.trim().length > 0}
+          onFile={(documentTypeId, file) => {
+            void checkAndAttach(documentTypeId, file)
+          }}
+          onAccept={(documentTypeId, reason) => {
             setFiles((current) => {
-              const next = { ...current }
-              if (file) next[documentTypeId] = file
-              else delete next[documentTypeId]
-              return next
+              const entry = current[documentTypeId]
+              if (!entry) return current
+              return { ...current, [documentTypeId]: { ...entry, acceptedReason: reason } }
             })
-          }
+          }}
         />
       )}
       </div>

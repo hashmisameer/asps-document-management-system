@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
@@ -10,21 +10,33 @@ import {
   MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
   PERMISSIONS,
   SIGNATURE_STATUS,
-  SIGNATURE_STATUS_LABEL,
-  canTransitionSignature,
   deriveDeadline,
   type EmployeeDocument,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Badge, DEADLINE_STATE_TONE, DOCUMENT_STATUS_TONE } from '../../components/ui/Badge.js'
 import { Button } from '../../components/ui/Button.js'
+import { IconButton, IconLink, IconSlot } from '../../components/ui/IconButton.js'
+import {
+  DownloadIcon,
+  EyeIcon,
+  ReplaceIcon,
+  SignIcon,
+  SignedIcon,
+  TrashIcon,
+  UploadIcon,
+} from '../../components/ui/icons.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
-import { skipSignature } from '../signatures/api.js'
 import { ApiError } from '../../lib/apiError.js'
-import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
+import { formatBytes, formatDate } from '../../lib/format.js'
 import { documentFileUrl, removeDocumentFile, uploadDocument } from './api.js'
-import { identityFailureOf, unconfirmedLabels, type IdentityFailure } from './identityFailure.js'
+import {
+  identityFailureOf,
+  overrideReasonHint,
+  unconfirmedLabels,
+  type IdentityFailure,
+} from './identityFailure.js'
 
 /**
  * The employee's checklist, with the actions each row currently allows.
@@ -38,9 +50,18 @@ import { identityFailureOf, unconfirmedLabels, type IdentityFailure } from './id
 export function DocumentChecklist({
   documents,
   isLoading,
+  employeeHasLeft = false,
 }: {
   documents: EmployeeDocument[] | undefined
   isLoading: boolean
+  /**
+   * Nothing further is collected from somebody who has left.
+   *
+   * Upload, Replace and Remove come off; Preview and Download stay. What is
+   * already on file is exactly what still has to be produced years later, and
+   * the reason to open a leaver's folder at all is to read it.
+   */
+  employeeHasLeft?: boolean
 }) {
   return (
     <div className="overflow-x-auto rounded-card border border-slate-200 bg-white shadow-sm">
@@ -65,7 +86,9 @@ export function DocumentChecklist({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {documents?.map((item) => <ChecklistRow key={item.documentId} item={item} />)}
+          {documents?.map((item) => (
+            <ChecklistRow key={item.documentId} item={item} employeeHasLeft={employeeHasLeft} />
+          ))}
 
           {documents && documents.length === 0 ? (
             <tr>
@@ -89,8 +112,15 @@ export function DocumentChecklist({
   )
 }
 
-function ChecklistRow({ item }: { item: EmployeeDocument }) {
+function ChecklistRow({
+  item,
+  employeeHasLeft,
+}: {
+  item: EmployeeDocument
+  employeeHasLeft: boolean
+}) {
   const { can } = useAuth()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -151,14 +181,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     onError,
   })
 
-  const skip = useMutation({
-    mutationFn: () => skipSignature(item.documentId),
-    onSuccess: async () => {
-      setFailure(null)
-      await refresh()
-    },
-    onError,
-  })
 
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -178,10 +200,33 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     upload.mutate({ file })
   }
 
-  const deadline = deriveDeadline(item.dueDate, item.status)
+  // The unit comes with the row, so the confirmation letter reads 'Due in 5
+  // months' where everything else reads in days.
+  const deadline = deriveDeadline(item.dueDate, item.status, {
+    employeeHasLeft,
+    deadlineUnit: item.deadlineUnit,
+  })
+
+  /**
+   * The status, and anything happening to it, in one line.
+   *
+   * 'Uploaded · reading' rather than 'Uploaded' with 'Reading the document...'
+   * underneath: the second form made the row taller while OCR ran and shorter
+   * when it finished, so the table jumped under whoever was reading it.
+   */
+  const identityStatus = item.identityCheck?.status
+  const statusText =
+    identityStatus === 'Checking'
+      ? `${DOCUMENT_STATUS_LABEL[item.status]} · reading`
+      : identityStatus === 'Overridden'
+        ? `${DOCUMENT_STATUS_LABEL[item.status]} · accepted with reason`
+        : DOCUMENT_STATUS_LABEL[item.status]
   const hasFile = item.originalFileName !== null
 
-  const canUpload = can(PERMISSIONS.DOCUMENT_UPLOAD) && (!hasFile || can(PERMISSIONS.DOCUMENT_REPLACE))
+  const canUpload =
+    !employeeHasLeft &&
+    can(PERMISSIONS.DOCUMENT_UPLOAD) &&
+    (!hasFile || can(PERMISSIONS.DOCUMENT_REPLACE))
   // There is no verification step. A document is done when its file is in:
   // isDocumentComplete already counts 'Uploaded', so nothing sits overdue
   // waiting for a second person to agree it arrived. A wrong document is
@@ -193,11 +238,6 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
   // Skipping is a decision someone makes, not a failure: plenty of documents
   // need no signature, and 'Skipped' says a person decided that, where leaving
   // it awaiting review for ever says only that nobody got to it.
-  const canSkipSignature =
-    can(PERMISSIONS.SIGNATURE_SKIP) &&
-    hasFile &&
-    canTransitionSignature(item.signatureStatus, SIGNATURE_STATUS.SKIPPED)
-
   // Positioning a signature needs a file to position it on, and a signature
   // status that is still open: a document already signed is re-signed by
   // saving its placements again, not by a second pass over the same button.
@@ -207,53 +247,98 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
     item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED &&
     item.signatureStatus !== SIGNATURE_STATUS.SKIPPED
 
-  const busy = upload.isPending || skip.isPending || remove.isPending
+  // 'No signature needed' is no longer offered here: the row's five actions are
+  // Preview, Download, Replace, Sign and Remove, and skipping was a sixth that
+  // existed only in this table. The endpoint is untouched, so it can be put back
+  // wherever the office wants it.
+  const busy = upload.isPending || remove.isPending
+
+  /**
+   * What the Sign button says and whether it does anything.
+   *
+   * This replaces the two lines that used to sit in the row - a signature word
+   * under the document name and a 'No signature needed' button among the
+   * actions. Both said the same thing twice and cost every row a line. The
+   * state is now readable from the one control somebody would use to change it:
+   *
+   *   needed, not yet done  enabled
+   *   not needed            shown, disabled, and the tooltip says why
+   *   already signed        a tick, and the tooltip says so
+   *
+   * Disabled here means aria-disabled, so the tooltip and the tab stop remain -
+   * see IconButton.
+   */
+  const signature = (() => {
+    const status = item.signatureStatus
+    if (status === SIGNATURE_STATUS.ADDED) {
+      return { show: true, done: true, disabled: true, label: 'Signature added' }
+    }
+    if (status === SIGNATURE_STATUS.NOT_REQUIRED) {
+      return {
+        show: true,
+        done: false,
+        disabled: true,
+        label: 'No signature is needed on this document',
+      }
+    }
+    if (status === SIGNATURE_STATUS.SKIPPED) {
+      return { show: true, done: false, disabled: true, label: 'Signature skipped' }
+    }
+    return {
+      show: canSign,
+      done: false,
+      disabled: !canSign,
+      label: canSign ? 'Sign' : 'You cannot sign this document',
+    }
+  })()
+
 
   return (
     <>
       <tr>
         <td className="px-4 py-2 align-top">
           <span className="font-medium text-slate-900">{item.documentName}</span>
-          {item.isMandatory ? <span className="ml-2 text-xs text-slate-500">Mandatory</span> : null}
-          {item.requiresSignature || item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED ? (
-            <p className="mt-0.5 text-xs text-slate-500">
-              {SIGNATURE_STATUS_LABEL[item.signatureStatus]}
-            </p>
-          ) : null}
+          {/* Whether the document is expected at all belongs beside its name,
+              not in the status column - it is a fact about the document type,
+              and it never changes. */}
+          <span className="ml-2 align-middle text-xs text-slate-500">
+            {item.isMandatory ? 'Mandatory' : 'Not required'}
+          </span>
+          {/* The signature line that used to sit here is gone. Whether this
+              document needs signing, and whether it has been, is said by the
+              Sign button - which is where somebody would act on it. */}
         </td>
 
         <td className="px-4 py-2 align-top">
-          {/* A tick for anything with a file against it, so 'in' or 'not in' is
-              readable down the column without parsing every status word. */}
+          {/* ONE badge, on one line.
+              This column used to stack a badge, an OCR line, an override line
+              and a signature word, so a row could be four lines tall while its
+              neighbour was one and the table looked like a list of paragraphs.
+              Anything that is a state of the document now reads inside the
+              badge; anything that is a REASON somebody must act on - a refusal,
+              a rejection - still gets its own line, because those are sentences
+              rather than states. */}
           <span className="inline-flex items-center gap-1.5">
             {hasFile ? (
               <span aria-hidden="true" className="font-semibold text-status-verified">
                 &#10003;
               </span>
             ) : null}
-            <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>
-              {DOCUMENT_STATUS_LABEL[item.status]}
-            </Badge>
+            <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>{statusText}</Badge>
           </span>
+
           {item.status === DOCUMENT_STATUS.REJECTED && item.rejectionReason ? (
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>
           ) : null}
-          {item.verifiedByName ? (
-            <p className="mt-1 text-xs text-slate-500">
-              by {item.verifiedByName}, {formatDateTime(item.verifiedAt)}
-            </p>
-          ) : null}
-          {/* An accepted-anyway document says so on its face. The whole reason
-              the override is stored on the row rather than only in the audit
-              trail is that it has to be visible here, months later, without
-              knowing to go looking for it. */}
-          {item.identityCheck?.status === 'Overridden' ? (
-            <p className="mt-1 max-w-56 text-xs text-status-pending">
-              Identity check overridden
-              {item.identityCheck.overriddenByName
-                ? ` by ${item.identityCheck.overriddenByName}`
-                : ''}
-              {item.identityCheck.overrideReason ? `: ${item.identityCheck.overrideReason}` : ''}
+
+          {/* Refused. For an identity card the file has already been taken back
+              off - the row is Pending again - so this sentence is the only thing
+              saying why nothing is attached. */}
+          {item.identityCheck?.status === 'Failed' ? (
+            <p className="mt-1 max-w-56 text-xs text-status-rejected">
+              {item.identityCheck.failureReason ??
+                item.identityCheck.overrideReason ??
+                'This document did not match the employee.'}
             </p>
           ) : null}
         </td>
@@ -263,14 +348,14 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
             <div className="flex flex-col gap-1">
               <span className="text-slate-700">{formatDate(item.dueDate)}</span>
               {deadline.state === DEADLINE_STATE.NOT_APPLICABLE ||
-              deadline.state === DEADLINE_STATE.NOT_DUE ? null : (
+              deadline.state === DEADLINE_STATE.COMPLETED ? null : (
                 <span>
                   <Badge tone={DEADLINE_STATE_TONE[deadline.state]}>{deadline.label}</Badge>
                 </span>
               )}
             </div>
           ) : (
-            <span className="text-xs text-slate-500">No deadline</span>
+            <span className="text-xs text-slate-500">{deadline.label}</span>
           )}
         </td>
 
@@ -291,26 +376,37 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
         </td>
 
         <td className="px-4 py-2 align-top">
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          {/* FIVE FIXED POSITIONS, always in this order. An action that is not
+              available leaves its slot empty rather than collapsing, so Remove
+              is under Remove on every row and the column can be read down
+              rather than searched across.
+
+              On anything narrower than a desktop each button also draws its
+              name: hover does not exist on a tablet, and an icon whose label
+              can only be reached by hovering has no label there at all. */}
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             {hasFile && can(PERMISSIONS.DOCUMENT_PREVIEW) ? (
-              <a
-                href={documentFileUrl.preview(item.documentId)}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-brand-700 hover:text-brand-800"
-              >
-                Preview
-              </a>
-            ) : null}
+              <IconLink
+                label="Preview"
+                icon={<EyeIcon />}
+                to={documentFileUrl.preview(item.documentId)}
+                external
+              />
+            ) : (
+              <IconSlot />
+            )}
 
             {hasFile && can(PERMISSIONS.DOCUMENT_DOWNLOAD) ? (
-              <a
-                href={documentFileUrl.download(item.documentId)}
-                className="text-sm text-brand-700 hover:text-brand-800"
-              >
-                Download
-              </a>
-            ) : null}
+              <IconLink
+                label="Download"
+                icon={<DownloadIcon />}
+                to={documentFileUrl.download(item.documentId)}
+                external
+                download
+              />
+            ) : (
+              <IconSlot />
+            )}
 
             {canUpload ? (
               <>
@@ -321,48 +417,46 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
                   className="hidden"
                   onChange={handleFile}
                 />
-                <Button
-                  variant="secondary"
+                <IconButton
+                  label={hasFile ? 'Replace' : 'Upload'}
+                  icon={hasFile ? <ReplaceIcon /> : <UploadIcon />}
                   busy={upload.isPending}
-                  busyLabel="Reading the document..."
                   disabled={busy}
                   onClick={() => fileInput.current?.click()}
-                >
-                  {hasFile ? 'Replace' : 'Upload'}
-                </Button>
+                />
               </>
-            ) : null}
+            ) : (
+              <IconSlot />
+            )}
 
-            {hasFile && can(PERMISSIONS.DOCUMENT_REPLACE) ? (
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => setConfirmingRemove((current) => !current)}
-              >
-                Remove
-              </Button>
-            ) : null}
+            {/* Signing, said entirely by this one button. */}
+            {signature.show ? (
+              <IconButton
+                label={signature.label}
+                icon={signature.done ? <SignedIcon /> : <SignIcon />}
+                disabled={signature.disabled}
+                onClick={() => navigate(`/documents/${item.documentId}/signature`)}
+              />
+            ) : (
+              <IconSlot />
+            )}
 
-            {canSign ? (
-              <Link
-                to={`/documents/${item.documentId}/signature`}
-                className="text-sm text-brand-700 hover:text-brand-800"
-              >
-                Sign
-              </Link>
-            ) : null}
-
-            {canSkipSignature ? (
-              <Button
-                variant="ghost"
-                busy={skip.isPending}
-                busyLabel="Saving..."
-                disabled={busy}
-                onClick={() => skip.mutate()}
-              >
-                No signature needed
-              </Button>
-            ) : null}
+            {/* Destructive, so it is set apart by a gap and coloured. The
+                confirmation below it is not new - taking a file off has always
+                been asked about first. */}
+            <span className="ml-2 inline-flex">
+              {hasFile && !employeeHasLeft && can(PERMISSIONS.DOCUMENT_REPLACE) ? (
+                <IconButton
+                  label="Remove"
+                  icon={<TrashIcon />}
+                  tone="danger"
+                  disabled={busy}
+                  onClick={() => setConfirmingRemove((current) => !current)}
+                />
+              ) : (
+                <IconSlot />
+              )}
+            </span>
           </div>
         </td>
       </tr>
@@ -423,7 +517,7 @@ function ChecklistRow({ item }: { item: EmployeeDocument }) {
                   value={overrideReason}
                   maxLength={500}
                   onChange={(event) => setOverrideReason(event.target.value)}
-                  placeholder="The scan is too faint for the Aadhaar number to be read"
+                  placeholder={overrideReasonHint(refused.failure, item.documentName)}
                   className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                 />
               </label>

@@ -2,7 +2,9 @@ import type { Server } from 'node:http'
 import { createApp } from './app.js'
 import { env } from './config/env.js'
 import { closePool, getPool } from './database/pool.js'
+import { closeOcrWorker } from './services/documentText.service.js'
 import { ensureStorageReady } from './services/storage.service.js'
+import { startDailyReport, stopDailyReport } from './services/reportSchedule.service.js'
 import { logger } from './utils/logger.js'
 import { describeError } from './utils/errors.js'
 
@@ -75,15 +77,33 @@ function registerShutdown(server: Server): void {
     server.close((closeError) => {
       const finish = async (): Promise<void> => {
         try {
+          stopDailyReport()
           await closePool()
         } catch (err) {
           logger.error({ err }, 'Failed to close the SQL Server pool')
+        }
+        // The OCR worker is a separate process with its own threads, and it
+        // holds this one open on its own. Without this the shutdown never
+        // finished: it ran to the grace timeout every time, and because the
+        // listening socket is only released when the process actually dies,
+        // the replacement started meanwhile died on EADDRINUSE. In development
+        // that is a restart loop on every file save; on the server it is a
+        // service that fails to come back after a deploy.
+        try {
+          await closeOcrWorker()
+        } catch (err) {
+          logger.error({ err }, 'Failed to close the OCR worker')
         }
         clearTimeout(forceExit)
         process.exit(closeError ? 1 : 0)
       }
       void finish()
     })
+
+    // server.close() stops new connections but waits for open ones, and a
+    // browser keeps its keep-alive sockets open with nothing on them. Those
+    // idle sockets alone were enough to hold the port past the grace period.
+    server.closeAllConnections()
   }
 
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -121,6 +141,10 @@ async function main(): Promise<void> {
   registerShutdown(server)
   await warmUpDatabase()
   await warmUpStorage()
+
+  // The daily report. Armed after the database is warm, because the first thing
+  // it does is read the outstanding documents.
+  startDailyReport()
 }
 
 void main()

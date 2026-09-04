@@ -52,6 +52,32 @@ export function addMonths(value: string, months: number): string {
   return formatDateOnly(new Date(Date.UTC(year, month, day)))
 }
 
+/**
+ * Whole calendar months from `from` to `to`. Positive when `to` is later.
+ *
+ * Calendar months, not thirty-day blocks: 1 August to 1 February is six months
+ * whatever the days in between add up to. A part month does not count, so the
+ * answer only turns over on the day of the month it started from - which is how
+ * somebody reads 'due in 5 months' off a calendar.
+ */
+export function monthsBetween(from: string, to: string): number {
+  const start = parseDateOnly(from)
+  const end = parseDateOnly(to)
+
+  let months =
+    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (end.getUTCMonth() - start.getUTCMonth())
+
+  // The month boundary has been crossed but the DAY of the month has not, so
+  // that last month is not whole yet. addMonths clamps a short month for us -
+  // 31 January plus one month is 28 February - so this agrees with the way due
+  // dates are worked out in the first place.
+  if (months > 0 && addMonths(from, months) > to) months -= 1
+  if (months < 0 && addMonths(from, months) < to) months += 1
+
+  return months
+}
+
 /** Whole days from `from` to `to`. Positive when `to` is later. */
 export function daysBetween(from: string, to: string): number {
   const MS_PER_DAY = 86_400_000
