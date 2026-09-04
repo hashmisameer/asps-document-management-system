@@ -1,22 +1,41 @@
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
+  EMPLOYEE_STATUS_FILTERS,
+  MAX_FORMS_PER_PRINT,
   PERMISSIONS,
   type EmployeeListItem,
   type EmployeeSortKey,
+  type EmployeeStatusFilter,
   type JoinedWithinPeriod,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Badge } from '../../components/ui/Badge.js'
 import { Button } from '../../components/ui/Button.js'
+import { IconButton } from '../../components/ui/IconButton.js'
+import { PrintIcon } from '../../components/ui/icons.js'
 import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { useAuth } from '../auth/useAuth.js'
 import { ApiError } from '../../lib/apiError.js'
+import { saveBlob } from '../../lib/download.js'
 import { formatDate } from '../../lib/format.js'
 import { useDebounced } from '../../lib/useDebounced.js'
-import { employeeKeys, fetchFacets, listEmployees, type EmployeeListParams } from './api.js'
+import {
+  employeeKeys,
+  fetchFacets,
+  listEmployees,
+  printEmployeeForm,
+  printEmployeeForms,
+} from './api.js'
+import {
+  activeFilterChips,
+  employeeFiltersToSearch,
+  readEmployeeFilters,
+  toEmployeeListQuery,
+  type EmployeeFilters,
+} from './listParams.js'
 
 /**
  * The joining-date periods, in the words the office uses.
@@ -43,32 +62,58 @@ export function EmployeeListPage() {
   const { can } = useAuth()
   const navigate = useNavigate()
 
-  const [search, setSearch] = useState('')
-  const [department, setDepartment] = useState('')
-  const [includeArchived, setIncludeArchived] = useState(false)
-  const [joinedWithin, setJoinedWithin] = useState<JoinedWithinPeriod | ''>('')
-  const [sortBy, setSortBy] = useState<EmployeeSortKey>('employeeName')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const [page, setPage] = useState(1)
+  /**
+   * The filters live in the URL - see listParams.ts.
+   *
+   * This page is opened from the dashboard with filters already applied, and
+   * two tiles in a row are the same component instance with a different search
+   * string: held in state, the second tile clicked would change the address bar
+   * and nothing else.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  const filters = useMemo(() => readEmployeeFilters(searchParams), [searchParams])
+
+  /**
+   * The search box types locally.
+   *
+   * Deliberately NOT in the URL: a history entry per keystroke turns the Back
+   * button into a re-run of everything somebody typed.
+   */
+  const [search, setSearch] = useState(filters.search)
+
+  const update = (patch: Partial<EmployeeFilters>) => {
+    // Any change to a filter invalidates the page number: page 4 of a search
+    // that now returns 12 rows is an empty screen nobody asked for.
+    setSearchParams(employeeFiltersToSearch({ ...filters, page: 1, ...patch }))
+  }
+
+  const { department, includeArchived, status, joinedWithin, sortBy, sortDir, page } = filters
+
+  /**
+   * Which employees are ticked, by id.
+   *
+   * Ids rather than rows, and kept across pages: HR printing a department's
+   * forms works through the list a page at a time, and a selection that emptied
+   * itself on 'Next' would make that impossible. It is cleared when the FILTERS
+   * change, because at that point the rows on screen are a different set of
+   * people and a hidden selection is one somebody prints by accident.
+   */
+  const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set())
+  /** The row whose own print button is working, and the toolbar's. */
+  const [printingId, setPrintingId] = useState<number | null>(null)
+  const [printingSelection, setPrintingSelection] = useState(false)
+  const [printError, setPrintError] = useState<ApiError | null>(null)
 
   const debouncedSearch = useDebounced(search)
 
-  // Any change to the filters invalidates the page number: page 4 of a search
-  // that now returns 12 rows is an empty screen the user did not ask for.
+  // A ticked row that scrolls out of the filter is a row somebody prints by
+  // accident, so the selection is dropped whenever the set of people changes.
   useEffect(() => {
-    setPage(1)
-  }, [debouncedSearch, department, includeArchived, joinedWithin, sortBy, sortDir])
+    setSelected(new Set())
+  }, [searchParams, debouncedSearch])
 
-  const params: EmployeeListParams = {
-    page,
-    pageSize: PAGE_SIZE,
-    sortBy,
-    sortDir,
-    includeArchived,
-    ...(debouncedSearch ? { search: debouncedSearch } : {}),
-    ...(joinedWithin ? { joinedWithin } : {}),
-    ...(department ? { department } : {}),
-  }
+  const params = { ...toEmployeeListQuery(filters, PAGE_SIZE), search: debouncedSearch || undefined }
+  const chips = activeFilterChips(filters)
 
   const employees = useQuery({
     queryKey: employeeKeys.list(params),
@@ -80,13 +125,68 @@ export function EmployeeListPage() {
 
   const facets = useQuery({ queryKey: employeeKeys.facets(), queryFn: fetchFacets })
 
+  const rows = employees.data?.items ?? []
+  const allOnPageSelected = rows.length > 0 && rows.every((row) => selected.has(row.employeeId))
+  const tooManySelected = selected.size > MAX_FORMS_PER_PRINT
+
+  const toggleSelected = (employeeId: number) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (!next.delete(employeeId)) next.add(employeeId)
+      return next
+    })
+  }
+
+  /** The header tick box takes the whole page in or out, never other pages. */
+  const togglePage = () => {
+    setSelected((current) => {
+      const next = new Set(current)
+      for (const row of rows) {
+        if (allOnPageSelected) next.delete(row.employeeId)
+        else next.add(row.employeeId)
+      }
+      return next
+    })
+  }
+
+  /**
+   * Asks the server for the PDF and hands it to the browser.
+   *
+   * Both print buttons come through here, so a failure is reported the same way
+   * whichever was pressed - on the screen, with the server's own words, rather
+   * than as an error page saved into the downloads folder.
+   */
+  const print = async (
+    load: () => Promise<{ blob: Blob; fileName: string }>,
+    working: (busy: boolean) => void,
+  ) => {
+    working(true)
+    setPrintError(null)
+    try {
+      const { blob, fileName } = await load()
+      saveBlob(blob, fileName)
+    } catch (caught) {
+      setPrintError(caught instanceof ApiError ? caught : null)
+    } finally {
+      working(false)
+    }
+  }
+
+  const printOne = (employeeId: number) =>
+    void print(
+      () => printEmployeeForm(employeeId),
+      (busy) => setPrintingId(busy ? employeeId : null),
+    )
+
+  const printSelected = () =>
+    void print(() => printEmployeeForms([...selected]), setPrintingSelection)
+
   const toggleSort = (key: EmployeeSortKey) => {
     if (sortBy === key) {
-      setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'))
+      update({ sortDir: sortDir === 'asc' ? 'desc' : 'asc' })
       return
     }
-    setSortBy(key)
-    setSortDir('asc')
+    update({ sortBy: key, sortDir: 'asc' })
   }
 
   const data = employees.data
@@ -103,14 +203,28 @@ export function EmployeeListPage() {
               : 'Loading...'}
           </p>
         </div>
-        {can(PERMISSIONS.EMPLOYEE_CREATE) ? (
-          <Link
-            to="/employees/new"
-            className="inline-flex items-center rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800"
+        <div className="flex items-center gap-2">
+          {/* Printing needs only the read permission the list itself needs, so
+              this is offered to everybody who can see the page - a Viewer
+              included, which is who asked for it. */}
+          <Button
+            variant="secondary"
+            busy={printingSelection}
+            busyLabel="Preparing..."
+            disabled={selected.size === 0 || tooManySelected}
+            onClick={printSelected}
           >
-            Add employee
-          </Link>
-        ) : null}
+            {selected.size > 0 ? `Print selected (${selected.size})` : 'Print selected'}
+          </Button>
+          {can(PERMISSIONS.EMPLOYEE_CREATE) ? (
+            <Link
+              to="/employees/new"
+              className="inline-flex items-center rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800"
+            >
+              Add employee
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       <section className="mt-4 flex flex-wrap items-end gap-4 rounded-card border border-slate-200 bg-white p-4 shadow-sm">
@@ -130,7 +244,7 @@ export function EmployeeListPage() {
             placeholder="All departments"
             value={department}
             options={(facets.data?.departments ?? []).map((value) => ({ value, label: value }))}
-            onChange={(event) => setDepartment(event.target.value)}
+            onChange={(event) => update({ department: event.target.value })}
           />
         </div>
 
@@ -140,7 +254,22 @@ export function EmployeeListPage() {
             placeholder="Any time"
             value={joinedWithin}
             options={JOINED_WITHIN_CHOICES}
-            onChange={(event) => setJoinedWithin(event.target.value as JoinedWithinPeriod | '')}
+            onChange={(event) =>
+              update({ joinedWithin: event.target.value as JoinedWithinPeriod | '' })
+            }
+          />
+        </div>
+
+        <div className="min-w-40">
+          <Select
+            label="Employment"
+            value={status}
+            options={[
+              { value: EMPLOYEE_STATUS_FILTERS.ACTIVE, label: 'Active' },
+              { value: EMPLOYEE_STATUS_FILTERS.LEFT, label: 'Left' },
+              { value: EMPLOYEE_STATUS_FILTERS.ALL, label: 'All' },
+            ]}
+            onChange={(event) => update({ status: event.target.value as EmployeeStatusFilter })}
           />
         </div>
 
@@ -148,12 +277,34 @@ export function EmployeeListPage() {
           <input
             type="checkbox"
             checked={includeArchived}
-            onChange={(event) => setIncludeArchived(event.target.checked)}
+            onChange={(event) => update({ includeArchived: event.target.checked })}
             className="h-4 w-4 rounded border-slate-300"
           />
           Include archived
         </label>
       </section>
+
+      {/* The filters a dashboard tile applied, which have no control of their
+          own on this toolbar. Without them on the screen the list is simply
+          short, and a short list with nothing explaining it reads as missing
+          employees rather than as a filter. */}
+      {chips.length > 0 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs tracking-wide text-slate-500 uppercase">Filtered by</span>
+          {chips.map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={() => update(chip.clears)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-800 hover:bg-brand-100 focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:outline-none"
+              aria-label={`Remove the ${chip.label} filter`}
+            >
+              {chip.label}
+              <span aria-hidden="true">&times;</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mt-4">
@@ -163,10 +314,45 @@ export function EmployeeListPage() {
         </div>
       ) : null}
 
+      {tooManySelected ? (
+        <div className="mt-4">
+          <Alert tone="info" title={`Too many to print at once (${selected.size} selected)`}>
+            Up to {MAX_FORMS_PER_PRINT} forms can be printed in one file. Untick some rows, or
+            print them in two goes.
+          </Alert>
+        </div>
+      ) : null}
+
+      {printError ? (
+        <div className="mt-4">
+          <Alert title="Could not print that" referenceId={printError.referenceId}>
+            {printError.message}
+          </Alert>
+        </div>
+      ) : null}
+
       <section className="mt-4 overflow-x-auto rounded-card border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs tracking-wide text-slate-500 uppercase">
             <tr>
+              <th scope="col" className="w-10 px-4 py-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300"
+                  checked={allOnPageSelected}
+                  // Ticked for some of the page, not all of it: the box says so
+                  // rather than claiming the whole page is in.
+                  ref={(node) => {
+                    if (node) {
+                      node.indeterminate =
+                        !allOnPageSelected && rows.some((row) => selected.has(row.employeeId))
+                    }
+                  }}
+                  onChange={togglePage}
+                  aria-label="Select every employee on this page"
+                  disabled={rows.length === 0}
+                />
+              </th>
               <SortableHeader
                 label="Code"
                 sortKey="employeeCode"
@@ -201,6 +387,9 @@ export function EmployeeListPage() {
               <th scope="col" className="px-4 py-2 font-medium">
                 Documents
               </th>
+              <th scope="col" className="px-4 py-2 font-medium">
+                Print
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -210,6 +399,17 @@ export function EmployeeListPage() {
                 onClick={() => void navigate(`/employees/${employee.employeeId}`)}
                 className="cursor-pointer hover:bg-slate-50"
               >
+                {/* The whole row navigates, so anything inside it that is not
+                    navigation has to stop the click before it gets there. */}
+                <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300"
+                    checked={selected.has(employee.employeeId)}
+                    onChange={() => toggleSelected(employee.employeeId)}
+                    aria-label={`Select ${employee.employeeName}`}
+                  />
+                </td>
                 <td className="px-4 py-2 font-mono text-xs text-slate-600">
                   {employee.employeeCode}
                 </td>
@@ -235,13 +435,21 @@ export function EmployeeListPage() {
                 <td className="px-4 py-2">
                   <DocumentSummary employee={employee} />
                 </td>
+                <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>
+                  <IconButton
+                    label="Print employee form"
+                    icon={<PrintIcon />}
+                    busy={printingId === employee.employeeId}
+                    onClick={() => printOne(employee.employeeId)}
+                  />
+                </td>
               </tr>
             ))}
 
             {data && data.items.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">
-                  {debouncedSearch || department
+                <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
+                  {debouncedSearch || department || chips.length > 0 || joinedWithin
                     ? 'No employee matches those filters.'
                     : 'No employees yet. Add the first one to start their document checklist.'}
                 </td>
@@ -250,7 +458,7 @@ export function EmployeeListPage() {
 
             {!data && !error ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">
+                <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
                   Loading employees...
                 </td>
               </tr>
@@ -267,7 +475,7 @@ export function EmployeeListPage() {
           <Button
             variant="secondary"
             disabled={page <= 1}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            onClick={() => update({ page: Math.max(1, page - 1) })}
           >
             Previous
           </Button>
@@ -277,7 +485,7 @@ export function EmployeeListPage() {
           <Button
             variant="secondary"
             disabled={page >= data.totalPages}
-            onClick={() => setPage((current) => current + 1)}
+            onClick={() => update({ page: page + 1 })}
           >
             Next
           </Button>
@@ -322,7 +530,12 @@ function SortableHeader({
 /**
  * How far through the checklist this employee is.
  *
- * Overdue is called out separately rather than folded into "pending": a missing
+ * Written as what is LEFT rather than as '7/10'. This column is read while
+ * working down the Incomplete list, where the question is how many documents
+ * are still to be collected from somebody - and a bare fraction leaves the
+ * reader to do that subtraction on every row.
+ *
+ * Overdue is called out separately rather than folded into 'pending': a missing
  * document that is still within its deadline is routine, and one that is past
  * it is the thing HR is looking for.
  */
@@ -336,7 +549,9 @@ function DocumentSummary({ employee }: { employee: EmployeeListItem }) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-slate-700">
-        {counts.completed}/{counts.total}
+        {counts.pending === 0
+          ? 'All received'
+          : `${counts.pending} of ${counts.total} pending`}
       </span>
       {counts.overdue > 0 ? <Badge tone="overdue">{counts.overdue} overdue</Badge> : null}
       {counts.signatureReviewRequired > 0 ? (

@@ -10,7 +10,11 @@ export interface DashboardSummary {
     other: number
     notRecorded: number
     archived: number
+    /** Active plus left, with the archived records left out. */
+    activeAndLeft: number
     joinedLast30Days: number
+    left: number
+    leftThisYear: number
   }
   documents: {
     total: number
@@ -19,6 +23,11 @@ export interface DashboardSummary {
     pending: number
     overdue: number
     dueSoon: number
+  }
+  /** Active employees by whether their whole checklist is in. They add up to employees.total. */
+  checklists: {
+    complete: number
+    incomplete: number
   }
   employeesMissingMandatory: number
   signatures: {

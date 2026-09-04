@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PERMISSIONS } from '@asps-dms/shared'
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
+import { dashboardKeys } from '../dashboard/api.js'
 import { employeeKeys } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDateTime } from '../../lib/format.js'
@@ -51,6 +52,11 @@ export function SignatureCard({
       await queryClient.invalidateQueries({ queryKey: signatureKeys.employee(employeeId) })
       // The employee profile carries hasSignature, so it changes with this.
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
+      // And so does the dashboard: 'Pending employee signature' counts the
+      // people who have never signed, and one of them just has. Without this
+      // the tile keeps its old number until its cache goes stale, which reads
+      // as the signature not having saved.
+      await queryClient.invalidateQueries({ queryKey: dashboardKeys.summary })
     },
     onError: (error) => {
       // The dialog stays open with the ink still on it, so a failed save does

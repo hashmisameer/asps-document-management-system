@@ -10,6 +10,8 @@ import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
 import { ReportsPage } from './pages/ReportsPage.js'
+import { DocumentEmployeesPage } from './pages/DocumentEmployeesPage.js'
+import { DocumentsPage } from './pages/DocumentsPage.js'
 import { MySignaturePage } from './pages/MySignaturePage.js'
 import { PlacementEditorPage } from './features/signatures/PlacementEditorPage.js'
 import { DashboardPage } from './pages/DashboardPage.js'
@@ -80,6 +82,17 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* Every checklist row in the company - what the dashboard's document
+            tiles open. Declared before 'documents/:documentId/...' so the bare
+            path is the list. */}
+        <Route
+          path="documents"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.DOCUMENT_READ}>
+              <DocumentsPage />
+            </ProtectedRoute>
+          }
+        />
         {/* Positioning signatures on one document. Keyed by document rather
             than employee: the placements belong to the file, not the person. */}
         <Route
@@ -105,6 +118,14 @@ export default function App() {
           element={
             <ProtectedRoute permission={PERMISSIONS.REPORT_READ}>
               <ReportsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="reports/by-document-type/:documentTypeId"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.REPORT_READ}>
+              <DocumentEmployeesPage />
             </ProtectedRoute>
           }
         />

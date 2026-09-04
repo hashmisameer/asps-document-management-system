@@ -2,15 +2,20 @@ import type { Request, RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import {
   idParamSchema,
+  overrideIdentityCheckSchema,
+  previewIdentitySchema,
   rejectDocumentSchema,
   updateDeadlineSchema,
   uploadDocumentSchema,
   type AuthUser,
+  documentListQuerySchema,
 } from '@asps-dms/shared'
 import * as documentService from '../services/document.service.js'
+import { checkNameOnly } from '../services/documentVerification.service.js'
+import { inspectDocumentUpload } from '../services/fileValidation.service.js'
 import { requestContext } from '../services/audit.service.js'
 import { BadRequestError, UnauthenticatedError } from '../utils/errors.js'
-import { parseBody, parseParams } from '../utils/validation.js'
+import { parseBody, parseParams, parseQuery } from '../utils/validation.js'
 
 /**
  * Document endpoints.
@@ -149,4 +154,57 @@ export const removeFile: RequestHandler = async (req, res) => {
   const { documentId } = parseParams(req, documentParamsSchema)
   const document = await documentService.removeFile(documentId, actorOf(req), requestContext(req))
   res.json({ document })
+}
+
+/** Accepts a document the identity check refused, in the actor's own name. */
+export const overrideIdentityCheck: RequestHandler = async (req, res) => {
+  const documentId = parseParams(req, documentParamsSchema).documentId
+  const { reason } = parseBody(req, overrideIdentityCheckSchema)
+  const document = await documentService.overrideIdentityCheck(
+    documentId,
+    reason,
+    actorOf(req),
+    requestContext(req),
+  )
+  res.json({ document })
+}
+
+/**
+ * Checks a file against a typed name, before any employee record exists.
+ *
+ * The Add Employee screen collects the Aadhaar and PAN cards before there is
+ * anything to attach them to, so they were the only documents in the system
+ * nobody checked - attached on trust, and read only after the employee had been
+ * created around them.
+ *
+ * Nothing is stored and nothing is written. The file is read, compared and
+ * forgotten; the answer is for the screen to act on.
+ */
+export const previewIdentity: RequestHandler = async (req, res) => {
+  if (!req.file) {
+    throw new BadRequestError("Attach the document in a form field named 'file'.")
+  }
+
+  const { employeeName, documentName } = parseBody(req, previewIdentitySchema)
+  const inspected = await inspectDocumentUpload(req.file)
+
+  const result = await checkNameOnly(
+    { buffer: req.file.buffer, mimeType: inspected.mimeType },
+    employeeName,
+    documentName,
+  )
+
+  res.json(result)
+}
+
+/**
+ * Every checklist row in the company, filtered and paged.
+ *
+ * DOCUMENT_READ, which a Viewer has: this is the list the dashboard's document
+ * tiles open, and reading a tile and reading the list behind it are the same
+ * act. Nothing here changes anything.
+ */
+export const list: RequestHandler = async (req, res) => {
+  const query = parseQuery(req, documentListQuerySchema)
+  res.json(await documentService.list(query))
 }

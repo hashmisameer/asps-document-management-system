@@ -5,86 +5,94 @@ import { Alert } from '../components/ui/Alert.js'
 import { ApiError } from '../lib/apiError.js'
 import { useAuth } from '../features/auth/useAuth.js'
 import { dashboardKeys, fetchDashboardSummary } from '../features/dashboard/api.js'
+import {
+  documentTiles,
+  employeeTiles,
+  genderSlices,
+  needsAttentionTiles,
+  type DashboardTile,
+  type GenderSlice,
+} from '../features/dashboard/tiles.js'
 
 /**
  * The dashboard.
  *
  * Every number is counted against ACTIVE employees, in one query, so the tiles
- * cannot disagree with each other or with the employee list. What is chosen for
- * the top row is what somebody would act on this morning: who is outstanding,
- * what is overdue, and what is about to be.
+ * cannot disagree with each other or with the lists they open. What is chosen
+ * for the top row is what somebody would act on this morning: who is
+ * outstanding, what is overdue, and what is about to be.
+ *
+ * EVERY TILE IS A LINK. A number nobody can open is a number nobody can act on -
+ * it sends the reader to the employee list to work out for themselves which
+ * five people it meant. What each tile opens, and with which filters, is in
+ * features/dashboard/tiles.ts beside the value it shows.
  */
 
-function Tile({
-  label,
-  value,
-  tone = 'neutral',
-  hint,
-  to,
-}: {
-  label: string
-  value: number
-  tone?: 'neutral' | 'good' | 'warn' | 'bad'
-  hint?: string
-  to?: string
-}) {
-  const colour = {
-    neutral: 'text-slate-900',
-    good: 'text-status-verified',
-    warn: 'text-status-pending',
-    bad: 'text-status-rejected',
-  }[tone]
+/** Focusable, hoverable, and obviously clickable - the same on every tile. */
+const CARD =
+  'block rounded-card border border-slate-200 bg-white p-4 shadow-sm cursor-pointer ' +
+  'transition hover:border-brand-600 hover:bg-slate-50 hover:shadow ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ' +
+  'focus-visible:ring-offset-2'
 
-  const body = (
-    <>
-      <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">{label}</p>
-      <p className={`mt-1 text-3xl font-semibold ${colour}`}>{value}</p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
-    </>
-  )
+const TONE = {
+  neutral: 'text-slate-900',
+  good: 'text-status-verified',
+  warn: 'text-status-pending',
+  bad: 'text-status-rejected',
+}
 
-  const className =
-    'block rounded-card border border-slate-200 bg-white p-4 shadow-sm' +
-    (to ? ' transition hover:border-brand-600 hover:shadow' : '')
-
-  return to ? (
-    <Link to={to} className={className}>
-      {body}
+function Tile({ tile }: { tile: DashboardTile }) {
+  return (
+    <Link to={tile.to} className={CARD}>
+      <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">{tile.label}</p>
+      <p className={`mt-1 text-3xl font-semibold ${TONE[tile.tone]}`}>{tile.value}</p>
+      {tile.hint ? <p className="mt-1 text-xs text-slate-500">{tile.hint}</p> : null}
     </Link>
-  ) : (
-    <div className={className}>{body}</div>
   )
 }
 
-/** A single bar, so the split is readable at a glance rather than as three numbers. */
-function Split({
-  parts,
-}: {
-  parts: { label: string; value: number; className: string }[]
-}) {
-  const total = parts.reduce((sum, part) => sum + part.value, 0)
-  if (total === 0) return null
+/**
+ * The gender split: one bar, and a key whose entries are links.
+ *
+ * The count stays small beside the label, as it was - the bar is what is read at
+ * a glance and the numbers are what is read when somebody leans in.
+ */
+function GenderSplit({ slices }: { slices: GenderSlice[] }) {
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0)
 
   return (
     <div>
-      <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-100">
-        {parts.map((part) =>
-          part.value > 0 ? (
-            <div
-              key={part.label}
-              className={part.className}
-              style={{ width: `${(part.value / total) * 100}%` }}
-              title={`${part.label}: ${part.value}`}
-            />
-          ) : null,
-        )}
-      </div>
+      {total > 0 ? (
+        <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-100">
+          {slices.map((slice) =>
+            slice.value > 0 ? (
+              <div
+                key={slice.key}
+                className={slice.className}
+                style={{ width: `${(slice.value / total) * 100}%` }}
+                title={`${slice.label}: ${slice.value}`}
+              />
+            ) : null,
+          )}
+        </div>
+      ) : null}
+
       <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-        {parts.map((part) => (
-          <li key={part.label} className="flex items-center gap-1.5 text-xs text-slate-600">
-            <span className={`inline-block h-2 w-2 rounded-full ${part.className}`} />
-            {part.label}
-            <span className="font-semibold text-slate-900">{part.value}</span>
+        {slices.map((slice) => (
+          <li key={slice.key}>
+            <Link
+              to={slice.to}
+              className={
+                'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-slate-600 ' +
+                'hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none ' +
+                'focus-visible:ring-2 focus-visible:ring-brand-600'
+              }
+            >
+              <span className={`inline-block h-2 w-2 rounded-full ${slice.className}`} />
+              {slice.label}
+              <span className="font-semibold text-slate-900">{slice.value}</span>
+            </Link>
           </li>
         ))}
       </ul>
@@ -148,79 +156,26 @@ export function DashboardPage() {
           <section className="mt-6">
             <h2 className="text-sm font-semibold text-slate-900">Needs attention</h2>
             <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Tile
-                label="Overdue documents"
-                value={summary.data.documents.overdue}
-                tone={summary.data.documents.overdue > 0 ? 'bad' : 'good'}
-                hint="Past their date and still not in"
-                to="/employees"
-              />
-              <Tile
-                label="Missing an ID card"
-                value={summary.data.employeesMissingMandatory}
-                tone={summary.data.employeesMissingMandatory > 0 ? 'bad' : 'good'}
-                hint="Employees without Aadhaar or PAN"
-                to="/employees"
-              />
-              <Tile
-                label="Due in the next 7 days"
-                value={summary.data.documents.dueSoon}
-                tone={summary.data.documents.dueSoon > 0 ? 'warn' : 'good'}
-              />
-              <Tile
-                label="Awaiting signature"
-                value={summary.data.signatures.awaiting}
-                tone={summary.data.signatures.awaiting > 0 ? 'warn' : 'good'}
-                hint="Documents that still need signing"
-              />
+              {needsAttentionTiles(summary.data).map((tile) => (
+                <Tile key={tile.key} tile={tile} />
+              ))}
             </div>
           </section>
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold text-slate-900">Employees</h2>
-            <div className="mt-2 grid gap-4 lg:grid-cols-3">
-              <Tile
-                label="On the books"
-                value={summary.data.employees.total}
-                hint={`${summary.data.employees.joinedLast30Days} joined in the last 30 days`}
-                to="/employees"
-              />
-              <Tile
-                label="Archived"
-                value={summary.data.employees.archived}
-                hint="Left, and not counted anywhere above"
-              />
-              <div className="rounded-card border border-slate-200 bg-white p-4 shadow-sm">
+            {/* Four across, with the split beneath them: Total reads first and
+                the three it breaks into follow it. */}
+            <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {employeeTiles(summary.data).map((tile) => (
+                <Tile key={tile.key} tile={tile} />
+              ))}
+              <div className="rounded-card border border-slate-200 bg-white p-4 shadow-sm sm:col-span-2 lg:col-span-4">
                 <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">
                   By gender
                 </p>
                 <div className="mt-3">
-                  <Split
-                    parts={[
-                      {
-                        label: 'Men',
-                        value: summary.data.employees.male,
-                        className: 'bg-brand-600',
-                      },
-                      {
-                        label: 'Women',
-                        value: summary.data.employees.female,
-                        className: 'bg-status-review',
-                      },
-                      {
-                        label: 'Other',
-                        value: summary.data.employees.other,
-                        className: 'bg-status-verified',
-                      },
-                      {
-                        // Shown rather than folded into a side. Guessing would
-                        // put a number on the screen that somebody may act on.
-                        label: 'Not recorded',
-                        value: summary.data.employees.notRecorded,
-                        className: 'bg-slate-300',
-                      },
-                    ]}
-                  />
+                  <GenderSplit slices={genderSlices(summary.data)} />
                 </div>
               </div>
             </div>
@@ -228,24 +183,13 @@ export function DashboardPage() {
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold text-slate-900">Documents</h2>
-            <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Tile label="On the checklists" value={summary.data.documents.total} />
-              <Tile
-                label="Received"
-                value={summary.data.documents.received}
-                tone="good"
-                hint={`of ${summary.data.documents.total} on the checklists`}
-              />
-              <Tile
-                label="Still to come"
-                value={summary.data.documents.pending}
-                tone={summary.data.documents.pending > 0 ? 'warn' : 'good'}
-              />
-              <Tile
-                label="No signature on file"
-                value={summary.data.signatures.employeesWithoutSignature}
-                hint="Employees who cannot sign anything yet"
-              />
+            {/* Three, since 'No signature on file' moved into Needs attention as
+                'Pending employee signature' - it was the same fact twice, and
+                the copy in this section was the one nobody could act on. */}
+            <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {documentTiles(summary.data).map((tile) => (
+                <Tile key={tile.key} tile={tile} />
+              ))}
             </div>
           </section>
         </>

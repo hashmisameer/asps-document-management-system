@@ -6,10 +6,12 @@ import type {
   EmployeeListQuery,
   Employee,
   EmployeeProfile,
+  MarkEmployeeLeftInput,
   Paginated,
   UpdateEmployeeInput,
 } from '@asps-dms/shared'
 import { api } from '../../lib/api.js'
+import { fileFromResponse, type DownloadedFile } from '../../lib/download.js'
 
 /**
  * Employee endpoints.
@@ -81,8 +83,44 @@ export async function setEmployeeArchived(
   return response.data.employee
 }
 
-export async function listDocumentTypes(): Promise<DocumentType[]> {
-  const response = await api.get<{ documentTypes: DocumentType[] }>('/document-types')
+/**
+ * Records that an employee has left.
+ *
+ * Its own endpoint and its own permission, separate from archiving: leaving the
+ * company and the office being finished with the record are different things,
+ * and someone who has left is normally not archived at all.
+ */
+export async function markEmployeeLeft(
+  employeeId: number,
+  input: MarkEmployeeLeftInput,
+): Promise<EmployeeProfile> {
+  const response = await api.post<{ employee: EmployeeProfile }>(
+    `/employees/${employeeId}/exit`,
+    input,
+  )
+  return response.data.employee
+}
+
+/** Undoes an exit recorded by mistake. The audit trail keeps both halves. */
+export async function undoEmployeeExit(employeeId: number): Promise<EmployeeProfile> {
+  const response = await api.delete<{ employee: EmployeeProfile }>(
+    `/employees/${employeeId}/exit`,
+  )
+  return response.data.employee
+}
+
+/**
+ * The checklist's document types.
+ *
+ * Active ones by default - a retired type must not appear in a filter or on a
+ * form. Settings asks for all of them, because taking a document off the list
+ * is done there and a screen that hid the result would leave nowhere to put it
+ * back.
+ */
+export async function listDocumentTypes(includeInactive = false): Promise<DocumentType[]> {
+  const response = await api.get<{ documentTypes: DocumentType[] }>('/document-types', {
+    params: includeInactive ? { includeInactive: true } : undefined,
+  })
   return response.data.documentTypes
 }
 
@@ -149,4 +187,45 @@ export async function fetchReference(): Promise<ReferenceLists> {
 
 export const referenceKeys = {
   all: ['reference'] as const,
+}
+
+/**
+ * How long a print may take.
+ *
+ * Well past the general 30 seconds. A print of a hundred forms reads a hundred
+ * employees, their checklists and their photographs one at a time, and a
+ * request cut off while the server is still drawing it looks to the person at
+ * the printer exactly like a failure - when what actually happened is that they
+ * asked for a lot of paper.
+ */
+const PRINT_TIMEOUT_MS = 120_000
+
+/** The name comes from the SERVER - employee code and name, or the day of a bulk print. */
+export type PrintedForms = DownloadedFile
+
+/** One employee's form. */
+export async function printEmployeeForm(employeeId: number): Promise<PrintedForms> {
+  const response = await api.get<Blob>(`/employees/${employeeId}/print`, {
+    responseType: 'blob',
+    timeout: PRINT_TIMEOUT_MS,
+  })
+  return fileFromResponse(response, 'employee-form.pdf')
+}
+
+/**
+ * Several employees' forms, in ONE PDF with each of them on their own page.
+ *
+ * One file rather than a download per employee: a browser asked for twenty
+ * downloads at once blocks most of them, and twenty files is twenty print
+ * dialogues for somebody who wanted one stack of paper.
+ */
+export async function printEmployeeForms(
+  employeeIds: readonly number[],
+): Promise<PrintedForms> {
+  const response = await api.post<Blob>(
+    '/employees/print',
+    { employeeIds },
+    { responseType: 'blob', timeout: PRINT_TIMEOUT_MS },
+  )
+  return fileFromResponse(response, 'employee-forms.pdf')
 }
