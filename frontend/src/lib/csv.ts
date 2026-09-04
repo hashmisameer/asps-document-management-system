@@ -1,3 +1,5 @@
+import { saveBlob } from './download.js'
+
 /**
  * Downloading a report as CSV.
  *
@@ -47,13 +49,5 @@ export function toCsv<T>(rows: readonly T[], columns: readonly CsvColumn<T>[]): 
 
 /** Offers the CSV as a file, named for the report and the day it was taken. */
 export function downloadCsv(filename: string, csv: string): void {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename)
 }

@@ -51,9 +51,31 @@ export function setUnauthenticatedHandler(handler: UnauthenticatedHandler | null
   onUnauthenticated = handler
 }
 
+/**
+ * A failed request that asked for a Blob comes back holding a Blob.
+ *
+ * `responseType: 'blob'` applies to the ERROR body too, so the server's
+ * envelope arrives as a file rather than as JSON, and every failed download
+ * would otherwise read as "the server's reply could not be read". Turned back
+ * into JSON here, before toApiError looks at it, so a print that was refused
+ * says why it was refused.
+ */
+async function unpackBlobError(error: unknown): Promise<void> {
+  const response = (error as { response?: { data?: unknown } }).response
+  if (!(response?.data instanceof Blob)) return
+
+  try {
+    response.data = JSON.parse(await response.data.text())
+  } catch {
+    // Not JSON, or unreadable: leave it, and let toApiError fall back to what
+    // the status code says.
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error: unknown) => {
+  async (error: unknown) => {
+    await unpackBlobError(error)
     const apiError = toApiError(error)
 
     if (apiError.isAuthentication) onUnauthenticated?.()
