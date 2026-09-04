@@ -28,6 +28,8 @@ function employee(overrides: Partial<Employee> = {}): Employee {
     department: 'Accounts',
     designation: 'Accounts Officer',
     phoneNumber: '9876543210',
+    address: 'C-145, Sector 63, Noida',
+    email: null,
     dateOfBirth: '1990-08-15',
     gender: null,
     postAppliedFor: null,
@@ -39,6 +41,13 @@ function employee(overrides: Partial<Employee> = {}): Employee {
     appointmentLetterDate: null,
     hasPhoto: false,
     photoUpdatedAt: null,
+    // Nobody in these fixtures has left; the exit feature adds these and every
+    // employee already on file defaults to still being here.
+    employmentStatus: 'ACTIVE' as const,
+    resignationDate: null,
+    lastWorkingDate: null,
+    exitReason: null,
+    exitNotes: null,
     isActive: true,
     createdAt: '2026-04-01T00:00:00.000Z',
     updatedAt: '2026-04-01T00:00:00.000Z',
@@ -54,6 +63,74 @@ const SERVICE_CARD = `
   Aadhaar No. 1234 5678 9012     PAN: ${FIXTURE_PAN}
   Designation: Accounts Officer
 `
+
+/**
+ * The service card that started this rule.
+ *
+ * Copied from what OCR actually returned for the office's own card on
+ * 2026-09-02, red pen and all: the joining date is struck through, so the field
+ * reads 'DATE OF JOINING fom' and the only date left on the page is the date of
+ * birth. The name and the employee code came through perfectly.
+ */
+const SERVICE_CARD_AS_READ = `service cana yo
+/ SERVICE CAR
+Employee Code No. EMP007 | 7 Employee Card No. EMP007 I
+NAME RAVI KUMAR
+DATE OF JOINING fom DATE OF BIRTH 15/08/1990 Y
+DEPARTMENT CKET 2 DESIGNATION TAccountsOfficer}`
+
+describe('a document that names the employee is theirs, even read imperfectly', () => {
+  const fields = [
+    DOCUMENT_FIELDS.EMPLOYEE_NAME,
+    DOCUMENT_FIELDS.EMPLOYEE_CODE,
+    DOCUMENT_FIELDS.JOINING_DATE,
+  ]
+
+  it('accepts the service card whose joining date was struck through', () => {
+    const result = compareWithRecord(employee(), fields, SERVICE_CARD_AS_READ, TEXT_SOURCES.OCR)
+
+    expect(result.identityConfirmed).toBe(true)
+    expect(result.passed).toBe(true)
+  })
+
+  it('still reports the date it could not read, rather than hiding it', () => {
+    const result = compareWithRecord(employee(), fields, SERVICE_CARD_AS_READ, TEXT_SOURCES.OCR)
+
+    const joining = result.checks.find((check) => check.field === DOCUMENT_FIELDS.JOINING_DATE)
+    expect(joining?.result).toBe(FIELD_CHECK_RESULTS.NOT_FOUND)
+  })
+
+  it("still refuses another employee's document", () => {
+    const result = compareWithRecord(
+      employee({ employeeName: 'Sunil Verma', employeeCode: 'EMP999' }),
+      fields,
+      SERVICE_CARD_AS_READ,
+      TEXT_SOURCES.OCR,
+    )
+
+    expect(result.identityConfirmed).toBe(false)
+    expect(result.passed).toBe(false)
+  })
+
+  it('is not satisfied by a date alone, which identifies nobody', () => {
+    const result = compareWithRecord(
+      employee({ employeeName: 'Sunil Verma', employeeCode: 'EMP999' }),
+      fields,
+      'Joined 01/04/2026. Nothing else on this page.',
+      TEXT_SOURCES.OCR,
+    )
+
+    expect(result.passed).toBe(false)
+  })
+
+  it('never says the document may belong to someone else once the name matched', () => {
+    const result = compareWithRecord(employee(), fields, SERVICE_CARD_AS_READ, TEXT_SOURCES.OCR)
+    const message = describeFailure({ ...result, passed: false }, 'Service Card')
+
+    expect(message).not.toContain('someone else')
+    expect(message).toContain("right employee's")
+  })
+})
 
 describe('compareWithRecord', () => {
   it('passes a document that carries every detail asked for, however it spells them', () => {

@@ -31,6 +31,29 @@ export const DOCUMENT_FIELDS = {
 
 export type DocumentField = (typeof DOCUMENT_FIELDS)[keyof typeof DOCUMENT_FIELDS]
 
+/**
+ * The fields that say WHOSE document this is.
+ *
+ * A name, an employee code, an Aadhaar number and a PAN number each point at
+ * one person. Everything else on a form - a joining date, a designation, a
+ * department - describes the employment rather than the employee, and is
+ * shared by many of them: half the factory joined on the same day.
+ *
+ * The distinction decides when an upload is refused. Finding a joining date
+ * confirms nothing on its own, and NOT finding one disproves nothing either,
+ * once the name and the code on the page are the employee's. A service card
+ * whose joining date was struck through in red pen came back from OCR as 'DATE
+ * OF JOINING fom' - the field unreadable, the identity beyond doubt - and
+ * refusing that document told whoever filed it that a card with the right name
+ * and the right code on it 'may belong to someone else'.
+ */
+export const IDENTIFYING_DOCUMENT_FIELDS: ReadonlySet<DocumentField> = new Set([
+  DOCUMENT_FIELDS.EMPLOYEE_NAME,
+  DOCUMENT_FIELDS.EMPLOYEE_CODE,
+  DOCUMENT_FIELDS.AADHAAR_NUMBER,
+  DOCUMENT_FIELDS.PAN_NUMBER,
+])
+
 export const ALL_DOCUMENT_FIELDS: readonly DocumentField[] = Object.values(DOCUMENT_FIELDS)
 
 /** What the field is called on screen and in the message that refuses an upload. */

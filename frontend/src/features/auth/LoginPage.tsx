@@ -3,6 +3,7 @@ import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { loginSchema } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
+import { BrandBackdrop, BrandMark } from '../../components/BrandMark.js'
 import { Button } from '../../components/ui/Button.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { ApiError } from '../../lib/apiError.js'
@@ -88,8 +89,11 @@ export function LoginPage() {
 
   return (
     <main className="flex min-h-full items-center justify-center p-6">
+      <BrandBackdrop />
+
       <div className="w-full max-w-sm">
         <header className="mb-6 text-center">
+          <BrandMark className="mx-auto mb-3 h-12 w-12" />
           <p className="text-sm font-medium tracking-wide text-brand-700 uppercase">
             {ORGANISATION_NAME}
           </p>

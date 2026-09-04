@@ -46,6 +46,8 @@ const EXTENSIONS_BY_MIME: Readonly<Record<AllowedDocumentMimeType, readonly stri
   'application/pdf': ['.pdf'],
   'image/jpeg': ['.jpg', '.jpeg'],
   'image/png': ['.png'],
+  'image/webp': ['.webp'],
+  'image/tiff': ['.tif', '.tiff'],
 }
 
 /** The smaller of the business rule and the deployment's own ceiling. */
@@ -92,7 +94,8 @@ export async function inspectDocumentUpload(file: UploadedFile): Promise<Inspect
 
   if (!detected || !isAllowedMime(detected.mime)) {
     throw new UnsupportedMediaTypeError(
-      'That file is not a PDF, JPEG or PNG. Check that it opens on your own machine.',
+      'That file is not one this system can read. Upload a PDF, JPEG, PNG, WebP or TIFF - ' +
+        'and check that the file opens on your own machine.',
     )
   }
 

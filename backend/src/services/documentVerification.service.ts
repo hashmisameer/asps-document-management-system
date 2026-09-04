@@ -2,9 +2,12 @@ import {
   DOCUMENT_FIELDS,
   DOCUMENT_FIELD_LABEL,
   FIELD_CHECK_RESULTS,
+  IDENTIFYING_DOCUMENT_FIELDS,
   TEXT_SOURCES,
   matchField,
+  matchWords,
   matchesDocumentType,
+  nameOnDocument,
   type DocumentField,
   type Employee,
   type FieldCheck,
@@ -136,11 +139,38 @@ export function compareWithRecord(
     }
   })
 
+  // Whose document is this?
+  //
+  // An identifying field that MATCHED settles it. Every field having to match
+  // was the rule before, and it refused documents nobody could call wrong: the
+  // office's service card carries the employee's name and code, and its joining
+  // date is struck through in red pen, so OCR returns 'DATE OF JOINING fom'.
+  // Under the old rule that card was refused as possibly somebody else's, with
+  // that person's own name printed across the top of it.
+  //
+  // The guard this exists for is unaffected. Filing one employee's form against
+  // another's record still fails, because the name and code on the page are the
+  // other employee's and neither will match. What no longer fails is a document
+  // that names the right person and was read imperfectly - which is the common
+  // case, and was costing an override every time.
+  const identityConfirmed = checks.some(
+    (check) =>
+      IDENTIFYING_DOCUMENT_FIELDS.has(check.field) &&
+      check.result === FIELD_CHECK_RESULTS.MATCHED,
+  )
+
+  // Types that ask for no identifying field at all - if one is ever configured
+  // that way - keep the old all-or-nothing rule, since there is nothing else to
+  // go on.
+  const asksForIdentity = fields.some((field) => IDENTIFYING_DOCUMENT_FIELDS.has(field))
+
   const passed =
     typeRecognised !== false &&
-    checks.every((check) => check.result !== FIELD_CHECK_RESULTS.NOT_FOUND)
+    (identityConfirmed ||
+      (!asksForIdentity &&
+        checks.every((check) => check.result !== FIELD_CHECK_RESULTS.NOT_FOUND)))
 
-  return { passed, source, checks, unreadable, typeRecognised }
+  return { passed, identityConfirmed, source, checks, unreadable, typeRecognised }
 }
 
 /**
@@ -159,13 +189,30 @@ export async function checkUpload(
   fields: readonly DocumentField[],
   file: { buffer: Buffer; mimeType: string },
   recognitionKeywords: readonly string[] = [],
+  /**
+   * Which document this is, for the log only.
+   *
+   * A failure used to be recorded against an employee and nothing else, so
+   * working out whether a capture was the bio data form or the gratuity form
+   * meant matching timestamps against what somebody remembered clicking. Names
+   * of document TYPES are not employee data; the file's own name is not
+   * recorded here for the same reason its contents are not.
+   */
+  documentName?: string,
 ): Promise<IdentityCheck | null> {
   if (!env.IDENTITY_CHECK_ENABLED) return null
   // Nothing to check only when the type asks for NEITHER - no fields to confirm
   // and no wording to recognise it by.
   if (fields.length === 0 && recognitionKeywords.length === 0) return null
 
-  const extracted = await extractText(file.buffer, file.mimeType)
+  // What "enough" means here is exactly what the check is about to ask, so the
+  // reading can stop the moment the answer is yes: no further pages, and no
+  // second pass in other languages. It only ever ends work early - the same
+  // comparison runs again below on whatever text came back.
+  const enough = (text: string): boolean =>
+    compareWithRecord(employee, fields, text, TEXT_SOURCES.OCR, recognitionKeywords).passed
+
+  const extracted = await extractText(file.buffer, file.mimeType, enough)
   const result = compareWithRecord(
     employee,
     fields,
@@ -177,6 +224,7 @@ export async function checkUpload(
   logger.info(
     {
       employeeId: employee.employeeId,
+      documentName,
       source: result.source,
       pagesRead: extracted.pagesRead,
       passed: result.passed,
@@ -193,7 +241,7 @@ export async function checkUpload(
   // bug. See IDENTITY_CHECK_LOG_TEXT - it puts document contents in a log.
   if (!result.passed && env.IDENTITY_CHECK_LOG_TEXT) {
     logger.warn(
-      { employeeId: employee.employeeId, source: result.source, text: extracted.text },
+      { employeeId: employee.employeeId, documentName, source: result.source, text: extracted.text },
       'Identity check failed; this is what the document was read as',
     )
   }
@@ -241,9 +289,59 @@ export function describeFailure(check: IdentityCheck, documentName?: string): st
       ? missing[0]
       : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`
 
+  // 'It may belong to someone else' is only ever said when nothing on the page
+  // identified the employee. Where the name or the code DID match, that sentence
+  // was simply untrue - it was printed over a document with the right person's
+  // name on it - and an upload that reaches this point without identity
+  // confirmed no longer happens for that reason anyway.
+  if (check.identityConfirmed) {
+    return (
+      `This document is the right employee's, but their ${list} could not be ` +
+      'read from it. Upload it again or accept it with a reason.'
+    )
+  }
+
   return (
     `This document does not mention the employee's ${list}, so it may belong to ` +
     'someone else. Check that it is the right document, then upload it again or ' +
     'accept it with a reason.'
   )
+}
+
+/**
+ * Whether a file names a person, before any employee record exists.
+ *
+ * The Add Employee screen collects the two identity cards BEFORE the record is
+ * created, so there is no document row to attach them to and nothing for the
+ * ordinary check to run against. Without this, those two cards were the only
+ * documents in the system nobody checked - they were attached on trust and read
+ * only later, after the employee had been created around them.
+ *
+ * Nothing is stored. The file is read, compared with the name that has been
+ * typed on the form, and forgotten.
+ */
+export async function checkNameOnly(
+  file: { buffer: Buffer; mimeType: string },
+  expectedName: string,
+  documentName: string,
+): Promise<{ readable: boolean; matched: boolean; nameFound: string | null }> {
+  const extracted = await extractText(file.buffer, file.mimeType, (text) =>
+    matchWords(expectedName, text),
+  )
+
+  const readable = extracted.source !== TEXT_SOURCES.NONE && extracted.text.trim().length > 0
+  const matched = readable && matchWords(expectedName, extracted.text)
+
+  logger.info(
+    { documentName, source: extracted.source, readable, matched },
+    'Identity documents checked before the employee record exists',
+  )
+
+  return {
+    readable,
+    matched,
+    // Only worth reporting when it disagrees. Offered as context for a person
+    // deciding, never as grounds for the decision itself.
+    nameFound: matched ? null : nameOnDocument(extracted.text),
+  }
 }

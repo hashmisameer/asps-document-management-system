@@ -23,13 +23,28 @@ interface ModalProps {
 export function Modal({ open, title, description, onClose, children, footer }: ModalProps) {
   const panel = useRef<HTMLDivElement>(null)
 
+  /**
+   * The current onClose, without it being a dependency of the effect below.
+   *
+   * Callers pass an inline arrow, so `onClose` is a different function on every
+   * render of the parent. With it in the dependency array the effect re-ran on
+   * each of those renders - and it calls `panel.current?.focus()`, which pulls
+   * the caret out of whatever field is being typed in. Typing one letter in a
+   * dialog's text box re-rendered the dialog, re-ran the effect, and moved focus
+   * off the box; the second letter went nowhere.
+   */
+  const latestClose = useRef(onClose)
+  latestClose.current = onClose
+
   useEffect(() => {
     if (!open) return
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') latestClose.current()
     }
     document.addEventListener('keydown', onKeyDown)
+
+    // Focus moves to the dialog when it OPENS, and not again while it is open.
     panel.current?.focus()
 
     // The page behind must not scroll while a dialog is over it.
@@ -40,7 +55,7 @@ export function Modal({ open, title, description, onClose, children, footer }: M
       document.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

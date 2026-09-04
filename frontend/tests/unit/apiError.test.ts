@@ -92,8 +92,40 @@ describe('toApiError', () => {
       response: { status: 502, data: '<html><body>Bad Gateway - nginx/1.24.0</body></html>' },
     })
 
-    expect(proxyPage.code).toBe(API_ERROR_CODES.INTERNAL_ERROR)
+    // A gateway failure, not an application fault: nothing in this application
+    // ran. Reported as SERVICE_UNAVAILABLE so the message can say what actually
+    // happened rather than blaming the request.
+    expect(proxyPage.code).toBe(API_ERROR_CODES.SERVICE_UNAVAILABLE)
     expect(proxyPage.message).not.toContain('nginx')
+  })
+
+  it('reads an empty 500 as the connection breaking, not as a bad document', () => {
+    // Reproduced by restarting the API during a 60-second upload: the proxy
+    // answers 500 with no body at all. This API answers every failure with an
+    // envelope, 500s included, so a 5xx without one never came from it.
+    //
+    // It used to reach the person uploading as 'Something went wrong. Please
+    // try again.', which sent them looking at their document for a fault that
+    // was never in it.
+    const dropped = toApiError({ response: { status: 500, data: '' } })
+
+    expect(dropped.code).toBe(API_ERROR_CODES.SERVICE_UNAVAILABLE)
+    expect(dropped.message).toContain('nothing was saved')
+    expect(dropped.message).toContain('not a problem with the document')
+  })
+
+  it('still reports a real application 500, which arrives with an envelope', () => {
+    const real = toApiError({
+      response: {
+        status: 500,
+        data: {
+          error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.', referenceId: 'abc123' },
+        },
+      },
+    })
+
+    expect(real.code).toBe(API_ERROR_CODES.INTERNAL_ERROR)
+    expect(real.referenceId).toBe('abc123')
   })
 
   it('passes an ApiError through unchanged', () => {

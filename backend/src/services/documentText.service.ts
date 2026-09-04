@@ -39,7 +39,15 @@ export interface ExtractedText {
  */
 const MIN_USEFUL_TEXT_LENGTH = 60
 
-/** Rendering scale for OCR. 2x a 72dpi page is ~144dpi, which Tesseract reads well. */
+/**
+ * Rendering scale for OCR. 2x a 72dpi page is ~144dpi, which Tesseract reads well.
+ *
+ * 3.5x (~252dpi) was tried, on the theory that 144dpi is half what Tesseract
+ * asks for. Measured on the company's PF form it read exactly the same three
+ * fields as 2x and took 35 seconds instead of 26 - and that time is spent
+ * inside the upload request, five pages of it against a 90 second budget. Left
+ * where it is until a document turns up that a higher one demonstrably rescues.
+ */
 const OCR_RENDER_SCALE = 2
 
 type PdfModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
@@ -69,11 +77,16 @@ async function loadPdfjs(): Promise<PdfModule> {
  * at a time; two overlapping calls would interleave and return each other's
  * text, which here means checking one employee's document against another's.
  */
-let ocrWorker: import('tesseract.js').Worker | null = null
+const ocrWorkers = new Map<string, import('tesseract.js').Worker>()
 let ocrQueue: Promise<unknown> = Promise.resolve()
 
-async function getOcrWorker(): Promise<import('tesseract.js').Worker> {
-  if (ocrWorker) return ocrWorker
+async function getOcrWorker(
+  key: string,
+  languages: string,
+  layout: PageLayout,
+): Promise<import('tesseract.js').Worker> {
+  const existing = ocrWorkers.get(key)
+  if (existing) return existing
 
   const { createWorker } = await import('tesseract.js')
   // English AND Hindi. The company's own appointment letter is printed in
@@ -84,7 +97,7 @@ async function getOcrWorker(): Promise<import('tesseract.js').Worker> {
   // Configurable because it is a trade: each language is a model to load and a
   // file to vendor onto the offline server, and an office with no Hindi
   // paperwork should not pay for one.
-  ocrWorker = await createWorker(env.OCR_LANGUAGES, 1, {
+  const worker = await createWorker(languages, 1, {
     // Unset in development, where tesseract.js fetches these from a CDN. On the
     // company server, which has no route to the internet, they must point at a
     // local copy or every OCR pass fails.
@@ -93,19 +106,57 @@ async function getOcrWorker(): Promise<import('tesseract.js').Worker> {
     ...(env.TESSERACT_CACHE_PATH ? { cachePath: env.TESSERACT_CACHE_PATH } : {}),
     logger: () => undefined,
   })
-  return ocrWorker
+
+  // A page rendered or upscaled here carries no DPI of its own that Tesseract
+  // can trust, and it scales its internal work off that figure. Told 300 it
+  // reads small print that it otherwise skips: on the office's PAN card the
+  // name line comes back only when this is set.
+  await worker.setParameters({
+    tessedit_pageseg_mode: layout as unknown as Parameters<typeof worker.setParameters>[0]['tessedit_pageseg_mode'],
+    user_defined_dpi: '300',
+  })
+
+  ocrWorkers.set(key, worker)
+  return worker
 }
 
-/** Shuts the worker down, so the process can exit rather than hanging on it. */
+/** Shuts the workers down, so the process can exit rather than hanging on them. */
 export async function closeOcrWorker(): Promise<void> {
-  const worker = ocrWorker
-  ocrWorker = null
-  if (worker) await worker.terminate()
+  const workers = [...ocrWorkers.values()]
+  ocrWorkers.clear()
+  await Promise.all(workers.map((worker) => worker.terminate()))
 }
 
-async function recognise(image: Buffer): Promise<string> {
+/**
+ * How Tesseract is told to carve the page up.
+ *
+ * AUTO is its own layout analysis and is right for a form that fills the page.
+ * SINGLE_BLOCK treats the whole image as one block of text, which is what reads
+ * a small card photographed in the middle of a large empty page: the layout
+ * analysis looks at all that white, decides there is no column structure worth
+ * the name, and returns nothing at all for the card. Measured on the office's
+ * PAN card, AUTO finds no trace of the name and SINGLE_BLOCK finds the line it
+ * is printed on.
+ *
+ * A page is read with EACH of these and the text added together, because which
+ * one wins depends on the document and there is no way to tell in advance.
+ */
+const PAGE_LAYOUTS = ['3', '6'] as const
+type PageLayout = (typeof PAGE_LAYOUTS)[number]
+
+/**
+ * Roughly what one reading pass over a photograph costs.
+ *
+ * Measured: a SINGLE_BLOCK pass over a 2000px image is about twenty seconds.
+ * Used only to decide whether there is time to start another one.
+ */
+const PASS_BUDGET_MS = 25_000
+
+async function recognise(image: Buffer, languages: string, layout: PageLayout): Promise<string> {
   const run = ocrQueue.then(async () => {
-    const worker = await getOcrWorker()
+    // Keyed by layout as well as language, so a worker is configured once and
+    // never re-configured underneath a call that is already using it.
+    const worker = await getOcrWorker(`${languages}|${layout}`, languages, layout)
     const result = await worker.recognize(image)
     return result.data.text
   })
@@ -114,6 +165,97 @@ async function recognise(image: Buffer): Promise<string> {
   // image would block every check after it for the life of the process.
   ocrQueue = run.catch(() => undefined)
   return run
+}
+
+/**
+ * The scan inside a scanned PDF, at the resolution it was scanned.
+ *
+ * A "scanned PDF" is a photograph in a PDF wrapper: one image, placed on a page
+ * of some nominal size, with no text of its own. Rendering that page throws
+ * resolution away twice over - the image is resampled down onto an A4 canvas,
+ * and the card that filled the photograph becomes a portion of a mostly empty
+ * page. Measured on the office's PAN card, rendered at 72, 150, 200 and 300 dpi,
+ * the employee's name could not be read at ANY of them, and upscaling afterwards
+ * did not bring it back. The embedded image is 2518x1579 and reads.
+ *
+ * So the image is taken out and read directly. Only when the page is ONE image
+ * and carries no real text: a page with several images, or with vector text
+ * around them, is a laid-out document where the arrangement is part of the
+ * meaning, and that is what rendering is for.
+ *
+ * Returns null whenever it is not that simple, and the caller renders instead.
+ */
+async function embeddedScan(
+  page: import('pdfjs-dist/types/src/display/api.js').PDFPageProxy,
+): Promise<Buffer | null> {
+  try {
+    const { OPS } = await loadPdfjs()
+    const operators = await page.getOperatorList()
+
+    const names: string[] = []
+    for (let i = 0; i < operators.fnArray.length; i += 1) {
+      const op = operators.fnArray[i]
+      if (op === OPS.paintImageXObject || op === OPS.paintXObject) {
+        const args = operators.argsArray[i] as unknown[]
+        if (typeof args[0] === 'string') names.push(args[0])
+      }
+    }
+
+    // One image, or this is a laid-out page rather than a scan.
+    if (names.length !== 1) return null
+    const only = names[0]
+    if (only === undefined) return null
+
+    // pdf.js resolves image objects lazily; the callback form waits for one.
+    const image = await new Promise<{
+      width: number
+      height: number
+      kind: number
+      data: Uint8Array | Uint8ClampedArray
+    } | null>((resolve) => {
+      try {
+        page.objs.get(only, (value: unknown) => resolve((value as never) ?? null))
+      } catch {
+        resolve(null)
+      }
+    })
+
+    if (!image?.data || !image.width || !image.height) return null
+
+    // Smaller than this is a logo or a signature strip, not a scanned page.
+    if (Math.max(image.width, image.height) < 800) return null
+
+    // pdf.js image kinds: 1 grayscale, 2 RGB, 3 RGBA.
+    const channels = image.kind === 3 ? 4 : image.kind === 1 ? 1 : 3
+    if (image.data.length < image.width * image.height * channels) return null
+
+    return await sharp(Buffer.from(image.data.buffer, image.data.byteOffset, image.data.length), {
+      raw: { width: image.width, height: image.height, channels },
+    })
+      .png()
+      .toBuffer()
+  } catch (error) {
+    logger.warn({ err: error }, 'Could not take the image out of the PDF; rendering the page instead')
+    return null
+  }
+}
+
+/**
+ * Whether this is a picture rather than a PDF.
+ *
+ * Listed rather than inferred from the 'image/' prefix: what belongs here is
+ * what sharp can actually decode, and the upload validator accepts exactly this
+ * set. A type that reached OCR without sharp being able to open it would come
+ * back as an unreadable document, which is a confusing way to say
+ * 'unsupported'.
+ */
+function isImageType(mimeType: string): boolean {
+  return (
+    mimeType === 'image/png' ||
+    mimeType === 'image/jpeg' ||
+    mimeType === 'image/webp' ||
+    mimeType === 'image/tiff'
+  )
 }
 
 /** Renders one page to a PNG for OCR. */
@@ -140,7 +282,13 @@ async function renderPage(
   return canvas.toBuffer('image/png')
 }
 
-async function readPdf(buffer: Buffer): Promise<ExtractedText> {
+async function readPdf(
+  buffer: Buffer,
+  languages: string,
+  layout: PageLayout,
+  scale: number | undefined,
+  isEnough?: (text: string) => boolean,
+): Promise<ExtractedText> {
   const { getDocument } = await loadPdfjs()
 
   const pdf = await getDocument({
@@ -172,17 +320,43 @@ async function readPdf(buffer: Buffer): Promise<ExtractedText> {
 
     // No usable text layer: this is a scan wearing a PDF wrapper, so render the
     // pages and read them the way a person would.
+    //
+    // Rendered pages go to OCR exactly as pdf.js drew them. Putting them
+    // through the photograph preparation as well was tried and measured on the
+    // company's own PF form, and it is actively harmful: reading it raw found
+    // the name, the employee code and the joining date; the same page
+    // greyscaled, contrast-normalised and sharpened found only the name. That
+    // preparation exists to rescue an unevenly lit phone photo, and a page
+    // rendered from a PDF is already flat, clean and correctly exposed - the
+    // normalise step just crushes the faint entries it was meant to lift.
     const recognised: string[] = []
+    let read = 0
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)
-      recognised.push(await recognise(await renderPage(page)))
+      // The scan itself where there is one, the rendered page otherwise.
+      const scan = await embeddedScan(page)
+      const image = scan ?? (await renderPage(page))
+      if (scan) {
+        // Scale variants only mean something on a real photograph; a rendered
+        // page is already drawn at a chosen size.
+        recognised.push(await recognise(await prepareForOcr(scan, scale), languages, layout))
+      } else {
+        recognised.push(await recognise(image, languages, layout))
+      }
+      read = pageNumber
+
+      // Stop as soon as the caller has what it came for. A form carries its
+      // details on the first page and the rest is terms and a nominee table;
+      // reading those cost seconds each to confirm something already confirmed,
+      // inside a request somebody is sitting and waiting on.
+      if (isEnough?.(recognised.join('\n'))) break
     }
 
     const ocrText = recognised.join('\n')
     return {
       text: ocrText,
       source: ocrText.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
-      pagesRead: pageCount,
+      pagesRead: read,
     }
   } finally {
     await pdf.destroy()
@@ -202,6 +376,39 @@ const MIN_OCR_WIDTH = 2000
 const MAX_OCR_WIDTH = 4000
 
 /**
+ * A ceiling in PIXELS rather than width, for the scaled passes below.
+ *
+ * MAX_OCR_WIDTH used to clamp everything, and that quietly cancelled the whole
+ * point of trying 3x: three times a 2518px scan is 7554px, which was clipped
+ * straight back to 4000 and read at the wrong size. This is here only so that a
+ * 50 MP photograph tripled does not become a bitmap nothing can hold.
+ */
+const MAX_OCR_PIXELS = 40_000_000
+
+/**
+ * The scales a photograph is read at, as MULTIPLES of its own size.
+ *
+ * Multiples, not fixed widths, because that is what actually varies: what
+ * matters to Tesseract is how many pixels a printed character ends up with, and
+ * that follows the image's own resolution. Fixed widths also hid the 3x case
+ * entirely - it was clamped to the 4000px ceiling and never tried.
+ *
+ * No single scale works on these documents. Measured on the office's own files:
+ *
+ *   PAN card             found the name ONLY at 3x. 1x, 2x and 4x all failed.
+ *   Payment of Gratuity  found it at 1x and 2x. Failed at 3x.
+ *   Service card         found it at every scale.
+ *
+ * Fixing the scale for one breaks the other, so the page is read at several and
+ * the text added together. Reading STOPS the moment the name is found, so a
+ * document that reads at 1x never pays for the rest.
+ *
+ * Deliberately no auto-cropping to the card: it was tried on the embedded image
+ * and stopped the name being found at all.
+ */
+const OCR_SCALES = [1, 2, 3] as const
+
+/**
  * Prepares a photograph for OCR.
  *
  * An uploaded image used to go straight to Tesseract exactly as it arrived.
@@ -216,13 +423,26 @@ const MAX_OCR_WIDTH = 4000
  * If any of it fails the original buffer is used: preparation that cannot run
  * must not turn a readable document into an unreadable one.
  */
-async function prepareForOcr(buffer: Buffer): Promise<Buffer> {
+async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer> {
   try {
     const metadata = await sharp(buffer, { failOn: 'none' }).metadata()
     const width = metadata.width ?? 0
 
     let pipeline = sharp(buffer, { failOn: 'none' }).rotate()
-    if (width > 0 && width < MIN_OCR_WIDTH) {
+
+    if (scale === 1) {
+      // Left at the size it arrived. Not a no-op worth skipping: enlarging a
+      // small card can smear the very strokes that distinguish B from H, and on
+      // the office's gratuity form the untouched image is the one that reads.
+    } else if (scale !== undefined && width > 0) {
+      const height = metadata.height ?? 0
+      // Capped on total pixels, not width, so a large scan tripled is refused
+      // for being enormous rather than quietly read at the wrong size.
+      const wanted = height > 0 && width * scale * (height * scale) > MAX_OCR_PIXELS
+        ? Math.floor(width * Math.sqrt(MAX_OCR_PIXELS / (width * height)))
+        : Math.round(width * scale)
+      pipeline = pipeline.resize({ width: wanted })
+    } else if (width > 0 && width < MIN_OCR_WIDTH) {
       pipeline = pipeline.resize({ width: Math.min(MIN_OCR_WIDTH, MAX_OCR_WIDTH) })
     } else if (width > MAX_OCR_WIDTH) {
       pipeline = pipeline.resize({ width: MAX_OCR_WIDTH })
@@ -235,8 +455,31 @@ async function prepareForOcr(buffer: Buffer): Promise<Buffer> {
   }
 }
 
-async function readImage(buffer: Buffer): Promise<ExtractedText> {
-  const text = await recognise(await prepareForOcr(buffer))
+/**
+ * Reads a photograph.
+ *
+ * Rotation detection was built here and then taken out again, which is worth
+ * recording so it is not built a second time. It worked, in the sense that
+ * mattered least: given the office's PF form turned on its side it correctly
+ * identified 90 degrees, by scoring how much of each trial reading fell inside
+ * real words. What it could not do was recover the page - reading it back the
+ * right way up still found neither the name nor the employee code, because a
+ * photograph that OCR cannot follow across lines is usually also blurred,
+ * skewed or lit unevenly, and turning it does not fix any of that.
+ *
+ * It cost 82 seconds against a 90 second budget, up from 31. So the honest
+ * trade was: no documents rescued, and every hard-to-read one pushed to the
+ * edge of a timeout. A sideways page is refused, and the person holding it
+ * accepts it with a reason - which takes them a sentence, not a minute and a
+ * half of waiting for the same refusal.
+ */
+async function readImage(
+  buffer: Buffer,
+  languages: string,
+  layout: PageLayout,
+  scale?: number,
+): Promise<ExtractedText> {
+  const text = await recognise(await prepareForOcr(buffer, scale), languages, layout)
   return {
     text,
     source: text.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
@@ -253,20 +496,184 @@ async function readImage(buffer: Buffer): Promise<ExtractedText> {
  * which the verification service reports as 'could not be read' - a refusal a
  * person can act on, rather than a hang they cannot.
  */
-export async function extractText(buffer: Buffer, mimeType: string): Promise<ExtractedText> {
+export async function extractText(
+  buffer: Buffer,
+  mimeType: string,
+  /**
+   * Whether the text so far already answers the caller's question.
+   *
+   * Optional, and only ever used to stop work early - never to change what is
+   * returned. Reading is otherwise the same whether anyone asks or not.
+   */
+  isEnough?: (text: string) => boolean,
+): Promise<ExtractedText> {
   const unread: ExtractedText = { text: '', source: TEXT_SOURCES.NONE, pagesRead: 0 }
 
-  const read = async (): Promise<ExtractedText> => {
-    if (mimeType === 'application/pdf') return readPdf(buffer)
-    if (mimeType === 'image/png' || mimeType === 'image/jpeg') return readImage(buffer)
+  const startedAt = Date.now()
+
+  // Held out here so that a timeout can hand back what HAS been read. Reading
+  // now happens in several passes, and returning nothing because the last one
+  // ran long would throw away a name the first one found.
+  let combined = ''
+  let best: ExtractedText = unread
+
+  const soFarAsResult = (): ExtractedText => ({
+    text: combined,
+    source: combined.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
+    pagesRead: best.pagesRead,
+  })
+
+  const readWith = async (
+    languages: string,
+    layout: PageLayout,
+    scale: number | undefined,
+    enoughSoFar?: (text: string) => boolean,
+  ): Promise<ExtractedText> => {
+    if (mimeType === 'application/pdf') return readPdf(buffer, languages, layout, scale, enoughSoFar)
+    if (isImageType(mimeType)) return readImage(buffer, languages, layout, scale)
     return unread
+  }
+
+  /**
+   * English first, and the other languages only if English did not answer it.
+   *
+   * Measured on the office's PF form: 'eng' reads it in 7 seconds and
+   * 'eng+hin' in 15, finding exactly the same name, code and joining date. Two
+   * language models is twice the work on every page, and nine of the ten
+   * document types are printed in English - they were all paying for the Hindi
+   * appointment letter.
+   *
+   * The fallback is what keeps that honest. A page the fast pass could not make
+   * sense of is read again with the full set, so the Hindi letter still reads;
+   * it just costs the extra pass rather than charging it to everything else.
+   */
+  const read = async (): Promise<ExtractedText> => {
+    const languageSets =
+      env.OCR_PRIMARY_LANGUAGES === env.OCR_LANGUAGES
+        ? [env.OCR_LANGUAGES]
+        : [env.OCR_PRIMARY_LANGUAGES, env.OCR_LANGUAGES]
+
+    // Cheapest and most often right first, then wider. Each pass ADDS its text
+    // to what came before rather than replacing it, because a pass that reads
+    // the page badly overall may still be the only one that read the one line
+    // being looked for - which is exactly the PAN card's case.
+    //
+    // NOT the full cross product. Every combination except one earns its place;
+    // the extra languages read with SINGLE_BLOCK is the exception, and it is the
+    // most expensive thing here by a distance. Measured on the office's PAN card:
+    //
+    //   eng     psm 3   1.3s     0 characters
+    //   eng     psm 6  22.5s  2173 characters
+    //   eng+hin psm 3   1.8s     0 characters
+    //   eng+hin psm 6  44.7s  2116 characters   <- dropped
+    //
+    // Forty-five seconds to return slightly LESS than the pass before it, inside
+    // a request somebody is waiting on, on the way to the same answer. Dropping
+    // it takes the worst case from about seventy seconds to about twenty-six.
+    //
+    // The Hindi appointment letter is not affected: it reads on the very first
+    // pass, and would still get a full-language reading with the normal layout.
+    interface Pass {
+      languages: string
+      layout: PageLayout
+      /** A multiple of the image's own size. undefined keeps the default rule. */
+      scale: number | undefined
+    }
+
+    const isImage = isImageType(mimeType)
+    const fast = languageSets[0] ?? env.OCR_LANGUAGES
+
+    // A photograph is also read at SEVERAL SIZES, because no single one works.
+    // Measured on the office's own files: the PAN card gives up the name only at
+    // 3x, the gratuity form only at 1x and 2x, and the service card at any of
+    // them. Fixing the size for one breaks the other, so all three are tried and
+    // the text added together.
+    //
+    // The PDF route does not do this - its pages are rendered at a known scale
+    // from vector geometry rather than resampled from a photograph, and no PDF
+    // has yet needed a second size.
+    const passes: Pass[] = isImage
+      ? [
+          // The order the office measured, cheapest first. SINGLE_BLOCK at the
+          // image's own size reads most of these cards; 3x is what rescues the
+          // PAN card and nothing else does.
+          { languages: fast, layout: '6', scale: OCR_SCALES[0] },
+          { languages: fast, layout: '3', scale: OCR_SCALES[0] },
+          { languages: fast, layout: '6', scale: OCR_SCALES[1] },
+          { languages: fast, layout: '6', scale: OCR_SCALES[2] },
+          { languages: fast, layout: '3', scale: OCR_SCALES[2] },
+          ...languageSets.slice(1).map((languages) => ({
+            languages,
+            layout: '3' as PageLayout,
+            scale: undefined,
+          })),
+        ]
+      : languageSets.flatMap((languages, index) =>
+          PAGE_LAYOUTS.filter((layout) => index === 0 || layout === PAGE_LAYOUTS[0]).map(
+            (layout) => ({ languages, layout, scale: undefined }),
+          ),
+        )
+
+    const settled = (text: string): boolean =>
+      isEnough ? isEnough(text) : text.trim().length > 0
+
+    for (const [index, pass] of passes.entries()) {
+      // Do not START a pass that cannot finish. A single SINGLE_BLOCK reading of
+      // a photograph takes around twenty seconds, and one begun with less than
+      // that left is twenty seconds spent to be cut off mid-way - the budget
+      // gone and nothing added. Better to stop with what has been read.
+      const remaining = env.IDENTITY_CHECK_TIMEOUT_MS - (Date.now() - startedAt)
+      if (index > 0 && remaining < PASS_BUDGET_MS) {
+        logger.info(
+          { remaining, pass: index + 1 },
+          'Not enough time left for another reading pass; using what was read',
+        )
+        break
+      }
+
+      const out = await readWith(pass.languages, pass.layout, pass.scale, (soFar) =>
+        settled(combined ? `${combined}\n${soFar}` : soFar),
+      )
+
+      // A PDF that carries its own text layer is answered exactly, once. There
+      // is no second reading to add and no layout to guess at - these are the
+      // characters the file contains.
+      if (out.source === TEXT_SOURCES.PDF_TEXT) return out
+
+      combined = combined ? `${combined}\n${out.text}` : out.text
+      if (out.text.trim().length > 0) best = out
+
+      if (settled(combined)) {
+        if (index > 0) {
+          logger.info(
+            {
+              languages: pass.languages,
+              layout: pass.layout,
+              scale: pass.scale,
+              pass: index + 1,
+            },
+            'An extra reading pass was what settled this document',
+          )
+        }
+        break
+      }
+    }
+
+    return soFarAsResult()
   }
 
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<ExtractedText>((resolve) => {
     timer = setTimeout(() => {
-      logger.warn({ mimeType }, 'Document text extraction timed out')
-      resolve(unread)
+      // Whatever has been read by now, not nothing. A document that ran over
+      // the budget on its third reading pass has usually already been read once
+      // successfully, and discarding that told the person their document could
+      // not be read when it had been.
+      logger.warn(
+        { mimeType, chars: combined.length },
+        'Document text extraction timed out; using what was read by then',
+      )
+      resolve(soFarAsResult())
     }, env.IDENTITY_CHECK_TIMEOUT_MS)
   })
 

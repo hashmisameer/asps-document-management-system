@@ -104,9 +104,37 @@ export function toApiError(error: unknown): ApiError {
   }
 
   // A response the API did not produce - a proxy error page, say.
+  //
+  // 'Something went wrong. Please try again.' was all this said, which tells
+  // whoever is holding the document nothing about what to do with it. The
+  // status is the one piece of evidence available here, and the three cases
+  // below are the ones that actually happen, each needing a different action.
+  // This API answers EVERY failure with an envelope, 500s included - the error
+  // handler builds one with a reference id. So a 5xx that arrives without one
+  // did not come from the application: it came from whatever sits in front of
+  // it, reporting that the connection to the server broke. In development that
+  // is the dev server being restarted under an upload in progress; in the office
+  // it is the service being restarted, or the network dropping mid-request.
+  //
+  // Reproduced deliberately: restarting the API during a 60-second upload
+  // returns exactly this - HTTP 500, no body - and it used to reach the person
+  // uploading as 'Something went wrong. Please try again.', which sent them
+  // looking at their document for a fault that was never in it.
+  const gatewayFailure = status === 502 || status === 503 || status === 504 || status >= 500
+  const tooLarge = status === 413
+
   return new ApiError({
-    code: API_ERROR_CODES.INTERNAL_ERROR,
+    code: gatewayFailure ? API_ERROR_CODES.SERVICE_UNAVAILABLE : API_ERROR_CODES.INTERNAL_ERROR,
     status,
-    message: 'Something went wrong. Please try again.',
+    message: gatewayFailure
+      ? 'The connection to the server broke before it finished answering, so nothing was ' +
+        'saved. This is not a problem with the document. Reading a scan can take a minute, ' +
+        'and the server being restarted during that will do it - wait a moment and upload again.'
+      : tooLarge
+        ? 'That file was rejected before it reached the system for being too large. Try a ' +
+          'smaller scan.'
+        : `Something went wrong and the server's reply could not be read (HTTP ${status}). ` +
+          'Try the upload again; if it keeps happening, report this code to whoever looks ' +
+          'after the system.',
   })
 }

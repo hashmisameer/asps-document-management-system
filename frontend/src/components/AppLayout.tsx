@@ -5,6 +5,7 @@ import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
 import { useAuth } from '../features/auth/useAuth.js'
+import { BrandBackdrop, BrandMark } from './BrandMark.js'
 import { UserMenu } from './UserMenu.js'
 
 /**
@@ -33,13 +34,18 @@ export function AppLayout() {
 
   return (
     <div className="flex min-h-full flex-col">
+      <BrandBackdrop />
+
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
-          <Link to="/" className="flex flex-col leading-tight">
-            <span className="text-xs font-medium tracking-wide text-brand-700 uppercase">
-              {ORGANISATION_NAME}
+          <Link to="/" className="flex items-center gap-3">
+            <BrandMark />
+            <span className="flex flex-col leading-tight">
+              <span className="text-xs font-medium tracking-wide text-brand-700 uppercase">
+                {ORGANISATION_NAME}
+              </span>
+              <span className="text-sm font-semibold text-slate-900">{APP_NAME}</span>
             </span>
-            <span className="text-sm font-semibold text-slate-900">{APP_NAME}</span>
           </Link>
 
           {user ? (

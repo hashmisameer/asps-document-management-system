@@ -45,7 +45,37 @@ export function matchWords(expected: string, documentText: string): boolean {
   if (wanted.length === 0) return false
 
   const present = new Set(words(documentText))
-  return wanted.every((word) => present.has(word))
+  if (wanted.every((word) => present.has(word))) return true
+
+  // The document may have run the name together.
+  //
+  // OCR drops the space between two words often enough that this is the common
+  // failure, not a rare one: the office's gratuity form came back reading
+  // 'BHAGWANSINGH', every letter correct, and was refused for not mentioning
+  // the employee - whose name was printed across the middle of it. The same
+  // thing happens the other way round on a form that spaces its capitals out.
+  //
+  // So the words are also compared with the gaps closed, over a run of ADJACENT
+  // document words. Adjacent, rather than anywhere on the page, because
+  // 'BHAGWAN' in one corner and 'SINGH' in another is not this employee's name
+  // appearing - it is two words that happen to be present, which is how a
+  // lenient matcher files a document against the wrong person.
+  const target = wanted.join('')
+  const found = words(documentText)
+
+  // The run is bounded by the length of the name rather than by a number of
+  // words, so this works in both directions: one document word standing for two
+  // of the name's, or several standing for one.
+  for (let start = 0; start < found.length; start += 1) {
+    let run = ''
+    for (let end = start; end < found.length; end += 1) {
+      run += found[end] ?? ''
+      if (run.length > target.length) break
+      if (run === target) return true
+    }
+  }
+
+  return false
 }
 
 /**
@@ -232,9 +262,48 @@ export function extractDates(text: string): Set<string> {
     }
   }
 
-  // 1 April 2024, 01ST APR, 2024
+  // 01082026 - a date written into a form's boxes, one digit per box, so it
+  // reaches OCR with no separators at all. The company's bio data form is laid
+  // out exactly this way and the joining date was being missed on every one of
+  // them, the check reporting a date absent from a page that plainly carried it.
+  //
+  // Read DD-MM-YYYY first, to stay with the rest of this file; YYYY-MM-DD only
+  // when the leading pair cannot be a day. An eight-digit run that is neither is
+  // some other number - an account or a phone - and is left alone.
+  for (const match of upper.matchAll(/\b(\d{8})\b/g)) {
+    const digits = match[1] ?? ''
+    const asDayFirst = {
+      day: Number(digits.slice(0, 2)),
+      month: Number(digits.slice(2, 4)),
+      year: Number(digits.slice(4, 8)),
+    }
+    const asYearFirst = {
+      year: Number(digits.slice(0, 4)),
+      month: Number(digits.slice(4, 6)),
+      day: Number(digits.slice(6, 8)),
+    }
+    // With no separators to mark it out, a run of eight digits is only a date
+    // if its year is one a person could have lived or worked in. Nothing else
+    // distinguishes 31129999 from a date, and the four-digit forms above have
+    // punctuation vouching for them where this has none.
+    const plausible = (year: number) => year >= 1900 && year <= 2100
+    if (plausible(asDayFirst.year) && isRealDate(asDayFirst.year, asDayFirst.month, asDayFirst.day)) {
+      found.add(iso(asDayFirst.year, asDayFirst.month, asDayFirst.day))
+    } else if (
+      plausible(asYearFirst.year) &&
+      isRealDate(asYearFirst.year, asYearFirst.month, asYearFirst.day)
+    ) {
+      found.add(iso(asYearFirst.year, asYearFirst.month, asYearFirst.day))
+    }
+  }
+
+  // 1 April 2024, 01ST APR, 2024, 01-AUG-2026, 01/AUG/2026
+  //
+  // A slash counts as a separator here as well as a space or a hyphen. Every
+  // document writes its dates its own way and this one is common on Indian
+  // forms; without it '01/AUG/2026' was read as no date at all.
   for (const match of upper.matchAll(
-    /\b(\d{1,2})\s*(?:ST|ND|RD|TH)?[\s,.-]*([A-Z]{3,9})[\s,.-]+(\d{2,4})\b/g,
+    /\b(\d{1,2})\s*(?:ST|ND|RD|TH)?[\s,./-]*([A-Z]{3,9})[\s,./-]+(\d{2,4})\b/g,
   )) {
     const [, d, name, y] = match
     const month = MONTHS[(name ?? '').slice(0, 3)]
@@ -245,7 +314,7 @@ export function extractDates(text: string): Set<string> {
 
   // April 1, 2024
   for (const match of upper.matchAll(
-    /\b([A-Z]{3,9})[\s,.-]+(\d{1,2})\s*(?:ST|ND|RD|TH)?[\s,.-]+(\d{2,4})\b/g,
+    /\b([A-Z]{3,9})[\s,./-]+(\d{1,2})\s*(?:ST|ND|RD|TH)?[\s,./-]+(\d{2,4})\b/g,
   )) {
     const [, name, d, y] = match
     const month = MONTHS[(name ?? '').slice(0, 3)]
@@ -339,4 +408,46 @@ export function matchesDocumentType(
     const needle = flatten(keyword)
     return needle.length > 0 && haystack.includes(needle)
   })
+}
+
+/**
+ * The name a document appears to carry, for showing back to a person.
+ *
+ * Best effort, and used ONLY in a message - never to decide anything. Deciding
+ * is `matchWords`, which asks whether a known name is present; this asks the
+ * harder and less answerable question of what name is there, off a page that
+ * OCR has already mangled.
+ *
+ * It looks for a 'Name' label, because the documents this is used on - an
+ * Aadhaar card, a PAN card - print one, and takes the words after it. Anything
+ * it is unsure of comes back null, and the message then simply says the name
+ * was not found rather than inventing one to accuse somebody of.
+ */
+export function nameOnDocument(documentText: string): string | null {
+  const lines = documentText.split(/\r?\n/)
+
+  for (const [index, line] of lines.entries()) {
+    // 'Name', but not 'Father's Name' or 'Mother's Name' - those are somebody
+    // else's, and offering one as the document's name would be worse than
+    // offering nothing.
+    const match = /(?:^|\s)(?<!FATHER'?S? )(?<!MOTHER'?S? )(?<!HUSBAND'?S? )NAME\s*[:-]?\s*(.*)$/i.exec(
+      line,
+    )
+    if (!match) continue
+
+    // The name is often on the line BELOW the label rather than after it -
+    // 'नाम / Name' on one line, 'BHAGWAN SINGH' on the next - which is how both
+    // of these cards are actually laid out.
+    for (const source of [match[1] ?? '', lines[index + 1] ?? '']) {
+      const candidate = normalizeText(source)
+        .split(' ')
+        .filter((word) => word.length > 1 && /^[A-Z]+$/.test(word))
+        .join(' ')
+
+      // Two words or more, or it is a label fragment rather than a name.
+      if (candidate.split(' ').filter(Boolean).length >= 2) return candidate
+    }
+  }
+
+  return null
 }

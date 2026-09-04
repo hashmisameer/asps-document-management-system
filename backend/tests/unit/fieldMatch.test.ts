@@ -4,6 +4,7 @@ import {
   extractDates,
   matchCode,
   matchDate,
+  nameOnDocument,
   matchDigits,
   matchField,
   matchPan,
@@ -50,6 +51,56 @@ describe('matchWords', () => {
   it('matches a multi-word value such as a designation', () => {
     expect(matchWords('Site Engineer', text)).toBe(true)
     expect(matchWords('Site Supervisor', text)).toBe(false)
+  })
+})
+
+describe('a name the scan ran together', () => {
+  it('matches the gratuity form, which came back as BHAGWANSINGH', () => {
+    // Verbatim from what OCR returned for the office's own form on 2026-09-02.
+    expect(matchWords('BHAGWAN SINGH', "RN जापान BHAGWANSINGH ===")).toBe(true)
+  })
+
+  it('matches a name spaced out the other way', () => {
+    expect(matchWords('BHAGWANSINGH', 'Name BHAGWAN SINGH')).toBe(true)
+  })
+
+  it('matches only a partial run-together in a longer name', () => {
+    expect(matchWords('RAVI KUMAR SHARMA', 'Name RAVIKUMAR SHARMA')).toBe(true)
+  })
+
+  it('does not accept a different person whose letters run together', () => {
+    expect(matchWords('SUNIL VERMA', 'RN BHAGWANSINGH ===')).toBe(false)
+  })
+
+  // A middle name between the two still names the same person, and matchWords
+  // has always been order- and extra-word-tolerant for that reason.
+  it('still matches a name written with a middle name', () => {
+    expect(matchWords('BHAGWAN SINGH', 'BHAGWAN KUMAR SINGH')).toBe(true)
+  })
+})
+
+describe('the name a document appears to carry', () => {
+  // Used ONLY in a message, never to decide anything. Deciding is matchWords.
+  it('reads a name printed under its label, as both cards lay it out', () => {
+    expect(nameOnDocument(['नाम/ Name', 'BHAGWAN SINGH', 'Date of Birth'].join('\n'))).toBe(
+      'BHAGWAN SINGH',
+    )
+  })
+
+  it('reads a name written after the label', () => {
+    expect(nameOnDocument('Name: ANITA DESAI')).toBe('ANITA DESAI')
+  })
+
+  it("never offers the father's name as the document's name", () => {
+    // Both cards print one directly underneath. Showing it back to somebody as
+    // 'this document names X' would accuse them of choosing the wrong file on
+    // the strength of the right one.
+    expect(nameOnDocument(["Father's Name", 'SUNDAR LAL'].join('\n'))).toBeNull()
+  })
+
+  it('says nothing rather than guessing', () => {
+    expect(nameOnDocument('a page of noise with no label at all')).toBeNull()
+    expect(nameOnDocument('')).toBeNull()
   })
 })
 
@@ -195,6 +246,51 @@ describe('extractDates', () => {
 
   it('turns a two-digit year into the century it means', () => {
     expect(extractDates('DOB 15/08/98')).toContain('1998-08-15')
+  })
+})
+
+describe('a date written one digit per box, so OCR sees no separators', () => {
+  it('reads the company bio data form, where the joining date prints as 01082026', () => {
+    expect(extractDates('01082026')).toContain('2026-08-01')
+    expect(matchDate('2026-08-01', 'therein 01082026 TRA')).toBe(true)
+  })
+
+  it('falls back to year-first only when the leading pair cannot be a day', () => {
+    expect(extractDates('20260801')).toContain('2026-08-01')
+  })
+
+  it('leaves an eight-digit number that is not a date alone', () => {
+    expect(extractDates('PHONE NO. : 63997606').size).toBe(0)
+    expect(extractDates('Receipt 31129999').size).toBe(0)
+  })
+})
+
+describe('a date is read as a calendar date, whatever the document writes', () => {
+  // Every one of these is the 1st of August 2026, and every one of them appears
+  // on some form in the drawer.
+  const written = [
+    '01/08/2026',
+    '1/8/2026',
+    '01-08-2026',
+    '01.08.2026',
+    '2026-08-01',
+    '01 AUG 2026',
+    '01-AUG-2026',
+    '01/AUG/2026',
+    '1ST AUGUST 2026',
+    'AUGUST 1, 2026',
+    '01082026',
+    '0 1 / 0 8 / 2 0 2 6',
+  ]
+
+  it.each(written)('reads %s as the 1st of August', (text) => {
+    expect(matchDate('2026-08-01', `Date of joining ${text}`)).toBe(true)
+  })
+
+  it('reads the day first, because the forms are Indian', () => {
+    // 01/08 is the 1st of August, and must NOT also be the 8th of January.
+    expect(matchDate('2026-08-01', '01/08/2026')).toBe(true)
+    expect(matchDate('2026-01-08', '01/08/2026')).toBe(false)
   })
 })
 

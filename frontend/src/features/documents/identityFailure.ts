@@ -68,3 +68,29 @@ export function unconfirmedLabels(failure: IdentityFailure): string[] {
     .filter((check) => check.result === FIELD_CHECK_RESULTS.NOT_FOUND)
     .map((check) => DOCUMENT_FIELD_LABEL[check.field as DocumentField])
 }
+
+/**
+ * A worked example for the override box, about THIS document.
+ *
+ * The box used to suggest 'The scan is too faint for the Aadhaar number to be
+ * read' whatever was being filed, so somebody refusing a service card over its
+ * joining date was shown a sentence about an Aadhaar number. A placeholder is
+ * read as an instruction about the task in hand, and that one quietly described
+ * the wrong task.
+ *
+ * A suggestion, not a default: it is never submitted, and the reason recorded
+ * against the document is whatever the person actually types.
+ */
+export function overrideReasonHint(failure: IdentityFailure, documentName: string): string {
+  if (failure.unreadable) {
+    return `The scan of this ${documentName} is too faint to read`
+  }
+
+  const labels = unconfirmedLabels(failure)
+  const first = labels[0]
+  if (first === undefined) {
+    return `Checked against the original ${documentName}`
+  }
+
+  return `The ${first.toLowerCase()} is not legible on this ${documentName}`
+}

@@ -94,3 +94,33 @@ export async function removeDocumentFile(documentId: number): Promise<EmployeeDo
   )
   return response.data.document
 }
+
+/**
+ * Checks an identity document against a name, with nothing stored.
+ *
+ * For the Add Employee screen, where the cards are collected before the record
+ * exists. Reading can take half a minute when the name is NOT there - every
+ * variant is tried before giving up - so this gets the long timeout too.
+ */
+export interface IdentityPreview {
+  readable: boolean
+  matched: boolean
+  /** What the document seemed to say, when it disagreed. Best effort, or null. */
+  nameFound: string | null
+}
+
+export async function previewIdentity(
+  file: File,
+  employeeName: string,
+  documentName: string,
+): Promise<IdentityPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('employeeName', employeeName)
+  form.append('documentName', documentName)
+
+  const response = await api.post<IdentityPreview>('/documents/identity-preview', form, {
+    timeout: DOCUMENT_READ_TIMEOUT_MS,
+  })
+  return response.data
+}
