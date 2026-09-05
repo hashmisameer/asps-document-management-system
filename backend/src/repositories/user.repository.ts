@@ -209,3 +209,63 @@ export async function usernameExists(username: string): Promise<boolean> {
     )
   return result.recordset.length > 0
 }
+
+/**
+ * How many accounts have been created through the registration form.
+ *
+ * Counted from the table, never from a running total: a count kept anywhere
+ * else is a number that can disagree with the rows it claims to describe.
+ */
+export async function countSelfRegistered(): Promise<number> {
+  const request = await createRequest()
+  const result = await request.query<{ Total: number }>(
+    'SELECT COUNT(*) AS Total FROM dbo.Users WHERE IsSelfRegistered = 1',
+  )
+  return result.recordset[0]?.Total ?? 0
+}
+
+/** Whether any account exists at all - which is what makes a system "empty". */
+export async function anyUserExists(): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request.query<{ Found: number }>(
+    'SELECT TOP (1) 1 AS Found FROM dbo.Users',
+  )
+  return result.recordset.length > 0
+}
+
+/**
+ * Creates a self-registered account, and REFUSES once the cap is reached.
+ *
+ * The cap is part of the INSERT rather than a check before it. Reading a count
+ * and then writing leaves a window in which two people both read four and both
+ * insert, and the limit that was the whole point of the feature is quietly
+ * exceeded. Here the condition and the write are one statement, so the database
+ * settles it and the loser simply inserts nothing.
+ *
+ * Returns null when the cap was reached, which the caller reports as a closed
+ * registration rather than as a failure.
+ */
+export async function createSelfRegisteredUser(
+  input: CreateUserInput & { maxSelfRegistrations: number },
+): Promise<number | null> {
+  const request = await createRequest()
+  const result = await request
+    .input('username', sql.NVarChar(100), input.username)
+    .input('fullName', sql.NVarChar(150), input.fullName)
+    .input('role', sql.VarChar(30), input.role)
+    .input('hash', sql.VarBinary(256), input.password.hash)
+    .input('salt', sql.VarBinary(64), input.password.salt)
+    .input('algorithm', sql.VarChar(30), input.password.algorithm)
+    .input('maxSelfRegistrations', sql.Int, input.maxSelfRegistrations)
+    .query<{ UserId: number }>(`
+      INSERT INTO dbo.Users (Username, FullName, RoleId, PasswordHash, PasswordSalt,
+                             PasswordAlgorithm, MustChangePassword, IsSelfRegistered)
+      OUTPUT INSERTED.UserId
+      SELECT @username, @fullName, r.RoleId, @hash, @salt, @algorithm, 0, 1
+      FROM   dbo.Roles AS r
+      WHERE  r.RoleName = @role
+        AND  (SELECT COUNT(*) FROM dbo.Users WITH (UPDLOCK, HOLDLOCK)
+              WHERE IsSelfRegistered = 1) < @maxSelfRegistrations`)
+
+  return result.recordset[0]?.UserId ?? null
+}

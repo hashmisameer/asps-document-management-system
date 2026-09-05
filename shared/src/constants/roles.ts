@@ -25,6 +25,10 @@ export const PERMISSIONS = {
   EMPLOYEE_CREATE: 'employee:create',
   EMPLOYEE_UPDATE: 'employee:update',
   EMPLOYEE_ARCHIVE: 'employee:archive',
+  /* Recording that somebody has left, and undoing it. Separate from archiving:
+     one says they stopped working here, the other says the office has finished
+     with the record. */
+  EMPLOYEE_EXIT: 'employee:exit',
 
   DOCUMENT_READ: 'document:read',
   DOCUMENT_PREVIEW: 'document:preview',
@@ -59,6 +63,7 @@ const HR_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.EMPLOYEE_CREATE,
   PERMISSIONS.EMPLOYEE_UPDATE,
   PERMISSIONS.EMPLOYEE_ARCHIVE,
+  PERMISSIONS.EMPLOYEE_EXIT,
   PERMISSIONS.DOCUMENT_READ,
   PERMISSIONS.DOCUMENT_PREVIEW,
   PERMISSIONS.DOCUMENT_DOWNLOAD,
@@ -110,3 +115,15 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
 export function roleHasPermission(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false
 }
+
+/**
+ * How many accounts may ever be created through the registration form.
+ *
+ * The office has five staff (open question Q11), so five is the whole intended
+ * population. The form closes for good once that many accounts have been
+ * registered - a cap counted in the DATABASE, not in the browser, because a
+ * hidden button is not a control. Accounts an administrator creates with
+ * `npm run db:create-user` do not consume these slots: an Admin adding a
+ * colleague deliberately is a different act from a stranger enrolling.
+ */
+export const MAX_SELF_REGISTRATIONS = 5

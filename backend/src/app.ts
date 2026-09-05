@@ -7,6 +7,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { httpLogger } from './middleware/httpLogger.js'
 import { apiLimiter } from './middleware/rateLimit.js'
 import { requestId } from './middleware/requestId.js'
+import { mountSpa } from './middleware/serveSpa.js'
 import { apiRouter } from './routes/index.js'
 
 /**
@@ -22,6 +23,7 @@ import { apiRouter } from './routes/index.js'
  *   helmet     -> headers are set even on an error response
  *   parsers    -> a malformed body becomes a 400 through the error handler
  *   router     -> the application itself
+ *   SPA        -> only in production, and only after the API has had its turn
  *   404 + error handler -> always last
  */
 export function createApp(): Express {
@@ -40,11 +42,45 @@ export function createApp(): Express {
 
   app.use(
     helmet({
-      // The SPA is served from a separate origin in development and by a static
-      // host in production; this API returns JSON and files, never HTML, so a
-      // content security policy here would only constrain documents it does not
-      // serve. It is configured where the HTML is served instead.
-      contentSecurityPolicy: false,
+      /*
+       * A policy only where there is a page for it to govern.
+       *
+       * In development the SPA is served by Vite on another origin, and a
+       * policy set here would constrain documents this process does not serve
+       * while leaving the real ones alone. In production it serves the page
+       * itself, so the policy belongs here.
+       *
+       * Every directive below is the tightest the application actually runs
+       * under, which is not the same as the tightest that can be written:
+       *
+       *   style-src 'unsafe-inline'  React writes style attributes - the
+       *                              dashboard's split bar sets a width - and a
+       *                              style attribute is inline style.
+       *   img-src data: blob:        signatures are drawn on a canvas and read
+       *                              back as data URLs before they are uploaded.
+       *   worker-src blob:           pdf.js runs its worker from a bundled file,
+       *                              and falls back to a blob when it cannot.
+       *   connect-src 'self'         this application talks to nothing else. No
+       *                              analytics, no fonts, no CDN.
+       */
+      contentSecurityPolicy: env.isProduction
+        ? {
+            useDefaults: false,
+            directives: {
+              'default-src': ["'self'"],
+              'script-src': ["'self'"],
+              'style-src': ["'self'", "'unsafe-inline'"],
+              'img-src': ["'self'", 'data:', 'blob:'],
+              'font-src': ["'self'", 'data:'],
+              'connect-src': ["'self'"],
+              'worker-src': ["'self'", 'blob:'],
+              'object-src': ["'none'"],
+              'base-uri': ["'self'"],
+              'form-action': ["'self'"],
+              'frame-ancestors': ["'none'"],
+            },
+          }
+        : false,
       crossOriginResourcePolicy: { policy: 'same-site' },
     }),
   )
@@ -70,6 +106,10 @@ export function createApp(): Express {
   app.use(cookieParser(env.SESSION_SECRET))
 
   app.use('/api', apiLimiter, apiRouter)
+
+  // After the API, so nothing under /api is ever answered with a page, and
+  // before the 404 handler, so a page route reaches it at all.
+  if (env.isProduction) mountSpa(app)
 
   app.use(notFoundHandler)
   app.use(errorHandler)

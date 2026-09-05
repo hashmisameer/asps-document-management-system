@@ -4,18 +4,23 @@ Anything the company has not confirmed is recorded here rather than silently
 invented. Each item says what is blocked by it and what the code currently
 assumes, so the assumption is visible instead of buried.
 
-Last updated: 2026-08-31 (signatures, Milestone 5).
+Last updated: 2026-08-31 (signatures, the identity check, and B1 resolved).
 
 ---
 
 ## Blocking
 
 ### B1 - Development database
-**Status: OPEN. Blocks the rest of Milestone 1.**
+**Status: RESOLVED on 2026-08-31, by option (a).**
 
-No SQL Server instance is installed on the development laptop (no `MSSQL*`
-services, no `sqlcmd`). The schema and migration runner are written and
-typechecked, but nothing has been executed against a real server.
+SQL Server 2014 Express (12.0.2000.8 RTM) is installed locally as `.\SQLEXPRESS`
+with TCP/IP and mixed-mode authentication enabled. All three migrations and both
+seeds have been applied to it, and the signing path driven end to end. No 2014
+incompatibility was found.
+
+It is a NAMED instance on a DYNAMIC port, so `backend/.env` sets `DB_INSTANCE`
+and lets SQL Server Browser resolve the port; `DB_PORT` must stay unset, because
+setting both is ambiguous and `config/env.ts` rejects it.
 
 Options:
 
@@ -29,18 +34,31 @@ Options:
 than 2014, so option (c) at least announces itself.
 
 ### B2 - The official company document list
-**Status: OPEN. The employee checklist is live but nearly empty.**
+**Status: RESOLVED on 2026-08-31.**
 
-`database/seeds/0002_document_types.sql` currently seeds **PAN Card only**,
-which is the one confirmed rule (PAN Card = MANDATORY). Every document marked
-"M" on the official list must be `IsMandatory = 1`, everything else `0`.
+All ten document types are seeded, with their deadlines and the details each one
+must confirm for the identity check.
 
-Employee creation now materialises one checklist row per active document type,
-so until this list arrives every new employee gets a one-line checklist. The
-code is complete; what is missing is the configuration it reads.
+**Only the Aadhaar Card and the PAN Card are mandatory. Every other document is
+optional.** That was confirmed directly, and it settles what the original sheet
+could not: the struck-through marks, the circled (E) and the unmarked Service
+Card do not make any of those documents required.
 
-Needed: document names and their M markings. **Document names only - no real
-employee data, no scans, no PAN or Aadhaar numbers.**
+Optional does not mean undated. Every type keeps its own reminder date, so all
+ten appear on an employee's checklist with a date to chase, and 'Overdue' still
+means overdue. What being optional changes is that a missing one is not a
+compliance failure against the employee record.
+
+Seed 0002 first went out with six types marked mandatory, read from those marks.
+Because that seed inserts and never updates - deliberately, so it cannot
+overwrite a value someone has since changed - a database seeded before this was
+not corrected by re-running it. Migration
+`0004_mandatory_documents.sql` fixes the databases that already exist; the seed
+is corrected for the ones created from here on.
+
+Still open, and much smaller: `RequiresSignature` is an assumption, set to 1 for
+the company's own forms and 0 for the two identity cards. It is one value per
+row in the seed if any of them is wrong.
 
 ### B3 - Windows Server version on the production server
 **Status: OPEN. Affects dependency choices now, not at deployment.**
@@ -70,6 +88,10 @@ conservatively. Development is on Node 24.20.0.
 | Q10 | Server hostname/IP, bind port, HTTPS internally?, who administers firewall rules | M6 | Not assumed. |
 | Q11 | The 5 initial usernames and their roles | M2 | Not assumed. **Names and roles only, no passwords.** Accounts are created with `npm run db:create-user`, which prints a temporary password once and always sets `MustChangePassword`, so the first login forces a change. |
 | Q12 | Backup policy for the database and the storage folder: owner and schedule | M6 | Not assumed. |
+| Q13 | Somewhere on the company server to put the Tesseract language data, and who puts it there | **NOW** | Not assumed. The server has no route to the internet, so `tesseract.js` cannot fetch `eng.traineddata` **or `hin.traineddata`** on first use and **every OCR pass fails** - which means every scanned document reaches HR as an identity check that could not be read. BOTH languages are needed: the company's appointment letter is printed in Hindi and English alone returns nothing usable from it (`OCR_LANGUAGES`). The files are vendored into a folder and pointed at with `TESSERACT_LANG_PATH`, `TESSERACT_CORE_PATH` and `TESSERACT_CACHE_PATH` (see `backend/.env.example`). PDFs carrying their own text layer are unaffected. |
+| Q15 | The company's mail relay: host, port, whether it needs credentials, and the address reminders should come FROM | **NOW** | Not assumed. `SMTP_HOST` is unset, so reminders can be built and previewed (`npm run send-reminders -- --dry-run`) but not sent. An internal relay usually accepts mail from a server on the LAN with no credentials, which is why `SMTP_USER` and `SMTP_PASSWORD` are optional. Also needed: **who receives the digest** - `REMINDER_RECIPIENTS` is a comma-separated list. |
+| Q16 | How often should the reminder go out, and at what time? | **NOW** | **Daily** is assumed. The send is one command (`npm run send-reminders`) run by Windows Task Scheduler, so the frequency is a scheduler setting and not a code change. |
+| Q14 | May any HR user override a failed identity check, or only an Admin? | **NOW** | **Any user who may upload.** The person holding the document is the one who can see whether a poor scan is genuine, and a refusal that only an Admin can clear would stop the day's filing. Every override is stored on the document with its reason and its author, so the control is accountability rather than gatekeeping. To change: require `DOCUMENT_REPLACE` or a new permission in `runIdentityCheck` in document.service.ts. |
 
 ---
 
@@ -88,7 +110,12 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    it is correct the moment it is looked at and needs no scheduled job.
 5. **`DocumentStatus` and `SignatureStatus` are separate columns.** A document can
    legitimately be `Verified` + `Skipped`.
-6. **In-app notifications only.** No email, SMS or WhatsApp (Section 81).
+6. **Email reminders, and otherwise in-app only.** Section 81 said no email,
+   SMS or WhatsApp; email reminders were asked for on 2026-08-31 and now exist -
+   one digest to a configured list of addresses, listing the employees who still
+   owe documents, repeating until the file is uploaded. No SMS and no WhatsApp.
+   Sending is off until `REMINDER_ENABLED` is set, so a deployed server cannot
+   start emailing the office by itself.
 7. **No Active Directory / LDAP / Entra ID.** Local `Users` table only (Section 84).
 8. **Detection is advisory.** No code path applies a signature from an OCR/CV
    result without an explicit HR confirmation.
@@ -127,3 +154,8 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    A browser displaying the old copy keeps a valid file underneath it, and the
    earlier output stays inspectable if a placement turns out to have been wrong.
    Like replaced originals (13), nothing prunes them yet.
+17. **A document type with no required fields is not identity-checked.** The
+   fields a document must confirm are configuration, so a type nobody has
+   configured is filed as it always was rather than being refused for details
+   nobody asked for. A check that did not run is stored as `NotChecked`, which
+   is deliberately a different answer from one that ran and passed.

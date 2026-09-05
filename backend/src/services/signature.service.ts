@@ -3,6 +3,7 @@ import {
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPES,
   SIGNATURE_STATUS,
+  SIGNER_ROLES,
   canTransitionSignature,
   normalizeRotation,
   type AuthUser,
@@ -10,17 +11,19 @@ import {
   type SavePlacementsInput,
   type SignaturePlacement,
   type SignatureStatus,
+  type SignerRole,
 } from '@asps-dms/shared'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
 import * as employeeSignatureRepository from '../repositories/employeeSignature.repository.js'
 import * as signaturePlacementRepository from '../repositories/signaturePlacement.repository.js'
+import * as userSignatureRepository from '../repositories/userSignature.repository.js'
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js'
 import * as audit from './audit.service.js'
 import type { RequestContext } from './auth.service.js'
 import * as documentService from './document.service.js'
 import * as employeeService from './employee.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
-import { stampSignature } from './signatureStamp.service.js'
+import { stampSignature, type SignatureImage } from './signatureStamp.service.js'
 import * as storage from './storage.service.js'
 
 /**
@@ -127,6 +130,110 @@ export async function uploadSignature(
   return getSignatureSummary(employeeId)
 }
 
+/**
+ * The signed-in user's own authorising signature.
+ *
+ * Separate from an employee's because it means something different: an
+ * employee's signature says the employee signed, and this one says which member
+ * of staff signed the document off. It is enrolled once, on the pad, and reused
+ * on every document that user authorises.
+ */
+export interface UserSignatureSummary {
+  userId: number
+  hasSignature: boolean
+  mimeType: string | null
+  widthPx: number | null
+  heightPx: number | null
+  captureMethod: 'Drawn' | 'Uploaded' | null
+  updatedAt: string | null
+}
+
+export async function getUserSignatureSummary(userId: number): Promise<UserSignatureSummary> {
+  const record = await userSignatureRepository.findActiveByUser(userId)
+  return {
+    userId,
+    hasSignature: record !== null,
+    mimeType: record?.mimeType ?? null,
+    widthPx: record?.widthPx ?? null,
+    heightPx: record?.heightPx ?? null,
+    captureMethod: record?.captureMethod ?? null,
+    updatedAt: record?.updatedAt ?? null,
+  }
+}
+
+/**
+ * Saves the signed-in user's own signature.
+ *
+ * Takes the actor rather than a user id on purpose: there is no route by which
+ * one person can set another's authorising signature, because that mark is how
+ * a document says who signed it off. An administrator who could write it into
+ * someone else's account could sign a document in their name.
+ */
+export async function saveUserSignature(
+  file: UploadedFile,
+  captureMethod: 'Drawn' | 'Uploaded',
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<UserSignatureSummary> {
+  const existing = await userSignatureRepository.findActiveByUser(actor.userId)
+
+  const inspected = await inspectSignatureUpload(file)
+  const measured = await measureSignature(file.buffer, inspected.mimeType)
+  const stored = await storage.storeUserSignature(actor.userId, file.buffer, inspected.extension)
+
+  try {
+    await userSignatureRepository.replaceActive({
+      userId: actor.userId,
+      storedFileName: stored.storedFileName,
+      relativePath: stored.relativePath,
+      mimeType: inspected.mimeType,
+      fileSizeBytes: stored.sizeBytes,
+      widthPx: measured.widthPx,
+      heightPx: measured.heightPx,
+      captureMethod,
+    })
+  } catch (error) {
+    // The row is what makes the file findable; without it the file is litter.
+    await storage.discardStoredFile(stored.relativePath)
+    throw error
+  }
+
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.USER_SIGNATURE_SAVED,
+    entityType: AUDIT_ENTITY_TYPES.USER_SIGNATURE,
+    entityId: actor.userId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      replaced: existing !== null,
+      captureMethod,
+      mimeType: inspected.mimeType,
+      sizeBytes: stored.sizeBytes,
+      widthPx: measured.widthPx,
+      heightPx: measured.heightPx,
+    },
+  })
+
+  return getUserSignatureSummary(actor.userId)
+}
+
+/** Streams a user's own authorising signature back to them. */
+export async function openUserSignature(
+  userId: number,
+): Promise<{ stream: NodeJS.ReadableStream; mimeType: string }> {
+  const record = await userSignatureRepository.findActiveByUser(userId)
+  if (!record) throw new NotFoundError('You have no signature on file yet.')
+
+  if (!(await storage.storedFileExists(record.relativePath))) {
+    throw new ConflictError(
+      'Your signature is recorded but its image is missing from the document store. ' +
+        'Tell your administrator.',
+    )
+  }
+
+  return { stream: storage.openStoredFile(record.relativePath), mimeType: record.mimeType }
+}
+
 /** Streams the signature image, for the editor and the employee page. */
 export async function openSignature(
   employeeId: number,
@@ -179,10 +286,31 @@ export async function savePlacements(
 
   const pageCount = new Set(input.placements.map((placement) => placement.pageNumber)).size
 
-  const signature = await employeeSignatureRepository.findActiveByEmployee(document.employeeId)
-  if (!signature) {
+  // Only the signatures this set actually calls for. A document that carries an
+  // employee box and no HR box must not be blocked because the person saving it
+  // has not enrolled their own signature yet.
+  const roles = new Set<SignerRole>(
+    input.placements.map((placement) => placement.signerRole ?? SIGNER_ROLES.EMPLOYEE),
+  )
+
+  const employeeSignature = roles.has(SIGNER_ROLES.EMPLOYEE)
+    ? await employeeSignatureRepository.findActiveByEmployee(document.employeeId)
+    : null
+  if (roles.has(SIGNER_ROLES.EMPLOYEE) && !employeeSignature) {
     throw new ConflictError(
       `${document.employeeName} has no signature on file. Upload one before signing a document.`,
+    )
+  }
+
+  // The authorising signature is always the SAVER'S own, never one named by the
+  // request: this mark is what says who signed the document off, so nobody gets
+  // to put a colleague's on it.
+  const authoriserSignature = roles.has(SIGNER_ROLES.AUTHORISER)
+    ? await userSignatureRepository.findActiveByUser(actor.userId)
+    : null
+  if (roles.has(SIGNER_ROLES.AUTHORISER) && !authoriserSignature) {
+    throw new ConflictError(
+      'You have no signature on file. Add yours on the signature pad before signing a document off.',
     )
   }
 
@@ -191,16 +319,30 @@ export async function savePlacements(
     throw new ConflictError('This document has no stored file to sign.')
   }
 
-  const [source, signatureImage] = await Promise.all([
+  const [source, employeeImage, authoriserImage] = await Promise.all([
     storage.readStoredFile(location.originalFilePath),
-    storage.readStoredFile(signature.relativePath),
+    employeeSignature ? storage.readStoredFile(employeeSignature.relativePath) : null,
+    authoriserSignature ? storage.readStoredFile(authoriserSignature.relativePath) : null,
   ])
+
+  const signatures: Partial<Record<SignerRole, SignatureImage>> = {}
+  if (employeeSignature && employeeImage) {
+    signatures[SIGNER_ROLES.EMPLOYEE] = {
+      data: employeeImage,
+      mimeType: employeeSignature.mimeType,
+    }
+  }
+  if (authoriserSignature && authoriserImage) {
+    signatures[SIGNER_ROLES.AUTHORISER] = {
+      data: authoriserImage,
+      mimeType: authoriserSignature.mimeType,
+    }
+  }
 
   const stamped = await stampSignature({
     source,
     sourceMimeType: location.mimeType ?? 'application/pdf',
-    signature: signatureImage,
-    signatureMimeType: signature.mimeType,
+    signatures,
     placements: input.placements.map((placement) => ({
       pageNumber: placement.pageNumber,
       rect: {
@@ -210,6 +352,7 @@ export async function savePlacements(
         height: placement.height,
       },
       pageRotation: normalizeRotation(placement.pageRotation),
+      signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
     })),
   })
 
@@ -231,6 +374,14 @@ export async function savePlacements(
         method: placement.method,
         detectionMethod: placement.detectionMethod,
         confidence: placement.confidence,
+        signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
+        // Recorded rather than looked up on the next rebuild: regenerating a
+        // signed PDF a year from now must reproduce the document that was
+        // issued, not sign it in whoever happens to be logged in that day.
+        signerUserId:
+          (placement.signerRole ?? SIGNER_ROLES.EMPLOYEE) === SIGNER_ROLES.AUTHORISER
+            ? actor.userId
+            : null,
       })),
       actor.userId,
     )
@@ -259,6 +410,7 @@ export async function savePlacements(
       documentName: document.documentName,
       placements: input.placements.length,
       pages: pageCount,
+      signers: Array.from(roles),
       // The positions themselves, so the audit trail can answer where a
       // signature was put, not merely that one was.
       rects: input.placements.map((placement) => ({
@@ -268,6 +420,7 @@ export async function savePlacements(
         width: round(placement.width),
         height: round(placement.height),
         method: placement.method,
+        signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
       })),
     },
   })

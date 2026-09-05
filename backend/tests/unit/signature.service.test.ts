@@ -164,6 +164,7 @@ const placement = {
   pageRotation: 0 as const,
   method: 'Manual' as const,
   detectionMethod: 'Manual' as const,
+  signerRole: 'Employee' as const,
   confidence: null,
 }
 

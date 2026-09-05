@@ -1,6 +1,6 @@
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { API_ERROR_CODES, ROLES, type Role } from '@asps-dms/shared'
+import { API_ERROR_CODES, MAX_FORMS_PER_PRINT, ROLES, type Role } from '@asps-dms/shared'
 
 /**
  * The employee routes, over HTTP with the database mocked.
@@ -26,6 +26,7 @@ const db = vi.hoisted(() => ({
   createChecklist: vi.fn(),
   listForEmployee: vi.fn(),
   insertAudit: vi.fn(),
+  findPhoto: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -48,6 +49,7 @@ vi.mock('../../src/repositories/employee.repository.js', () => ({
   update: db.updateEmployee,
   setActive: db.setActive,
   listFacets: db.listFacets,
+  findPhoto: db.findPhoto,
 }))
 
 vi.mock('../../src/repositories/documentType.repository.js', () => ({
@@ -109,6 +111,8 @@ beforeEach(() => {
   db.insertAudit.mockResolvedValue(undefined)
   db.touchSession.mockResolvedValue(undefined)
   db.findEmployee.mockResolvedValue(profile)
+  db.findPhoto.mockResolvedValue(null)
+  db.listForEmployee.mockResolvedValue([])
   db.listActiveTypes.mockResolvedValue([])
   db.createChecklist.mockResolvedValue(0)
   db.createEmployee.mockResolvedValue({ employeeId: 42, employeeCode: 'EMP001' })
@@ -120,6 +124,26 @@ beforeEach(() => {
     totalPages: 1,
   })
 })
+
+
+/**
+ * A complete new employee.
+ *
+ * Creation requires every one of these from 2026-09-02: the office asked that a
+ * new record be entered whole rather than filled in later. Tests that are about
+ * something else spread this and change the one field they care about.
+ */
+const completeEmployee = {
+  employeeCode: 'EMP001',
+  employeeName: 'Ravi Kumar',
+  joiningDate: '2026-09-01',
+  department: 'Accounts',
+  designation: 'Officer',
+  address: 'C-145, Sector 63, Noida',
+  phoneNumber: '9876543210',
+  dateOfBirth: '1990-08-15',
+  gender: 'Male',
+}
 
 describe('authentication', () => {
   it('refuses an unauthenticated request without touching the database', async () => {
@@ -154,7 +178,7 @@ describe('permissions', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.VIEWER))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
+      .send(completeEmployee)
 
     expect(response.status).toBe(403)
     expect(db.createEmployee).not.toHaveBeenCalled()
@@ -173,7 +197,10 @@ describe('permissions', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01', department: 'Accounts' })
+      .send({
+        ...completeEmployee,
+        department: 'Accounts',
+      })
 
     expect(response.status).toBe(201)
     expect(response.body.employee.employeeCode).toBe('EMP001')
@@ -185,7 +212,7 @@ describe('validation', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar' })
+      .send({ ...completeEmployee, joiningDate: undefined })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe(API_ERROR_CODES.VALIDATION_FAILED)
@@ -197,24 +224,33 @@ describe('validation', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-02-30' })
+      .send({ ...completeEmployee, joiningDate: '2026-02-30' })
 
     expect(response.status).toBe(400)
     expect(db.createEmployee).not.toHaveBeenCalled()
   })
 
-  it('never lets a client choose the employee code', async () => {
+  it('takes the employee code from the client, upper-cased', async () => {
+    // Changed deliberately on 2026-08-31. The code used to be generated and
+    // stripped from the request; it is now typed by HR, because the identity
+    // check compares it with the code printed ON the document, and a generated
+    // EMP003 would never match a real service card.
     await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({
-        employeeName: 'Ravi Kumar',
-        joiningDate: '2026-09-01',
-        employeeCode: 'EMP999',
-      })
+      .send({ ...completeEmployee, employeeCode: 'asps/4471' })
 
-    // The schema strips it, so it never reaches the repository at all.
-    expect(db.createEmployee.mock.calls[0]?.[0]).not.toHaveProperty('employeeCode')
+    expect(db.createEmployee.mock.calls[0]?.[0]).toHaveProperty('employeeCode', 'ASPS/4471')
+  })
+
+  it('refuses an employee without a code', async () => {
+    const response = await request(app)
+      .post('/api/employees')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
+
+    expect(response.status).toBe(400)
+    expect(db.createEmployee).not.toHaveBeenCalled()
   })
 
   it('rejects an id that is not a positive integer', async () => {
@@ -253,5 +289,88 @@ describe('validation', () => {
       .set('Cookie', signedInAs(ROLES.HR))
 
     expect(db.listEmployees.mock.calls[0]?.[0].includeArchived).toBe(false)
+  })
+})
+
+describe('printing the employee form', () => {
+  it('lets a Viewer print one employee, and names the file after them', async () => {
+    // The point of the whole feature: somebody with no permission to change
+    // anything can still walk to the printer with a checklist.
+    const response = await request(app)
+      .get('/api/employees/42/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(200)
+    expect(response.headers['content-type']).toContain('application/pdf')
+    expect(response.headers['content-disposition']).toBe(
+      'attachment; filename="EMP001_RAVI_KUMAR.pdf"',
+    )
+    // A PDF, not an error page with the wrong content type on it.
+    expect(response.body.subarray(0, 5).toString()).toBe('%PDF-')
+  })
+
+  it('never lets a printed form be cached', async () => {
+    const response = await request(app)
+      .get('/api/employees/42/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.headers['cache-control']).toBe('private, no-store')
+  })
+
+  it('reads /employees/print as a route, not as an employee id', async () => {
+    const response = await request(app)
+      .post('/api/employees/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ employeeIds: [42, 43] })
+
+    expect(response.status).toBe(200)
+    expect(response.headers['content-disposition']).toMatch(
+      /^attachment; filename="EMPLOYEE_FORMS_[0-9]{4}-[0-9]{2}-[0-9]{2}.pdf"$/,
+    )
+    // Both of the ids asked for were read - the path was not taken for an
+    // employee called 'print'.
+    expect(new Set(db.findEmployee.mock.calls.map((call) => call[0]))).toEqual(new Set([42, 43]))
+  })
+
+  it('names a selection of one after that employee rather than after the day', async () => {
+    const response = await request(app)
+      .post('/api/employees/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ employeeIds: [42] })
+
+    expect(response.headers['content-disposition']).toBe(
+      'attachment; filename="EMP001_RAVI_KUMAR.pdf"',
+    )
+  })
+
+  it('refuses an empty selection', async () => {
+    const response = await request(app)
+      .post('/api/employees/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ employeeIds: [] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe(API_ERROR_CODES.VALIDATION_FAILED)
+  })
+
+  it('refuses more forms than one print may carry', async () => {
+    const response = await request(app)
+      .post('/api/employees/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ employeeIds: Array.from({ length: MAX_FORMS_PER_PRINT + 1 }, (_, i) => i + 1) })
+
+    expect(response.status).toBe(400)
+    expect(db.findEmployee).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 when one of the selected employees has gone', async () => {
+    db.findEmployee.mockResolvedValue(null)
+
+    const response = await request(app)
+      .post('/api/employees/print')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ employeeIds: [42] })
+
+    expect(response.status).toBe(404)
   })
 })

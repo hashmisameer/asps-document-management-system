@@ -35,8 +35,10 @@ export default tseslint.config(
     },
   },
   {
-    // The database CLI and the safety scripts are console tools by design.
-    files: ['backend/src/database/cli.ts', 'scripts/**/*.mjs'],
+    // The database CLI, the reminder command and the safety scripts are
+    // console tools by design: their whole output is meant for a terminal or a
+    // scheduled task's log.
+    files: ['backend/src/database/cli.ts', 'backend/src/scripts/**/*.ts', 'scripts/**/*.mjs'],
     rules: { 'no-console': 'off' },
   },
   {

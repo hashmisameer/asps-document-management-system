@@ -18,6 +18,11 @@ import { uploadSingleDocument } from '../middleware/upload.js'
  */
 export const documentRouter: Router = Router()
 
+/* The whole checklist across every employee, filtered - what the dashboard's
+   document tiles open. Declared before '/:documentId' so the bare path is a
+   list rather than an id that fails to parse. */
+documentRouter.get('/', requirePermission(PERMISSIONS.DOCUMENT_READ), documentController.list)
+
 documentRouter.get(
   '/:documentId',
   requirePermission(PERMISSIONS.DOCUMENT_READ),
@@ -31,10 +36,36 @@ documentRouter.post(
   documentController.upload,
 )
 
+/* Checking a file before there is a document row to put it in. Not addressed by
+   document id, because on the Add Employee screen there is not one yet. */
+documentRouter.post(
+  '/identity-preview',
+  requirePermission(PERMISSIONS.DOCUMENT_UPLOAD),
+  uploadSingleDocument,
+  documentController.previewIdentity,
+)
+
+/* Removing the FILE, not the checklist row: the document is still expected of
+   this employee and keeps its deadline. Gated on DOCUMENT_REPLACE - taking a
+   file off is replacing it with nothing. */
+documentRouter.delete(
+  '/:documentId/file',
+  requirePermission(PERMISSIONS.DOCUMENT_REPLACE),
+  documentController.removeFile,
+)
+
 documentRouter.post(
   '/:documentId/verify',
   requirePermission(PERMISSIONS.DOCUMENT_VERIFY),
   documentController.verify,
+)
+
+/* Accepting a refused document. DOCUMENT_UPLOAD rather than a permission of its
+   own: whoever may put the document there is who decides it is the right one. */
+documentRouter.post(
+  '/:documentId/identity-override',
+  requirePermission(PERMISSIONS.DOCUMENT_UPLOAD),
+  documentController.overrideIdentityCheck,
 )
 
 documentRouter.post(

@@ -32,6 +32,13 @@ export const API_ERROR_CODES = {
   /** A status change the state machine does not allow (see documents.ts). */
   INVALID_STATE_TRANSITION: 'INVALID_STATE_TRANSITION',
 
+  /**
+   * An uploaded document did not confirm the employee it was filed against.
+   * `details` carries the per-field outcome, so the screen can say which detail
+   * could not be found rather than only that something was wrong.
+   */
+  IDENTITY_CHECK_FAILED: 'IDENTITY_CHECK_FAILED',
+
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   RATE_LIMITED: 'RATE_LIMITED',
@@ -62,6 +69,8 @@ export const API_ERROR_MESSAGES: Readonly<Record<ApiErrorCode, string>> = {
   [API_ERROR_CODES.NOT_FOUND]: 'The requested item was not found.',
   [API_ERROR_CODES.CONFLICT]: 'That change conflicts with the current state of the record.',
   [API_ERROR_CODES.INVALID_STATE_TRANSITION]: 'That change is not allowed from the current status.',
+  [API_ERROR_CODES.IDENTITY_CHECK_FAILED]:
+    'This document does not appear to belong to this employee.',
   [API_ERROR_CODES.PAYLOAD_TOO_LARGE]: 'The file or request is too large.',
   [API_ERROR_CODES.UNSUPPORTED_MEDIA_TYPE]: 'That file type is not accepted.',
   [API_ERROR_CODES.RATE_LIMITED]: 'Too many attempts. Please wait and try again.',

@@ -13,6 +13,24 @@ import { toApiError } from './apiError.js'
  * cookie behaves identically in both and there is no build-time host to get
  * wrong.
  */
+/**
+ * How long to wait for a request that READS a document.
+ *
+ * Uploading a scan is not a normal request. The server OCRs it before storing
+ * anything, which takes 30 to 40 seconds for a photographed form - longer since
+ * Hindi was added, because every page is now read twice.
+ *
+ * The general 30 second timeout was cutting those off while the server was
+ * still working, and the server then finished and SAVED THE DOCUMENT: the
+ * upload succeeded and the screen said it had failed, which invites somebody to
+ * upload it again.
+ *
+ * Comfortably past IDENTITY_CHECK_TIMEOUT_MS (90s), so the server's own limit is
+ * what gives up first and the reason reaches the person as a message rather
+ * than as a dead request.
+ */
+export const DOCUMENT_READ_TIMEOUT_MS = 150_000
+
 export const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
@@ -33,9 +51,31 @@ export function setUnauthenticatedHandler(handler: UnauthenticatedHandler | null
   onUnauthenticated = handler
 }
 
+/**
+ * A failed request that asked for a Blob comes back holding a Blob.
+ *
+ * `responseType: 'blob'` applies to the ERROR body too, so the server's
+ * envelope arrives as a file rather than as JSON, and every failed download
+ * would otherwise read as "the server's reply could not be read". Turned back
+ * into JSON here, before toApiError looks at it, so a print that was refused
+ * says why it was refused.
+ */
+async function unpackBlobError(error: unknown): Promise<void> {
+  const response = (error as { response?: { data?: unknown } }).response
+  if (!(response?.data instanceof Blob)) return
+
+  try {
+    response.data = JSON.parse(await response.data.text())
+  } catch {
+    // Not JSON, or unreadable: leave it, and let toApiError fall back to what
+    // the status code says.
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error: unknown) => {
+  async (error: unknown) => {
+    await unpackBlobError(error)
     const apiError = toApiError(error)
 
     if (apiError.isAuthentication) onUnauthenticated?.()

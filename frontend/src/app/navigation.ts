@@ -19,10 +19,14 @@ export interface NavItem {
   status: 'ready' | 'planned'
 }
 
+// 'My signature' is deliberately NOT here. It is the signed-in user's own
+// authorising signature - a personal setting, like the password - and sitting in
+// the main nav it read as though it were the employees' signatures, which live
+// on their own records. It is in the header beside Password instead.
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/', label: 'Dashboard', permission: null, status: 'ready' },
   { to: '/employees', label: 'Employees', permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready' },
-  { to: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_READ, status: 'planned' },
+  { to: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_READ, status: 'ready' },
   { to: '/users', label: 'Users', permission: PERMISSIONS.USER_MANAGE, status: 'planned' },
 ]
 

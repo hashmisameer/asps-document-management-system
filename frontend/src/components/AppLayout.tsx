@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { PERMISSIONS } from '@asps-dms/shared'
+import { APP_NAME, ORGANISATION_NAME } from '../app/brand.js'
 import clsx from 'clsx'
 import { visibleNavItems } from '../app/navigation.js'
 import { useAuth } from '../features/auth/useAuth.js'
-import { Button } from './ui/Button.js'
+import { BrandBackdrop, BrandMark } from './BrandMark.js'
+import { UserMenu } from './UserMenu.js'
 
 /**
  * The signed-in shell: header, navigation, and the routed page.
@@ -13,7 +16,7 @@ import { Button } from './ui/Button.js'
  * nothing here.
  */
 export function AppLayout() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, can } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -31,37 +34,23 @@ export function AppLayout() {
 
   return (
     <div className="flex min-h-full flex-col">
+      <BrandBackdrop />
+
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
-          <Link to="/" className="flex flex-col leading-tight">
-            <span className="text-xs font-medium tracking-wide text-brand-700 uppercase">
-              ASPS International
+          <Link to="/" className="flex items-center gap-3">
+            <BrandMark />
+            <span className="flex flex-col leading-tight">
+              <span className="text-xs font-medium tracking-wide text-brand-700 uppercase">
+                {ORGANISATION_NAME}
+              </span>
+              <span className="text-sm font-semibold text-slate-900">{APP_NAME}</span>
             </span>
-            <span className="text-sm font-semibold text-slate-900">Document Management</span>
           </Link>
 
-          <div className="flex items-center gap-3">
-            {user ? (
-              <div className="text-right">
-                <p className="text-sm font-medium text-slate-900">{user.fullName}</p>
-                <p className="text-xs text-slate-500">{user.role}</p>
-              </div>
-            ) : null}
-            <Link
-              to="/change-password"
-              className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-            >
-              Password
-            </Link>
-            <Button
-              variant="secondary"
-              busy={signingOut}
-              busyLabel="Signing out..."
-              onClick={() => void handleSignOut()}
-            >
-              Sign out
-            </Button>
-          </div>
+          {user ? (
+            <UserMenu user={user} canSign={can(PERMISSIONS.SIGNATURE_UPLOAD)} signingOut={signingOut} onSignOut={() => void handleSignOut()} />
+          ) : null}
         </div>
 
         <nav aria-label="Main" className="mx-auto max-w-6xl px-6">

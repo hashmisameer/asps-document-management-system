@@ -25,17 +25,65 @@ export async function fetchSignature(employeeId: number): Promise<EmployeeSignat
   return response.data.signature
 }
 
+/**
+ * The signature as drawn on the pad.
+ *
+ * A Blob rather than a File because that is what a canvas produces, and the
+ * name is invented here: the server stores a UUID and never shows an uploaded
+ * name to anyone, so a real one would only be personal data travelling for no
+ * reason. `capture` records that this was drawn rather than scanned.
+ */
+function signatureForm(png: Blob, capture: 'Drawn' | 'Uploaded' = 'Drawn'): FormData {
+  const form = new FormData()
+  form.append('file', new File([png], 'signature.png', { type: 'image/png' }))
+  form.append('capture', capture)
+  return form
+}
+
 export async function uploadSignature(
   employeeId: number,
-  file: File,
+  png: Blob,
 ): Promise<EmployeeSignatureSummary> {
-  const form = new FormData()
-  form.append('file', file)
   const response = await api.post<{ signature: EmployeeSignatureSummary }>(
     `/employees/${employeeId}/signature`,
-    form,
+    signatureForm(png),
   )
   return response.data.signature
+}
+
+/**
+ * The signed-in user's own authorising signature.
+ *
+ * A different resource from an employee's, and under /me rather than under a
+ * user id: this mark is what says who signed a document off, so there is
+ * deliberately no request by which one person can set another's.
+ */
+export interface UserSignatureSummary {
+  userId: number
+  hasSignature: boolean
+  mimeType: string | null
+  widthPx: number | null
+  heightPx: number | null
+  captureMethod: 'Drawn' | 'Uploaded' | null
+  updatedAt: string | null
+}
+
+export async function fetchMySignature(): Promise<UserSignatureSummary> {
+  const response = await api.get<{ signature: UserSignatureSummary }>('/me/signature')
+  return response.data.signature
+}
+
+export async function saveMySignature(png: Blob): Promise<UserSignatureSummary> {
+  const response = await api.post<{ signature: UserSignatureSummary }>(
+    '/me/signature',
+    signatureForm(png),
+  )
+  return response.data.signature
+}
+
+export function mySignatureImageUrl(version: string | null): string {
+  const base = '/api/me/signature/image'
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base
 }
 
 /**
@@ -87,5 +135,6 @@ export async function skipSignature(
 
 export const signatureKeys = {
   employee: (employeeId: number) => ['signature', employeeId] as const,
+  mine: ['signature', 'me'] as const,
   placements: (documentId: number) => ['placements', documentId] as const,
 }

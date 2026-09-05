@@ -49,6 +49,48 @@ export const uploadEmployeeSignature: RequestHandler = async (req, res) => {
 }
 
 /**
+ * The signed-in user's own authorising signature.
+ *
+ * Under /me rather than /users/:id, and that is the whole point: the route has
+ * no user id to get wrong, so there is no request that sets someone else's
+ * signature. This mark is how a document records who signed it off.
+ */
+export const getMySignature: RequestHandler = async (req, res) => {
+  res.json({ signature: await signatureService.getUserSignatureSummary(actorOf(req).userId) })
+}
+
+/** Drawn on the pad, or uploaded as an image; the row records which. */
+const captureBodySchema = z.object({
+  capture: z.enum(['Drawn', 'Uploaded']).default('Drawn'),
+})
+
+export const saveMySignature: RequestHandler = async (req, res) => {
+  if (!req.file) {
+    throw new BadRequestError("Attach the signature image in a form field named 'file'.")
+  }
+
+  // Multipart, so the field arrives as text alongside the file rather than JSON.
+  const { capture } = parseBody(req, captureBodySchema)
+
+  const signature = await signatureService.saveUserSignature(
+    req.file,
+    capture,
+    actorOf(req),
+    requestContext(req),
+  )
+  res.json({ signature })
+}
+
+export const downloadMySignature: RequestHandler = async (req, res) => {
+  const { stream, mimeType } = await signatureService.openUserSignature(actorOf(req).userId)
+
+  res.setHeader('Content-Type', mimeType)
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  stream.pipe(res)
+}
+
+/**
  * Streams the signature image.
  *
  * `no-store` for the same reason a document is: this is a person's signature,

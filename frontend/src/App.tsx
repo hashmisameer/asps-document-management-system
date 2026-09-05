@@ -4,10 +4,16 @@ import { AppLayout } from './components/AppLayout.js'
 import { ProtectedRoute } from './components/ProtectedRoute.js'
 import { ChangePasswordPage } from './features/auth/ChangePasswordPage.js'
 import { LoginPage } from './features/auth/LoginPage.js'
+import { RegisterPage } from './features/auth/RegisterPage.js'
 import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
+import { ReportsPage } from './pages/ReportsPage.js'
+import { DocumentEmployeesPage } from './pages/DocumentEmployeesPage.js'
+import { DocumentsPage } from './pages/DocumentsPage.js'
+import { MySignaturePage } from './pages/MySignaturePage.js'
+import { PlacementEditorPage } from './features/signatures/PlacementEditorPage.js'
 import { DashboardPage } from './pages/DashboardPage.js'
 
 /**
@@ -21,6 +27,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* Public, like /login: registering is what someone does when they have no
+          account to sign in with. The cap on it is enforced server-side. */}
+      <Route path="/register" element={<RegisterPage />} />
 
       <Route
         path="/change-password"
@@ -73,11 +82,50 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* Every checklist row in the company - what the dashboard's document
+            tiles open. Declared before 'documents/:documentId/...' so the bare
+            path is the list. */}
+        <Route
+          path="documents"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.DOCUMENT_READ}>
+              <DocumentsPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Positioning signatures on one document. Keyed by document rather
+            than employee: the placements belong to the file, not the person. */}
+        <Route
+          path="documents/:documentId/signature"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.SIGNATURE_PLACE}>
+              <PlacementEditorPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* The user's own authorising signature. No id in the path: there is
+            no screen that sets somebody else's. */}
+        <Route
+          path="my-signature"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.SIGNATURE_UPLOAD}>
+              <MySignaturePage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="reports"
           element={
             <ProtectedRoute permission={PERMISSIONS.REPORT_READ}>
-              <ComingSoonPage title="Reports" milestone="Milestone 5" />
+              <ReportsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="reports/by-document-type/:documentTypeId"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.REPORT_READ}>
+              <DocumentEmployeesPage />
             </ProtectedRoute>
           }
         />

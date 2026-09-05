@@ -1,4 +1,4 @@
-import type { AuthUser, ChangePasswordInput, LoginInput } from '@asps-dms/shared'
+import type { AuthUser, ChangePasswordInput, LoginInput, RegisterInput } from '@asps-dms/shared'
 import { api } from '../../lib/api.js'
 import { ApiError } from '../../lib/apiError.js'
 
@@ -48,3 +48,34 @@ export async function changePassword(input: ChangePasswordInput): Promise<AuthUs
 }
 
 export const AUTH_QUERY_KEY = ['auth', 'me'] as const
+
+export interface RegistrationStatus {
+  open: boolean
+  remaining: number
+  secretRequired: boolean
+  firstAccount: boolean
+}
+
+/**
+ * Whether the registration form is still open.
+ *
+ * Public, and asked before the sign-in page offers the link: a form that cannot
+ * succeed should not be advertised. This is a convenience, not the control -
+ * the cap is counted in the database on every attempt.
+ */
+export async function fetchRegistrationStatus(): Promise<RegistrationStatus> {
+  const response = await api.get<{ registration: RegistrationStatus }>('/auth/registration')
+  return response.data.registration
+}
+
+export async function register(
+  input: RegisterInput,
+): Promise<{ username: string; role: string }> {
+  const response = await api.post<{ registered: { username: string; role: string } }>(
+    '/auth/register',
+    input,
+  )
+  return response.data.registered
+}
+
+export const REGISTRATION_QUERY_KEY = ['auth', 'registration'] as const

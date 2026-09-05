@@ -6,18 +6,17 @@ Manages employee records, a configurable document checklist, submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
-> **Status: Milestones 1-4 complete in code; Milestone 5 (signatures) landed
-> except for the placement editor.** The API process, authentication, the
+> **Status: Milestones 1-5 complete in code.** The API process, authentication, the
 > signed-in SPA shell, employee management with its document checklist, document
-> upload, verification and secure file serving, signature upload, placement and
-> PDF stamping, shared business rules and safety checks run and are unit-tested.
-> The drag-and-drop editor that lets HR position a signature on the page is the
-> one piece still to build: the API it will call, and the stamping behind it,
-> are done and tested. The schema, migration runner and every SQL query are
-> written and typechecked but have **not yet been run against a real database**,
-> because no SQL Server instance is available yet - so nothing that reads or
-> writes a table has been exercised end to end.
-> See [`docs/open-questions.md`](docs/open-questions.md) item B1.
+> upload, verification and secure file serving, the identity check that reads an
+> upload and compares it with the employee record, pen-tablet signature capture
+> for both the employee and the authorising user, placement and PDF stamping,
+> shared business rules and safety checks run and are unit-tested.
+> The schema, all three migrations and the seeds **have now been applied to a
+> real SQL Server 2014 Express instance**, and the signing path has been driven
+> end to end against it: an upload that passes the identity check, an employee
+> and an authoriser signature, placements saved, and the signed PDF regenerated.
+> Reports and user administration remain placeholders (Milestone 6).
 >
 > The API starts and serves requests without a database: it reports the
 > connection failure at boot and answers `GET /api/health/ready` with 503 until
@@ -114,12 +113,16 @@ trusted, so a caller cannot choose its own log correlation id.
 | `GET /api/employees/:id/documents` | The checklist, with deadline state derived at read time. |
 | `GET /api/document-types` | The configured checklist. Read-only until Settings. |
 | `GET /api/documents/:id` | One document, with its deadline state. |
-| `POST /api/documents/:id/file` | Uploads or replaces the file (multipart). |
+| `POST /api/documents/:id/file` | Uploads or replaces the file (multipart). Refused with 422 `IDENTITY_CHECK_FAILED` unless a reason is given. |
 | `POST /api/documents/:id/verify` | Marks it verified. |
 | `POST /api/documents/:id/reject` | Rejects it. A reason is required. |
 | `PATCH /api/documents/:id/deadline` | Overrides this document's deadline. |
 | `GET /api/documents/:id/preview` | Streams it inline. |
 | `GET /api/documents/:id/download` | Streams it as an attachment. |
+| `GET /api/me/signature` | The signed-in user's own authorising signature. |
+| `POST /api/me/signature` | Saves it, as drawn on the pad (multipart). |
+| `GET /api/me/signature/image` | Streams it. |
+| `POST /api/reminders/send` | Emails the pending-documents digest now. `?dryRun=true` renders it without sending. |
 | `GET /api/employees/:id/signature` | Whether a signature is on file, and its size. |
 | `POST /api/employees/:id/signature` | Uploads or replaces it (multipart). |
 | `GET /api/employees/:id/signature/image` | Streams the signature image. |
@@ -153,6 +156,21 @@ lets it set a password.
 - **Calendar values are rendered in UTC**, so a joining date shows the day it
   says. Timestamps are rendered in the reader's own timezone, because those are
   real instants.
+- **The placement editor never stores a pixel.** pdf.js renders the page at
+  whatever size the layout gives it, the boxes are dragged over it, and what is
+  saved is normalized to the displayed page with the page's own `/Rotate`
+  beside it - so a placement means the same spot on a laptop, at 150% zoom, and
+  in the 300 DPI raster the stamper works from. The editor and the stamper share
+  one coordinate module rather than each keeping their own arithmetic, which is
+  how a preview and its output drift apart. A drag is clamped to the page; a
+  save is validated, and an out-of-bounds placement is refused rather than
+  quietly corrected. The pdf.js worker is bundled rather than fetched from a
+  CDN, because the company server has no route to the internet.
+- **A refused upload opens the override, not a dead end.** When the identity
+  check turns a document away, the form names the details that could not be
+  found and asks for a reason, then re-sends the same file with it. A refusal
+  whose message says "accept it with a reason" while offering nowhere to write
+  one would read as a bug the first time HR met it.
 - **Every failure becomes one `ApiError`**, so a component never sees an axios
   error. A request that never reached the server says so rather than reporting a
   generic failure.
@@ -222,6 +240,12 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 - **Validate, write the file, then update the row.** If the row fails to save
   the file is removed again: an orphaned file is recoverable housekeeping, while
   a row pointing at a file that was never written is a document nobody can open.
+- **There is no verification step on screen.** A document is done when its
+  file is in: `isDocumentComplete` already counts `Uploaded`, so nothing sits
+  overdue waiting for a second person to agree it arrived, and a wrong document
+  is Replaced rather than rejected and collected again. The API still has
+  `verify` and `reject`, and the state machine still allows them - taking them
+  off the screen is reversible, taking them out of the model would not be.
 - **Every status change goes through the state machine** in
   `shared/src/constants/documents.ts`. A change it does not permit is a 409 with
   `INVALID_STATE_TRANSITION`, never a silent write - so replacing a *verified*
@@ -240,11 +264,72 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
   a file that is no longer served, so the signature status starts over rather
   than being carried forward onto a document nobody has placed it on.
 
+## Document identity check
+
+- **An upload is read and compared with the employee's own record**, so a form
+  belonging to one person cannot be filed against another. Which details a
+  document must confirm is configuration held on the document type, not a rule
+  in code: a service card asks for the name, code and Aadhaar number, while a
+  qualification certificate asks for the name only.
+- **The file is read before it is stored.** A document that is going to be
+  refused should never have been written to the store in the first place.
+- **Two ways of reading, and which one was used is recorded.** A PDF's own text
+  layer is exact - those are the characters the file contains. A scan or a
+  photograph has no text layer, so its pages are rendered and OCR'd, which is
+  good but not exact. A text layer shorter than 60 characters is treated as
+  absent rather than as an answer, because a scanned PDF usually carries a
+  scanner watermark or a page number, and checking a service card against the
+  word "Scanned" would refuse a document OCR would have read perfectly.
+- **The check is a guard, not a judgement of authenticity.** It is deliberately
+  literal about what counts as a match, because the cost of being lenient is
+  exactly the mistake being guarded against. Matching is per field rather than
+  per document: a date matches in any of the formats a document writes it in, a
+  name matches regardless of order or case, and a digit string matches through
+  the spacing an identity number is usually printed with.
+- **A detail the office never recorded does not fail anything.** It comes back
+  `MissingOnRecord` and is reported. Refusing a document because an employee's
+  phone number was never typed in would send HR to rescan a document that was
+  always fine, while reporting the gap makes the real fix the obvious one.
+- **A failure can be overridden by a person, in their own name.** A real
+  document can fail because a scan is too poor for OCR to read a digit, so the
+  refusal is a 422 `IDENTITY_CHECK_FAILED` carrying the per-field outcome, and
+  the same upload succeeds when it names a reason. The outcome, the reason and
+  who gave it are stored **on the document**, not only in the audit trail:
+  "this service card was accepted although its Aadhaar number could not be
+  read" has to be visible months later without knowing to go looking.
+- **A refusal is audited even though nothing was stored.** An upload that was
+  turned away is exactly the event this control exists to make visible, and it
+  leaves no other trace - there is no document row to look at afterwards.
+- **An identity number is never echoed back.** A refusal names the detail that
+  could not be found, and for a name or a joining date it says what was
+  expected, because that is what makes the message useful. For an Aadhaar, PAN,
+  UAN or ESI number it reports the label only, since doing otherwise would turn
+  the upload form into a way of reading one. The same numbers are redacted from
+  audit metadata and logs, where they would outlive every control on the record
+  they came from.
+- **The whole check can be switched off** with `IDENTITY_CHECK_ENABLED`, and a
+  check that did not run is recorded as `NotChecked` - a different answer from
+  one that ran and passed. On the company server, which has no route to the
+  internet, the Tesseract language data must be vendored locally or every OCR
+  pass fails; see `backend/.env.example`.
+
 ## Signatures
 
-- **One signature per employee**, uploaded once and reused on everything they
-  sign (Section 24). Replacing it does *not* re-stamp documents that were
-  already signed: those carry the image that was current when they were issued.
+- **Two people sign a document**: the employee, and the HR user who authorises
+  it. `SignerRole` on a placement is what says which, and the authoriser is
+  always the user saving the placements - never a user id the request names - so
+  nobody can sign a document off in a colleague's name.
+- **Both signatures are drawn on a pen tablet**, not uploaded as files. The pad
+  is an ordinary canvas driven by pointer events, so it needs no vendor SDK and
+  no bridge process: with its Windows driver installed, the tablet is just a pen
+  device. Pen pressure varies the stroke width, and the ink is cropped to its
+  own bounds and stored as a transparent PNG - an uncropped canvas would stamp a
+  small signature floating in a large empty box.
+- **One signature per employee**, enrolled once and reused on everything they
+  sign (Section 24). Each HR user has their own, in `dbo.UserSignatures`, so a
+  signed document records who authorised it. Replacing either does *not*
+  re-stamp documents that were already signed: those carry the image that was
+  current when they were issued.
 - **The image is measured by embedding it exactly as the stamper will.** That
   records its pixel size, and it also catches a progressive JPEG - which
   `pdf-lib` cannot embed - while someone is looking at an upload form, rather
@@ -274,19 +359,68 @@ stamper, not in the shared module, because the browser editor has no use for it;
 both its four rotations and the shared transform are pinned to absolute values
 in the tests rather than round-tripped.
 
+## Reminders
+
+- **One email, to several people, listing who still owes what.** Each entry is
+  the employee's code and name and the documents with no file against them,
+  worst deadline first. `REMINDER_RECIPIENTS` is a comma-separated list, because
+  who gets chased is an office decision rather than a code change.
+- **It repeats until the file is uploaded.** The digest is rebuilt from the
+  current state on every run and nothing is stored about a reminder having been
+  sent, so there is no record to drift out of step with the checklist. A
+  document stops appearing the moment its file arrives, and not before.
+- **Pending means no file, not a status.** A rejected document still has no
+  acceptable file against it, and a reminder that stopped at `Rejected` would
+  drop exactly the documents most in need of chasing.
+- **A document that is not due yet is left out**, unless
+  `REMINDER_INCLUDE_NOT_YET_DUE` says otherwise. Every new employee starts with
+  ten future documents, and listing them from day one makes the digest a copy of
+  the checklist that nobody reads. A document with no deadline at all is still
+  included: it is genuinely outstanding.
+- **Nothing is sent when nothing is outstanding.** A daily email saying all is
+  well teaches people to delete it unread, and takes the one that mattered with
+  it.
+- **The daily run is a separate process**, `npm run send-reminders`, scheduled
+  by Windows Task Scheduler - not a timer inside the API, which would stop at
+  the next restart and would send twice if the API were ever run as two
+  processes. A hung mail server cannot wedge the API either. `-- --dry-run`
+  prints what would go out and sends nothing.
+- **Sending is off until `REMINDER_ENABLED` is set**, so a freshly deployed
+  server cannot start emailing the office by itself. A dry run works regardless,
+  which is how the wording gets checked before anyone is on the receiving end.
+
 ## Checks
+
 
 ```bash
 npm run verify              # lint + typecheck + SQL safety + secrets + tests
 npm run check:sql-safety    # blocks 2016+ T-SQL and interpolated SQL
 npm run check:secrets       # blocks committed credentials, keys, scans, PAN/Aadhaar
-npm run test                # unit tests
+npm run test                # unit tests - no database, always safe to run
+npm run test:integration    # the same code against a real SQL Server
 ```
 
 `check:sql-safety` exists because production is SQL Server 2014 while developers
 are likely to have something newer: it fails the build on T-SQL that needs a
 later version, and on any value interpolated into query text instead of being
 bound as a parameter.
+
+The **unit** tests mock the repository layer and point at a database host that
+deliberately does not resolve, so they can never reach a real server. They are
+what `npm run verify` runs.
+
+The **integration** tests are the opposite: the same code over HTTP against a
+real SQL Server, exercising what a mock cannot - the checklist a new employee
+gets, the identity check reading an actual PDF, the reminder query, and the
+registration cap, which lives in a condition inside an INSERT precisely so it
+cannot be raced and so cannot be proved by a mock that counts.
+
+They borrow the connection from `backend/.env` and then **force the database
+name to `ASPS_DMS_TEST`**, because they delete rows to reach a known state.
+That database is created once, by hand, with an administrator's account - the
+application's own login is db_owner on its own database and nothing more, and
+widening it just to run tests would be the wrong trade. The command is in the
+error the tests print if it is missing.
 
 `check:secrets` scans everything that would be committed - what git tracks, plus
 untracked files `.gitignore` does not already exclude - for `.env` files, private

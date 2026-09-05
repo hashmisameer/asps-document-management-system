@@ -1,4 +1,9 @@
-import type { DetectionMethod, PlacementMethod, SignaturePlacement } from '@asps-dms/shared'
+import type {
+  DetectionMethod,
+  PlacementMethod,
+  SignaturePlacement,
+  SignerRole,
+} from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
 
 /**
@@ -23,6 +28,9 @@ interface PlacementRow {
   Method: string
   DetectionMethod: string
   Confidence: number | null
+  SignerRole: string
+  SignerUserId: number | null
+  SignerName: string | null
   IsApplied: boolean
   CreatedAt: Date
   UpdatedAt: Date
@@ -42,6 +50,9 @@ function toRecord(row: PlacementRow): SignaturePlacement {
     method: row.Method as PlacementMethod,
     detectionMethod: row.DetectionMethod as DetectionMethod,
     confidence: row.Confidence,
+    signerRole: row.SignerRole as SignerRole,
+    signerUserId: row.SignerUserId,
+    signerName: row.SignerName,
     isApplied: row.IsApplied,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
@@ -53,8 +64,11 @@ export async function listForDocument(documentId: number): Promise<SignaturePlac
   const result = await request.input('documentId', sql.Int, documentId).query<PlacementRow>(`
       SELECT sp.SignaturePlacementId, sp.DocumentId, sp.EmployeeId, sp.PageNumber,
              sp.X, sp.Y, sp.Width, sp.Height, sp.PageRotation, sp.Method,
-             sp.DetectionMethod, sp.Confidence, sp.IsApplied, sp.CreatedAt, sp.UpdatedAt
+             sp.DetectionMethod, sp.Confidence, sp.SignerRole, sp.SignerUserId,
+             u.FullName AS SignerName,
+             sp.IsApplied, sp.CreatedAt, sp.UpdatedAt
       FROM   dbo.SignaturePlacements AS sp
+      LEFT JOIN dbo.Users AS u ON u.UserId = sp.SignerUserId
       WHERE  sp.DocumentId = @documentId
       ORDER BY sp.PageNumber, sp.SignaturePlacementId`)
 
@@ -71,6 +85,10 @@ export interface PlacementRecord {
   method: PlacementMethod
   detectionMethod: DetectionMethod
   confidence: number | null
+  signerRole: SignerRole
+  /** Set for an 'Authoriser' box and null for an 'Employee' one - the database
+      enforces both halves of that with CK_SigPlace_SignerUser. */
+  signerUserId: number | null
 }
 
 /**
@@ -107,10 +125,13 @@ export async function replaceForDocument(
       .input(`method${index}`, sql.VarChar(20), placement.method)
       .input(`detect${index}`, sql.VarChar(20), placement.detectionMethod)
       .input(`conf${index}`, sql.Float, placement.confidence)
+      .input(`role${index}`, sql.VarChar(20), placement.signerRole)
+      .input(`signer${index}`, sql.Int, placement.signerUserId)
 
     return (
       `(@documentId, @employeeId, @page${index}, @x${index}, @y${index}, @w${index}, ` +
-      `@h${index}, @rot${index}, @method${index}, @detect${index}, @conf${index}, @createdBy)`
+      `@h${index}, @rot${index}, @method${index}, @detect${index}, @conf${index}, ` +
+      `@role${index}, @signer${index}, @createdBy)`
     )
   })
 
@@ -121,7 +142,7 @@ export async function replaceForDocument(
     tuples.length > 0
       ? `INSERT INTO dbo.SignaturePlacements
              (DocumentId, EmployeeId, PageNumber, X, Y, Width, Height, PageRotation,
-              Method, DetectionMethod, Confidence, CreatedBy)
+              Method, DetectionMethod, Confidence, SignerRole, SignerUserId, CreatedBy)
          VALUES ${tuples.join(', ')};`
       : ''
 
