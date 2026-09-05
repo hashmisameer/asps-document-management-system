@@ -20,7 +20,8 @@
     "user:add": "tsx src/database/cli.ts create-user",
     "user:reset": "tsx src/database/cli.ts reset-password",
     "user:list": "tsx src/database/cli.ts list-users",
-    "send-reminders": "tsx src/scripts/sendReminders.ts"
+    "send-reminders": "tsx src/scripts/sendReminders.ts",
+    "import-employees": "tsx src/scripts/importEmployees.ts"
   },
   "dependencies": {
     "@asps-dms/shared": "*",

@@ -757,3 +757,19 @@ export async function findPhoto(
   if (!row?.PhotoFilePath) return null
   return { filePath: row.PhotoFilePath, mimeType: row.PhotoMimeType ?? 'application/octet-stream' }
 }
+
+/**
+ * Every employee code in use, however the employee stands.
+ *
+ * Archived and left included, and deliberately: the code is unique across the
+ * whole table, so an import that skipped an archived record would fail on the
+ * insert instead of reporting a duplicate. 568 short strings is a cheap read
+ * and it is only made by the import.
+ */
+export async function allEmployeeCodes(): Promise<Set<string>> {
+  const request = await createRequest()
+  const result = await request.query<{ EmployeeCode: string }>(
+    'SELECT EmployeeCode FROM dbo.Employees',
+  )
+  return new Set(result.recordset.map((row) => row.EmployeeCode.toUpperCase()))
+}

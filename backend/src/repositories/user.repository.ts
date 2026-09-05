@@ -269,3 +269,20 @@ export async function createSelfRegisteredUser(
 
   return result.recordset[0]?.UserId ?? null
 }
+
+/**
+ * The first active account with a given role, for a command run by a person
+ * who did not say which account to act as.
+ *
+ * Oldest first, which on this system is the account somebody set up when the
+ * server was installed - the one an unattended import belongs to.
+ */
+export async function findFirstByRole(role: Role): Promise<UserRecord | null> {
+  const request = await createRequest()
+  const result = await request
+    .input('role', sql.VarChar(20), role)
+    .query<UserRow>(`${SELECT_USER} WHERE u.Role = @role AND u.IsActive = 1 ORDER BY u.UserId`)
+
+  const row = result.recordset[0]
+  return row ? toRecord(row) : null
+}

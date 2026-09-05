@@ -94,25 +94,59 @@ every row it reads. The seed and the constant are compared, line by line, by
 
 ---
 
-## 4. Employee import - **this does not exist**
+## 4. Employee import
 
-There is no import command. Nothing in the repository reads a spreadsheet:
-no `xlsx`, `exceljs` or CSV-parsing dependency in any of the three
-`package.json` files, and no script under `backend/src/scripts/` or `scripts/`
-that touches employees.
+```
+npm run import-employees -- --file D:\ASPS_DMS\employee_master.xlsx --dry-run
+npm run import-employees -- --file D:\ASPS_DMS\employee_master.xlsx
+```
 
-So there is no dry-run flag and no expected column headers to give you - there
-is nothing to give them to. The 568 employees would have to be entered by hand
-through Add Employee as things stand.
+**Run the dry run first.** It reads the whole file, checks every row against
+the same rules the Add Employee form uses, and prints what would happen without
+touching the database.
 
-If the import is wanted, it needs building, and it needs two decisions made
-first (both raised before and still open):
+Reads .xlsx and .csv. The columns, exactly as the template has them:
 
-- the department and designation spellings have to be mapped as they are
-  imported, or the old spellings walk straight back into the cleaned-up
-  dropdowns - see the cleanup sheet;
-- the checklist rows for 568 people are materialised at creation, which is
-  where every deadline is written.
+```
+employee_code, full_name, joining_date, department, designation,
+mobile, address, employment_status, is_existing_employee
+```
+
+Only the first three are required. `employment_status` must be ACTIVE - an
+exit needs a resignation date and a last working day, which the file does not
+carry, so those are recorded on the employee's record afterwards.
+`is_existing_employee` is read and deliberately not acted on: the office asked
+for these people to be treated like any other, so their deadlines run from
+their joining date.
+
+Other flags:
+
+| Flag | What it does |
+| --- | --- |
+| `--dry-run` | report only; nothing is written |
+| `--date-format mdy` | how to read '4/11/2022'. `mdy` (default) or `dmy` |
+| `--strict` | a dropped optional detail fails the row instead of warning |
+| `--as <username>` | whose name the records are created in. Defaults to the first admin |
+| `--limit <n>` | stop after n rows, for a cautious first run |
+
+What to expect:
+
+- **A bad row does not stop the import.** Failed rows are listed with their line
+  number; fix them and run it again.
+- **An optional detail that fails is dropped, with a warning, and the employee
+  is still created.** Two mobile numbers in the office's export have eleven
+  digits; those two people import without a phone number.
+- **Running it twice creates nobody twice.** Codes already in the database are
+  skipped and reported.
+- **Dates.** '4/11/2022' is read as MONTH/day/year, which is what these exports
+  carry. Check the first line of the output - it prints the first joining date
+  it read, next to the text it read it from - before letting it write anything.
+- **Employee codes stay text.** '00000068' keeps its leading zeros. A code that
+  arrives as '68' is flagged: the spreadsheet has read that column as a number.
+
+Every imported employee gets the full ten-document checklist with deadlines
+from their joining date, because the import goes through the same service the
+form does.
 
 ---
 
@@ -350,6 +384,8 @@ Migrations and seeds run **from the repository on the server** (they read
 5. `npm run db:migrate`, then `npm run db:status` - nothing pending.
 6. `npm run db:seed` - roles, ten document types, departments and designations.
 7. `npm run user:add` five times.
+8. `npm run import-employees -- --file <path> --dry-run`, read it, then run it
+   for real (section 4).
 8. Check the log says "Serving the built frontend" - if it does not,
    `frontend/dist` did not make it across (section 7).
 9. Start `node backend/dist/server.js` as a service, working directory
@@ -358,5 +394,4 @@ Migrations and seeds run **from the repository on the server** (they read
 
 ## Still open
 
-- **No employee import** (section 4).
 - Two `.traineddata` files at the repository root are untracked (section 2).

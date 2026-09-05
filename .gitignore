@@ -52,6 +52,14 @@ coverage/
 !docs/assets/**
 !backend/tests/fixtures/**
 
+# Employee data in a spreadsheet - the master, an export, an import file.
+# The same rule as the documents above: real people's details never go in here.
+# Test data belongs in backend/tests/, written in the test that uses it.
+*.csv
+*.xlsx
+*.xls
+!backend/tests/fixtures/**
+
 # SQL backups / data dumps
 *.bak
 *.mdf
