@@ -165,37 +165,39 @@ Order on a fresh database: `db:migrate`, then `db:seed`, then `user:add`.
 
 ---
 
-## 7. Serving the frontend - **needs a decision**
+## 7. Serving the frontend
 
-Express does **not** serve the frontend. There is no `express.static` anywhere
-in `backend/src/app.ts`; the API returns JSON and files only. Two comments in
-that file describe the intended arrangement:
+Express serves it. One origin, one port, one service - nothing else to install
+and nothing to configure on the machine.
 
-> The SPA is served from a separate origin in development and by a static host
-> in production
->
-> In production the SPA is same-origin, `CORS_ORIGIN` is empty, and no CORS
-> headers are sent at all.
+In production the API mounts `frontend/dist` after its own routes:
 
-So the design expects **one origin** in production: something serves
-`frontend/dist/` and forwards `/api` to Node on port 4000. That something is not
-in this repository. Two ways to finish it:
+- `/api/...` is the API's, including a path it does not recognise - an unknown
+  endpoint answers with the JSON error envelope, never with a page.
+- everything else is served from the build, and any path that is not a file
+  falls back to `index.html`. That is what makes refreshing `/employees/42`
+  work: the route lives in the browser, and the server has never heard of it.
+- hashed assets under `/assets` are cached for a year and marked immutable;
+  `index.html` is never cached, because it names those files and a stale copy
+  points a browser at the previous deployment's JavaScript.
 
-**A. IIS (or nginx) in front.** Serve `frontend/dist` as the site root, reverse
-proxy `/api` to `http://localhost:4000`, and leave `CORS_ORIGIN` empty. Note
-that `app.set('trust proxy', false)` is deliberate - with a proxy in front,
-every request will look as though it came from the proxy, so the rate limiter
-and the audit trail will record the proxy's address rather than the user's.
-Turning `trust proxy` on is a one-line change but must be done **only** when a
-proxy is really in front, or any client can spoof its own IP.
+**Nothing changes in development.** Vite still serves the SPA on 5173 and
+proxies `/api` here; the static files are mounted only when
+`NODE_ENV=production`.
 
-**B. Serve the SPA from Express.** Add `express.static('frontend/dist')` plus a
-catch-all that returns `index.html` for non-`/api` paths, and set a content
-security policy there (helmet's is off in the API because it serves no HTML).
-One port, one service, nothing else to install. This is roughly ten lines and I
-can add it - say the word.
+**If `frontend/dist` is missing** the API logs a warning at startup - "No built
+frontend found" - and carries on serving the API alone. So a page that 404s in
+JSON means the build was not copied across.
 
-Until one of these is done, the built frontend has nowhere to be served from.
+A content security policy is applied in production, where there is now a page
+for it to govern: same-origin scripts, no framing, no external connections.
+It is off in development, where Vite serves the HTML from another origin.
+
+**No reverse proxy.** `app.set('trust proxy', false)` is deliberate: with IIS
+or nginx in front, every request would be recorded as coming from the proxy and
+the rate limiter and audit trail would be reading the proxy's address rather
+than the user's. If a proxy is ever put in front, that line has to change with
+it.
 
 ---
 
@@ -348,7 +350,8 @@ Migrations and seeds run **from the repository on the server** (they read
 5. `npm run db:migrate`, then `npm run db:status` - nothing pending.
 6. `npm run db:seed` - roles, ten document types, departments and designations.
 7. `npm run user:add` five times.
-8. Decide section 7 and serve `frontend/dist`.
+8. Check the log says "Serving the built frontend" - if it does not,
+   `frontend/dist` did not make it across (section 7).
 9. Start `node backend/dist/server.js` as a service, working directory
    `backend/`.
 10. `GET /api/health/ready` - it reports the database and the document store.
@@ -356,5 +359,4 @@ Migrations and seeds run **from the repository on the server** (they read
 ## Still open
 
 - **No employee import** (section 4).
-- **Nothing serves the frontend** (section 7).
 - Two `.traineddata` files at the repository root are untracked (section 2).
