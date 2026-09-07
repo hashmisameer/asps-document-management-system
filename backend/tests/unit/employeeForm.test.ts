@@ -19,7 +19,7 @@ import {
   type EmployeeFileData,
   type EmployeeFormData,
 } from '../../src/services/employeeForm.service.js'
-import type { BundleEntry } from '../../src/services/documentBundle.service.js'
+import type { DocumentEntry } from '../../src/services/documentPages.service.js'
 
 /**
  * The printed employee form.
@@ -414,7 +414,7 @@ async function jpegOf(): Promise<Buffer> {
 function fileEntry(
   documentName: string,
   file: { read: () => Promise<Buffer>; mimeType: string; isSigned?: boolean },
-): BundleEntry {
+): DocumentEntry {
   return {
     documentName,
     isMandatory: true,
@@ -424,7 +424,7 @@ function fileEntry(
   }
 }
 
-const employeeFile = (documents: BundleEntry[], profile = employee()): EmployeeFileData => ({
+const employeeFile = (documents: DocumentEntry[], profile = employee()): EmployeeFileData => ({
   employee: profile,
   photo: null,
   documents,
@@ -539,7 +539,7 @@ describe('renderEmployeeFile', () => {
     // what to draw is the difference between a server that builds this and one
     // that falls over on the third employee of the morning.
     const reads: string[] = []
-    const watched = (name: string, mimeType: string, data: () => Promise<Buffer>): BundleEntry =>
+    const watched = (name: string, mimeType: string, data: () => Promise<Buffer>): DocumentEntry =>
       fileEntry(name, {
         mimeType,
         read: async () => {
@@ -579,5 +579,97 @@ describe('renderEmployeeFile', () => {
     expect(pages[1]).toContain('Page 2 of 3')
     expect(pages[2]).toContain('SCANNED CARD')
     expect(pages[2]).not.toContain('Sameer Hashmi')
+  })
+})
+
+describe('the documents inside the employee file', () => {
+  /** A real image, in whichever format is asked for. */
+  async function imageOf(format: 'png' | 'tiff' | 'webp'): Promise<Buffer> {
+    const canvas = sharp({
+      create: { width: 400, height: 600, channels: 3, background: { r: 220, g: 220, b: 220 } },
+    })
+    return format === 'png'
+      ? canvas.png().toBuffer()
+      : format === 'tiff'
+        ? canvas.tiff().toBuffer()
+        : canvas.webp().toBuffer()
+  }
+
+  it('keeps every page of a document that has several', async () => {
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Appointment Letter', {
+            read: () => pdfOf(['ONE', 'TWO', 'THREE']),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages).toHaveLength(5) // details + separator + three
+    expect(pages[2]).toContain('ONE')
+    expect(pages[3]).toContain('TWO')
+    expect(pages[4]).toContain('THREE')
+  })
+
+  it('converts the image formats a PDF cannot hold', async () => {
+    // WEBP and TIFF are both accepted uploads and neither can be embedded.
+    for (const format of ['tiff', 'webp', 'png'] as const) {
+      const data = await imageOf(format)
+      const pdf = await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Aadhaar Card', { read: async () => data, mimeType: `image/${format}` }),
+        ]),
+        META,
+      )
+
+      expect((await PDFDocument.load(pdf)).getPageCount(), format).toBe(3)
+    }
+  })
+
+  it('accounts for a document it cannot read rather than dropping it', async () => {
+    // A file the store has lost, or one that is not really a PDF. Silently
+    // handing over nine of ten is how somebody comes to believe a document was
+    // never collected.
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Bio Data Form', {
+            read: async () => Buffer.from('not a pdf at all'),
+            mimeType: 'application/pdf',
+          }),
+          fileEntry('Service Card', {
+            read: () => pdfOf(['GOOD ONE']),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages[1]).toContain('Bio Data Form')
+    expect(pages[2]).toContain('could not be read')
+    // And the one after it is unaffected.
+    expect(pages[3]).toContain('Service Card')
+    expect(pages[4]).toContain('GOOD ONE')
+  })
+
+  it('says on the separator when the type cannot be included at all', async () => {
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Old Archive', {
+            read: async () => Buffer.from('zip'),
+            mimeType: 'application/zip',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages).toHaveLength(2)
+    expect(pages[1]).toContain('application/zip')
   })
 })

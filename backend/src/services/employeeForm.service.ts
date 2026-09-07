@@ -11,8 +11,8 @@ import { logger } from '../utils/logger.js'
 import {
   appendDocuments,
   drawOwnFooters,
-  type BundleEntry,
-} from './documentBundle.service.js'
+  type DocumentEntry,
+} from './documentPages.service.js'
 import {
   A4_PORTRAIT,
   DASH,
@@ -94,7 +94,7 @@ export interface EmployeeFileData {
   employee: EmployeeProfile
   photo: EmployeePhoto | null
   /** In the checklist's order, and only the ones with a file behind them. */
-  documents: readonly BundleEntry[]
+  documents: readonly DocumentEntry[]
 }
 
 /* -------------------------------------------------------------------------- */

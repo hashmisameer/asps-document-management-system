@@ -178,31 +178,15 @@ function sendPdf(res: Response, fileName: string, pdf: Buffer): void {
 /**
  * One employee's file: their details, then every document they have sent in.
  *
- * DOCUMENT_READ, not EMPLOYEE_READ. This used to be a checklist, which anybody
- * who could read the record could print; it now carries the documents
- * themselves, so it is gated on being allowed to see them.
+ * DOCUMENT_DOWNLOAD, not EMPLOYEE_READ. This used to be a checklist, which
+ * anybody who could read the record could print; it now hands over the
+ * documents themselves, which is the thing DOCUMENT_DOWNLOAD governs. A Viewer
+ * may read documents on screen and may not take them away, and a printed file
+ * would be the one way round that.
  */
 export const printForm: RequestHandler = async (req, res) => {
   const { employeeId } = parseParams(req, employeeParamsSchema)
   const { fileName, pdf } = await employeeService.printEmployeeFile(
-    employeeId,
-    actorOf(req),
-    requestContext(req),
-  )
-  sendPdf(res, fileName, pdf)
-}
-
-/**
- * Every document this employee has sent in, as one PDF.
- *
- * DOCUMENT_DOWNLOAD, the same permission as taking one document away, because
- * that is what this is - ten of them at once. A Viewer may look at documents
- * and may not download them (Section 6), and a bundle would be the one way
- * round that.
- */
-export const downloadDocuments: RequestHandler = async (req, res) => {
-  const { employeeId } = parseParams(req, employeeParamsSchema)
-  const { fileName, pdf } = await employeeService.bundleDocuments(
     employeeId,
     actorOf(req),
     requestContext(req),

@@ -296,13 +296,21 @@ describe('validation', () => {
 })
 
 describe('printing the employee form', () => {
-  it('lets a Viewer print one employee, and names the file after them', async () => {
-    // A Viewer may read documents, and this print is now their details
-    // followed by those documents - so the route asks for DOCUMENT_READ and a
-    // Viewer still passes it.
+  it('refuses a Viewer, who may read documents and not take them away', async () => {
+    // The print is now the employee's details followed by their DOCUMENTS, so
+    // it takes DOCUMENT_DOWNLOAD. Enforced on the route and not by hiding the
+    // button: a Viewer who types the URL gets the same answer.
     const response = await request(app)
       .get('/api/employees/42/print')
       .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(403)
+  })
+
+  it('lets HR print one employee, and names the file after them', async () => {
+    const response = await request(app)
+      .get('/api/employees/42/print')
+      .set('Cookie', signedInAs(ROLES.HR))
 
     expect(response.status).toBe(200)
     expect(response.headers['content-type']).toContain('application/pdf')
@@ -316,7 +324,7 @@ describe('printing the employee form', () => {
   it('never lets a printed form be cached', async () => {
     const response = await request(app)
       .get('/api/employees/42/print')
-      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .set('Cookie', signedInAs(ROLES.HR))
 
     expect(response.headers['cache-control']).toBe('private, no-store')
   })
@@ -379,36 +387,3 @@ describe('printing the employee form', () => {
   })
 })
 
-describe('downloading every document at once', () => {
-  it("refuses a Viewer, who may look at documents and not take them away", async () => {
-    // Section 6 gives a Viewer preview without download. A bundle would be the
-    // one way round that, so it takes the download permission rather than the
-    // read permission the checklist uses.
-    const response = await request(app)
-      .get('/api/employees/42/documents/download')
-      .set('Cookie', signedInAs(ROLES.VIEWER))
-
-    expect(response.status).toBe(403)
-  })
-
-  it('tells HR plainly when the employee has sent nothing in', async () => {
-    db.listForEmployee.mockResolvedValue([])
-
-    const response = await request(app)
-      .get('/api/employees/42/documents/download')
-      .set('Cookie', signedInAs(ROLES.HR))
-
-    expect(response.status).toBe(409)
-    expect(response.body.error.message).toContain('Nothing has been uploaded')
-  })
-
-  it('answers 404 for an employee who does not exist', async () => {
-    db.findEmployee.mockResolvedValue(null)
-
-    const response = await request(app)
-      .get('/api/employees/999/documents/download')
-      .set('Cookie', signedInAs(ROLES.HR))
-
-    expect(response.status).toBe(404)
-  })
-})

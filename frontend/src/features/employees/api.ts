@@ -204,21 +204,6 @@ const PRINT_TIMEOUT_MS = 120_000
 export type PrintedForms = DownloadedFile
 
 /**
- * Every document this employee has sent in, bound into one PDF.
- *
- * The same long timeout as a print: this reads every file the employee has
- * filed and merges them, and a bundle of ten scans is tens of megabytes of
- * work before a byte comes back.
- */
-export async function downloadEmployeeDocuments(employeeId: number): Promise<DownloadedFile> {
-  const response = await api.get<Blob>(`/employees/${employeeId}/documents/download`, {
-    responseType: 'blob',
-    timeout: PRINT_TIMEOUT_MS,
-  })
-  return fileFromResponse(response, 'employee-documents.pdf')
-}
-
-/**
  * One employee's file: their details, then every document they have sent in.
  *
  * The long timeout earns its keep here - this merges the documents themselves,

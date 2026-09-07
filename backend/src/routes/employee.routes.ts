@@ -108,24 +108,16 @@ employeeRouter.get(
 
 /* One employee's file: their details, then the documents themselves.
 
-   DOCUMENT_READ, where the bulk print beside '/facets' still takes
-   EMPLOYEE_READ. They print different papers now: that one is a checklist, and
-   this one hands over the files, so it asks to be allowed to see them. */
+   DOCUMENT_DOWNLOAD, where the bulk print beside '/facets' still takes
+   EMPLOYEE_READ. They print different papers now: that one is a checklist,
+   which a Viewer may walk to the printer with; this one hands over the files,
+   which a Viewer may read on screen and may not take away.
+
+   Enforced HERE and not only by hiding the button. A URL is a URL. */
 employeeRouter.get(
   '/:employeeId/print',
-  requirePermission(PERMISSIONS.DOCUMENT_READ),
-  employeeController.printForm,
-)
-
-/* Every document this employee has sent in, bound into one PDF.
-
-   DOCUMENT_DOWNLOAD rather than the read permission the checklist uses: this
-   hands over the files themselves, and a Viewer who may preview a document one
-   at a time must not be able to take all ten away in a single click. */
-employeeRouter.get(
-  '/:employeeId/documents/download',
   requirePermission(PERMISSIONS.DOCUMENT_DOWNLOAD),
-  employeeController.downloadDocuments,
+  employeeController.printForm,
 )
 
 /* The signature belongs to the employee, not to any one document: it is

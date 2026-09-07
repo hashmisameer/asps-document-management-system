@@ -23,11 +23,7 @@ import {
   renderEmployeeForms,
   type EmployeeFormData,
 } from './employeeForm.service.js'
-import {
-  bundleFileName,
-  renderDocumentBundle,
-  type BundleEntry,
-} from './documentBundle.service.js'
+import type { DocumentEntry } from './documentPages.service.js'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
@@ -508,8 +504,8 @@ async function readPhotoForPrint(
  * Which of an employee's documents have a file behind them, and where it is.
  *
  * NOT the file contents. Each entry carries a function that reads it when its
- * turn comes, so a bundle of ten scans never holds ten scans in memory at once
- * - see BundleFile.read. A read that fails is left to fail there, where the
+ * turn comes, so a file of ten scans never holds ten scans in memory at once -
+ * see DocumentFile.read. A read that fails is left to fail there, where the
  * renderer turns it into a page saying so; there is nothing useful to do about
  * it here that would not amount to hiding it.
  *
@@ -517,23 +513,18 @@ async function readPhotoForPrint(
  * gives you - see openForDelivery, which makes the same choice for the same
  * reason.
  */
-async function collectDocumentFiles(employeeId: number): Promise<{
-  included: BundleEntry[]
-  pending: { documentName: string; isMandatory: boolean }[]
-}> {
+async function collectDocumentFiles(employeeId: number): Promise<DocumentEntry[]> {
   const documents = await listDocuments(employeeId)
-
-  const included: BundleEntry[] = []
-  const pending: { documentName: string; isMandatory: boolean }[] = []
+  const included: DocumentEntry[] = []
 
   for (const document of documents) {
     const location = await employeeDocumentRepository.findStoredFile(document.documentId)
     const relativePath = location?.processedFilePath ?? location?.originalFilePath ?? null
 
-    if (!relativePath) {
-      pending.push({ documentName: document.documentName, isMandatory: document.isMandatory })
-      continue
-    }
+    // A checklist row with no file behind it is simply not in the file. It is
+    // not named as missing either: what the office is still chasing is not for
+    // the copy that gets handed to somebody outside.
+    if (!relativePath) continue
 
     const isSigned = location?.processedFilePath !== null
 
@@ -551,7 +542,7 @@ async function collectDocumentFiles(employeeId: number): Promise<{
     })
   }
 
-  return { included, pending }
+  return included
 }
 
 /**
@@ -571,7 +562,7 @@ export async function printEmployeeFile(
   context: RequestContext,
 ): Promise<{ fileName: string; pdf: Buffer }> {
   const employee = await getById(employeeId)
-  const { included } = await collectDocumentFiles(employeeId)
+  const included = await collectDocumentFiles(employeeId)
 
   const generatedAt = new Date()
   const pdf = await renderEmployeeFile(
@@ -593,55 +584,4 @@ export async function printEmployeeFile(
   })
 
   return { fileName: formFileName(employee), pdf }
-}
-
-/**
- * Every document this employee has actually sent in, as one PDF.
- *
- * The SIGNED copy where there is one, exactly as downloading a single document
- * gives you - see openForDelivery, which makes the same choice for the same
- * reason: a signed document and the original it was made from are different
- * pieces of paper, and the office holds the signed one.
- *
- * A file the store has lost does not fail the bundle. The document still gets
- * its separator page, saying it could not be read, so a bundle of ten always
- * accounts for ten - silently returning nine is how somebody comes to believe
- * a document was never collected.
- */
-export async function bundleDocuments(
-  employeeId: number,
-  actor: AuthUser,
-  context: RequestContext,
-): Promise<{ fileName: string; pdf: Buffer }> {
-  const employee = await getById(employeeId)
-  const { included, pending } = await collectDocumentFiles(employeeId)
-
-  if (included.length === 0) {
-    throw new ConflictError(
-      'Nothing has been uploaded for this employee yet, so there is no file to build.',
-    )
-  }
-
-  const generatedAt = new Date()
-  const pdf = await renderDocumentBundle(
-    { employee, included, pending },
-    { generatedAt, generatedBy: actor.fullName },
-  )
-
-  // ONE entry for the bundle rather than one per document: this was a single
-  // act by a single person, and ten entries a second apart would bury it.
-  await audit.record({
-    userId: actor.userId,
-    action: AUDIT_ACTIONS.DOCUMENT_DOWNLOADED,
-    entityType: AUDIT_ENTITY_TYPES.EMPLOYEE,
-    entityId: employeeId,
-    ipAddress: context.ipAddress,
-    metadata: {
-      employeeCode: employee.employeeCode,
-      documentCount: included.length,
-      documents: included.map((entry) => entry.documentName),
-    },
-  })
-
-  return { fileName: bundleFileName(employee), pdf }
 }
