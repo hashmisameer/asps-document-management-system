@@ -297,8 +297,9 @@ describe('validation', () => {
 
 describe('printing the employee form', () => {
   it('lets a Viewer print one employee, and names the file after them', async () => {
-    // The point of the whole feature: somebody with no permission to change
-    // anything can still walk to the printer with a checklist.
+    // A Viewer may read documents, and this print is now their details
+    // followed by those documents - so the route asks for DOCUMENT_READ and a
+    // Viewer still passes it.
     const response = await request(app)
       .get('/api/employees/42/print')
       .set('Cookie', signedInAs(ROLES.VIEWER))

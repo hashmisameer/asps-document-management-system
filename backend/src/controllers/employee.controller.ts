@@ -176,15 +176,19 @@ function sendPdf(res: Response, fileName: string, pdf: Buffer): void {
 }
 
 /**
- * One employee's form.
+ * One employee's file: their details, then every document they have sent in.
  *
- * EMPLOYEE_READ rather than a permission of its own: the sheet says nothing the
- * employee's own screen does not already show this reader, and a Viewer walking
- * to the printer with a checklist is exactly the case this was asked for.
+ * DOCUMENT_READ, not EMPLOYEE_READ. This used to be a checklist, which anybody
+ * who could read the record could print; it now carries the documents
+ * themselves, so it is gated on being allowed to see them.
  */
 export const printForm: RequestHandler = async (req, res) => {
   const { employeeId } = parseParams(req, employeeParamsSchema)
-  const { fileName, pdf } = await employeeService.printForms([employeeId], actorOf(req))
+  const { fileName, pdf } = await employeeService.printEmployeeFile(
+    employeeId,
+    actorOf(req),
+    requestContext(req),
+  )
   sendPdf(res, fileName, pdf)
 }
 

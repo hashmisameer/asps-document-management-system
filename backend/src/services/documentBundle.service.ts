@@ -43,7 +43,15 @@ import {
 const MARGIN = 42
 
 export interface BundleFile {
-  data: Buffer
+  /**
+   * Read when the document's turn comes, not before.
+   *
+   * Ten scanned documents is a hundred megabytes of paper, and reading them all
+   * up front would hold every one of them in memory for as long as the slowest
+   * takes to render. One at a time, the raw file is finished with as soon as
+   * its pages are in - what stays is the PDF being built, which has to.
+   */
+  read: () => Promise<Buffer>
   mimeType: string
   /** The processed copy, which carries the signatures. Always a PDF. */
   isSigned: boolean
@@ -295,15 +303,32 @@ function drawSeparator(
 /* The documents themselves                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** PNG and JPEG go in as they are; anything else is converted rather than refused. */
-async function asEmbeddable(file: BundleFile): Promise<{ data: Buffer; kind: 'png' | 'jpg' }> {
-  if (file.mimeType === 'image/png') return { data: file.data, kind: 'png' }
-  if (file.mimeType === 'image/jpeg') return { data: file.data, kind: 'jpg' }
+/**
+ * 200 dpi on an A4 page.
+ *
+ * What a printer will actually put on the paper, and past what a screen can
+ * show. A twelve-megapixel photograph of a service card carries none of that
+ * detail through printing, and embedding it whole is how a bundle of ten
+ * becomes a hundred-megabyte file that a mail server refuses.
+ */
+const IMAGE_MAX = { width: 1654, height: 2339 }
 
-  // WEBP and TIFF are both accepted uploads and neither can be embedded in a
-  // PDF. sharp is already here for the identity check, and a conversion is
-  // better than telling somebody their document cannot be included.
-  return { data: await sharp(file.data).png().toBuffer(), kind: 'png' }
+/**
+ * Any accepted image, as something a PDF can hold - and no larger than a page.
+ *
+ * Every format goes through the same path rather than PNG and JPEG passing
+ * through untouched, for three reasons: WEBP and TIFF cannot be embedded at all
+ * and have to be converted anyway; a phone photograph carries its orientation
+ * in EXIF, which pdf-lib does not read, so a card photographed in portrait
+ * would otherwise arrive on its side; and the resize is what keeps ten scans
+ * inside a file somebody can email.
+ */
+async function asEmbeddable(data: Buffer): Promise<Buffer> {
+  return sharp(data)
+    .rotate() // no argument: apply whatever the EXIF orientation says
+    .resize({ ...IMAGE_MAX, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 82 })
+    .toBuffer()
 }
 
 /**
@@ -312,9 +337,8 @@ async function asEmbeddable(file: BundleFile): Promise<{ data: Buffer; kind: 'pn
  * Fitted to A4 rather than given a page its own size, so a bundle of a PDF
  * form and three phone photographs prints on one stack of paper.
  */
-async function addImagePage(sheet: Sheet, file: BundleFile): Promise<void> {
-  const { data, kind } = await asEmbeddable(file)
-  const image = kind === 'png' ? await sheet.pdf.embedPng(data) : await sheet.pdf.embedJpg(data)
+async function addImagePage(sheet: Sheet, data: Buffer): Promise<void> {
+  const image = await sheet.pdf.embedJpg(await asEmbeddable(data))
 
   const page = sheet.pdf.addPage([A4_PORTRAIT.width, A4_PORTRAIT.height])
   const maxWidth = A4_PORTRAIT.width - MARGIN * 2
@@ -332,14 +356,80 @@ async function addImagePage(sheet: Sheet, file: BundleFile): Promise<void> {
 }
 
 /** Every page of a filed PDF, copied in as it stands. */
-async function addPdfPages(sheet: Sheet, file: BundleFile): Promise<number> {
+async function addPdfPages(sheet: Sheet, data: Buffer): Promise<void> {
   // A scan produced by a photocopier is sometimes 'encrypted' with an empty
   // owner password, which stops nothing and would otherwise stop this.
-  const source = await PDFDocument.load(file.data, { ignoreEncryption: true })
+  const source = await PDFDocument.load(data, { ignoreEncryption: true })
   const pages: PDFPage[] = await sheet.pdf.copyPages(source, source.getPageIndices())
 
   for (const page of pages) sheet.pdf.addPage(page)
-  return pages.length
+}
+
+/**
+ * Each document, behind a page saying what it is.
+ *
+ * Shared by the bundle and by the printed employee file, which differ only in
+ * what they put in front of this: the two must never disagree about the order
+ * documents come in, which copy is taken, or what happens to one that cannot be
+ * read.
+ *
+ * Page indices this adds are collected into `ownPages` - see drawOwnFooters for
+ * why that distinction is worth keeping.
+ */
+export async function appendDocuments(
+  sheet: Sheet,
+  entries: readonly BundleEntry[],
+  ownPages: Set<number>,
+): Promise<void> {
+  for (const [index, entry] of entries.entries()) {
+    const unsupported = !(
+      entry.file.mimeType === 'application/pdf' || entry.file.mimeType.startsWith('image/')
+    )
+
+    drawSeparator(
+      sheet,
+      entry,
+      { index: index + 1, total: entries.length },
+      unsupported
+        ? `This document is a ${entry.file.mimeType} file and could not be included. Download it on its own.`
+        : undefined,
+    )
+    ownPages.add(sheet.pdf.getPageCount() - 1)
+
+    if (unsupported) continue
+
+    try {
+      // Read here, one document at a time, so the largest file in memory is the
+      // largest single document rather than the sum of them.
+      const data = await entry.file.read()
+
+      if (entry.file.mimeType === 'application/pdf') await addPdfPages(sheet, data)
+      else await addImagePage(sheet, data)
+    } catch (error) {
+      // One unreadable file does not lose the other nine. The separator has
+      // already been written, so the file still accounts for every document;
+      // this only adds why its pages are not behind it.
+      logger.warn(
+        { err: error, documentName: entry.documentName },
+        'A document could not be added to the bundle',
+      )
+      const page = sheet.pdf.addPage([A4_PORTRAIT.width, A4_PORTRAIT.height])
+      ownPages.add(sheet.pdf.getPageCount() - 1)
+      draw(page, 'This document could not be read, and is not in this file.', {
+        x: MARGIN,
+        y: A4_PORTRAIT.height - MARGIN - 20,
+        font: sheet.fonts.bold,
+        size: 11,
+      })
+      draw(page, 'Download it on its own to see what is wrong with it.', {
+        x: MARGIN,
+        y: A4_PORTRAIT.height - MARGIN - 38,
+        font: sheet.fonts.regular,
+        size: 10,
+        color: MUTED,
+      })
+    }
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -353,7 +443,7 @@ async function addPdfPages(sheet: Sheet, file: BundleFile): Promise<number> {
  * number across somebody's scanned card would change what the office is
  * holding out as a copy of it.
  */
-function drawOwnFooters(sheet: Sheet, ownPages: ReadonlySet<number>, meta: PrintMeta): void {
+export function drawOwnFooters(sheet: Sheet, ownPages: ReadonlySet<number>, meta: PrintMeta): void {
   const pages = sheet.pdf.getPages()
   const right = sheet.margin + sheet.contentWidth
 
@@ -398,53 +488,7 @@ export async function renderDocumentBundle(
 
   const ownPages = new Set<number>([0])
   drawCover(sheet, bundle, meta)
-
-  for (const [index, entry] of bundle.included.entries()) {
-    let problem: string | undefined
-    let pages: (() => Promise<void>) | undefined
-
-    if (entry.file.mimeType === 'application/pdf') {
-      pages = async () => {
-        await addPdfPages(sheet, entry.file)
-      }
-    } else if (entry.file.mimeType.startsWith('image/')) {
-      pages = async () => addImagePage(sheet, entry.file)
-    } else {
-      problem = `This document is a ${entry.file.mimeType} file and could not be included. Download it on its own.`
-    }
-
-    drawSeparator(sheet, entry, { index: index + 1, total: bundle.included.length }, problem)
-    ownPages.add(sheet.pdf.getPageCount() - 1)
-
-    if (!pages) continue
-
-    try {
-      await pages()
-    } catch (error) {
-      // One unreadable file does not lose the other nine. The separator has
-      // already been written, so the bundle still accounts for every document;
-      // this only adds why its pages are not behind it.
-      logger.warn(
-        { err: error, documentName: entry.documentName },
-        'A document could not be added to the bundle',
-      )
-      const page = sheet.pdf.addPage([A4_PORTRAIT.width, A4_PORTRAIT.height])
-      ownPages.add(sheet.pdf.getPageCount() - 1)
-      draw(page, 'This document could not be read, and is not in this file.', {
-        x: MARGIN,
-        y: A4_PORTRAIT.height - MARGIN - 20,
-        font: sheet.fonts.bold,
-        size: 11,
-      })
-      draw(page, 'Download it on its own to see what is wrong with it.', {
-        x: MARGIN,
-        y: A4_PORTRAIT.height - MARGIN - 38,
-        font: sheet.fonts.regular,
-        size: 10,
-        color: MUTED,
-      })
-    }
-  }
+  await appendDocuments(sheet, bundle.included, ownPages)
 
   drawOwnFooters(sheet, ownPages, meta)
   return toBuffer(sheet)

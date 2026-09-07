@@ -218,7 +218,12 @@ export async function downloadEmployeeDocuments(employeeId: number): Promise<Dow
   return fileFromResponse(response, 'employee-documents.pdf')
 }
 
-/** One employee's form. */
+/**
+ * One employee's file: their details, then every document they have sent in.
+ *
+ * The long timeout earns its keep here - this merges the documents themselves,
+ * not a page about them.
+ */
 export async function printEmployeeForm(employeeId: number): Promise<PrintedForms> {
   const response = await api.get<Blob>(`/employees/${employeeId}/print`, {
     responseType: 'blob',

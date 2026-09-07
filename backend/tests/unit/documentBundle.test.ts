@@ -139,7 +139,7 @@ describe('the file name', () => {
 describe('the cover', () => {
   it('says who the file is about', async () => {
     const pdf = await bundleOf([
-      entry({ file: { data: await pdfOf(['THE LETTER']), mimeType: 'application/pdf', isSigned: false } }),
+      entry({ file: { read: () => pdfOf(['THE LETTER']), mimeType: 'application/pdf', isSigned: false } }),
     ])
 
     const [cover = ''] = await pagesOf(pdf)
@@ -158,11 +158,11 @@ describe('the cover', () => {
       [
         entry({
           documentName: 'Appointment Letter',
-          file: { data: await pdfOf(['A']), mimeType: 'application/pdf', isSigned: false },
+          file: { read: () => pdfOf(['A']), mimeType: 'application/pdf', isSigned: false },
         }),
         entry({
           documentName: 'PAN Card',
-          file: { data: await imageOf('jpeg'), mimeType: 'image/jpeg', isSigned: false },
+          file: { read: () => imageOf('jpeg'), mimeType: 'image/jpeg', isSigned: false },
         }),
       ],
       [
@@ -187,12 +187,12 @@ describe('what goes into the bundle', () => {
     const pdf = await bundleOf([
       entry({
         documentName: 'Appointment Letter',
-        file: { data: await pdfOf(['LETTER PAGE']), mimeType: 'application/pdf', isSigned: false },
+        file: { read: () => pdfOf(['LETTER PAGE']), mimeType: 'application/pdf', isSigned: false },
       }),
       entry({
         documentName: 'Service Card',
         uploadedAt: '2026-02-01T09:00:00.000Z',
-        file: { data: await pdfOf(['CARD PAGE']), mimeType: 'application/pdf', isSigned: false },
+        file: { read: () => pdfOf(['CARD PAGE']), mimeType: 'application/pdf', isSigned: false },
       }),
     ])
 
@@ -211,7 +211,7 @@ describe('what goes into the bundle', () => {
 
   it('keeps every page of a document that has several', async () => {
     const pdf = await bundleOf([
-      entry({ file: { data: await pdfOf(['ONE', 'TWO', 'THREE']), mimeType: 'application/pdf', isSigned: false } }),
+      entry({ file: { read: () => pdfOf(['ONE', 'TWO', 'THREE']), mimeType: 'application/pdf', isSigned: false } }),
     ])
 
     const pages = await pagesOf(pdf)
@@ -223,10 +223,10 @@ describe('what goes into the bundle', () => {
 
   it('says which copy it took', async () => {
     const signed = await bundleOf([
-      entry({ file: { data: await pdfOf(['SIGNED']), mimeType: 'application/pdf', isSigned: true } }),
+      entry({ file: { read: () => pdfOf(['SIGNED']), mimeType: 'application/pdf', isSigned: true } }),
     ])
     const original = await bundleOf([
-      entry({ file: { data: await pdfOf(['PLAIN']), mimeType: 'application/pdf', isSigned: false } }),
+      entry({ file: { read: () => pdfOf(['PLAIN']), mimeType: 'application/pdf', isSigned: false } }),
     ])
 
     // A signed document and the original it was made from are different pieces
@@ -237,7 +237,7 @@ describe('what goes into the bundle', () => {
 
   it('turns a photograph into a page', async () => {
     const pdf = await bundleOf([
-      entry({ file: { data: await imageOf('jpeg'), mimeType: 'image/jpeg', isSigned: false } }),
+      entry({ file: { read: () => imageOf('jpeg'), mimeType: 'image/jpeg', isSigned: false } }),
     ])
 
     const parsed = await PDFDocument.load(pdf)
@@ -254,7 +254,7 @@ describe('what goes into the bundle', () => {
     // WEBP and TIFF are both accepted uploads and neither can be embedded.
     for (const format of ['tiff', 'webp', 'png'] as const) {
       const pdf = await bundleOf([
-        entry({ file: { data: await imageOf(format), mimeType: `image/${format}`, isSigned: false } }),
+        entry({ file: { read: () => imageOf(format), mimeType: `image/${format}`, isSigned: false } }),
       ])
 
       const parsed = await PDFDocument.load(pdf)
@@ -269,11 +269,11 @@ describe('what goes into the bundle', () => {
     const pdf = await bundleOf([
       entry({
         documentName: 'Bio Data Form',
-        file: { data: Buffer.from('not a pdf at all'), mimeType: 'application/pdf', isSigned: false },
+        file: { read: async () => Buffer.from('not a pdf at all'), mimeType: 'application/pdf', isSigned: false },
       }),
       entry({
         documentName: 'Service Card',
-        file: { data: await pdfOf(['GOOD ONE']), mimeType: 'application/pdf', isSigned: false },
+        file: { read: () => pdfOf(['GOOD ONE']), mimeType: 'application/pdf', isSigned: false },
       }),
     ])
 
@@ -287,7 +287,7 @@ describe('what goes into the bundle', () => {
 
   it('says so on the separator when the type cannot be included at all', async () => {
     const pdf = await bundleOf([
-      entry({ file: { data: Buffer.from('zip'), mimeType: 'application/zip', isSigned: false } }),
+      entry({ file: { read: async () => Buffer.from('zip'), mimeType: 'application/zip', isSigned: false } }),
     ])
 
     const pages = await pagesOf(pdf)
@@ -301,7 +301,7 @@ describe('the pages this adds, and the ones it does not touch', () => {
     // Stamping a page number across somebody's scanned card would change what
     // the office is holding out as a copy of it.
     const pdf = await bundleOf([
-      entry({ file: { data: await pdfOf(['SCANNED CARD']), mimeType: 'application/pdf', isSigned: false } }),
+      entry({ file: { read: () => pdfOf(['SCANNED CARD']), mimeType: 'application/pdf', isSigned: false } }),
     ])
 
     const pages = await pagesOf(pdf)

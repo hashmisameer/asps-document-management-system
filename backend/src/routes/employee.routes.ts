@@ -35,7 +35,10 @@ employeeRouter.get(
  * A POST, and a list of ids in the body rather than in the query string: a
  * hundred ids makes a URL long enough for something in front of the server to
  * truncate, and a truncated selection prints the wrong people rather than
- * failing. Both routes take EMPLOYEE_READ, so a Viewer can print.
+ * failing.
+ *
+ * EMPLOYEE_READ, so a Viewer can print a checklist. The single-employee route
+ * below now prints something else entirely and asks for more.
  */
 employeeRouter.post(
   '/print',
@@ -103,9 +106,14 @@ employeeRouter.get(
   employeeController.listDocuments,
 )
 
+/* One employee's file: their details, then the documents themselves.
+
+   DOCUMENT_READ, where the bulk print beside '/facets' still takes
+   EMPLOYEE_READ. They print different papers now: that one is a checklist, and
+   this one hands over the files, so it asks to be allowed to see them. */
 employeeRouter.get(
   '/:employeeId/print',
-  requirePermission(PERMISSIONS.EMPLOYEE_READ),
+  requirePermission(PERMISSIONS.DOCUMENT_READ),
   employeeController.printForm,
 )
 

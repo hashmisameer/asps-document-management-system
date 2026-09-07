@@ -19,6 +19,7 @@ import { withDeadline } from './document.service.js'
 import {
   bulkFileName,
   formFileName,
+  renderEmployeeFile,
   renderEmployeeForms,
   type EmployeeFormData,
 } from './employeeForm.service.js'
@@ -504,6 +505,97 @@ async function readPhotoForPrint(
 }
 
 /**
+ * Which of an employee's documents have a file behind them, and where it is.
+ *
+ * NOT the file contents. Each entry carries a function that reads it when its
+ * turn comes, so a bundle of ten scans never holds ten scans in memory at once
+ * - see BundleFile.read. A read that fails is left to fail there, where the
+ * renderer turns it into a page saying so; there is nothing useful to do about
+ * it here that would not amount to hiding it.
+ *
+ * The SIGNED copy where there is one, exactly as downloading a single document
+ * gives you - see openForDelivery, which makes the same choice for the same
+ * reason.
+ */
+async function collectDocumentFiles(employeeId: number): Promise<{
+  included: BundleEntry[]
+  pending: { documentName: string; isMandatory: boolean }[]
+}> {
+  const documents = await listDocuments(employeeId)
+
+  const included: BundleEntry[] = []
+  const pending: { documentName: string; isMandatory: boolean }[] = []
+
+  for (const document of documents) {
+    const location = await employeeDocumentRepository.findStoredFile(document.documentId)
+    const relativePath = location?.processedFilePath ?? location?.originalFilePath ?? null
+
+    if (!relativePath) {
+      pending.push({ documentName: document.documentName, isMandatory: document.isMandatory })
+      continue
+    }
+
+    const isSigned = location?.processedFilePath !== null
+
+    included.push({
+      documentName: document.documentName,
+      isMandatory: document.isMandatory,
+      uploadedAt: document.uploadedAt,
+      uploadedByName: document.uploadedByName,
+      file: {
+        read: () => storage.readStoredFile(relativePath),
+        // The processed copy is always a PDF, whatever the original was.
+        mimeType: isSigned ? 'application/pdf' : (location?.mimeType ?? ''),
+        isSigned,
+      },
+    })
+  }
+
+  return { included, pending }
+}
+
+/**
+ * One employee's file: their details, then every document they have sent in.
+ *
+ * What the Print form button on their own page now produces. It used to be the
+ * checklist - which the list page's 'Print selected' still prints, and which is
+ * still the right paper for chasing somebody. This is the other question the
+ * office gets asked: send me their file.
+ *
+ * Audited, unlike the checklist print it replaced, and for the reason the
+ * change makes necessary: this hands over the documents themselves.
+ */
+export async function printEmployeeFile(
+  employeeId: number,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<{ fileName: string; pdf: Buffer }> {
+  const employee = await getById(employeeId)
+  const { included } = await collectDocumentFiles(employeeId)
+
+  const generatedAt = new Date()
+  const pdf = await renderEmployeeFile(
+    { employee, photo: await readPhotoForPrint(employeeId), documents: included },
+    { generatedAt, generatedBy: actor.fullName },
+  )
+
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.DOCUMENT_DOWNLOADED,
+    entityType: AUDIT_ENTITY_TYPES.EMPLOYEE,
+    entityId: employeeId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      employeeCode: employee.employeeCode,
+      documentCount: included.length,
+      documents: included.map((entry) => entry.documentName),
+    },
+  })
+
+  return { fileName: formFileName(employee), pdf }
+}
+
+/**
  * Every document this employee has actually sent in, as one PDF.
  *
  * The SIGNED copy where there is one, exactly as downloading a single document
@@ -522,43 +614,7 @@ export async function bundleDocuments(
   context: RequestContext,
 ): Promise<{ fileName: string; pdf: Buffer }> {
   const employee = await getById(employeeId)
-  const documents = await listDocuments(employeeId)
-
-  const included: BundleEntry[] = []
-  const pending: { documentName: string; isMandatory: boolean }[] = []
-
-  for (const document of documents) {
-    const location = await employeeDocumentRepository.findStoredFile(document.documentId)
-    const relativePath = location?.processedFilePath ?? location?.originalFilePath ?? null
-
-    if (!relativePath) {
-      pending.push({ documentName: document.documentName, isMandatory: document.isMandatory })
-      continue
-    }
-
-    const isSigned = location?.processedFilePath !== null
-    let data: Buffer
-    try {
-      data = await storage.readStoredFile(relativePath)
-    } catch (error) {
-      logger.warn(
-        { err: error, documentId: document.documentId },
-        'A document file could not be read for the bundle',
-      )
-      // Zero bytes reaches the renderer as a file it cannot read, which is
-      // what it is - and the separator page says so.
-      data = Buffer.alloc(0)
-    }
-
-    included.push({
-      documentName: document.documentName,
-      isMandatory: document.isMandatory,
-      uploadedAt: document.uploadedAt,
-      uploadedByName: document.uploadedByName,
-      // The processed copy is always a PDF, whatever the original was.
-      file: { data, mimeType: isSigned ? 'application/pdf' : (location?.mimeType ?? ''), isSigned },
-    })
-  }
+  const { included, pending } = await collectDocumentFiles(employeeId)
 
   if (included.length === 0) {
     throw new ConflictError(
