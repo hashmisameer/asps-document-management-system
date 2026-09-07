@@ -188,6 +188,24 @@ export const printForm: RequestHandler = async (req, res) => {
   sendPdf(res, fileName, pdf)
 }
 
+/**
+ * Every document this employee has sent in, as one PDF.
+ *
+ * DOCUMENT_DOWNLOAD, the same permission as taking one document away, because
+ * that is what this is - ten of them at once. A Viewer may look at documents
+ * and may not download them (Section 6), and a bundle would be the one way
+ * round that.
+ */
+export const downloadDocuments: RequestHandler = async (req, res) => {
+  const { employeeId } = parseParams(req, employeeParamsSchema)
+  const { fileName, pdf } = await employeeService.bundleDocuments(
+    employeeId,
+    actorOf(req),
+    requestContext(req),
+  )
+  sendPdf(res, fileName, pdf)
+}
+
 /** Several employees' forms, in one PDF, each starting on its own page. */
 export const printForms: RequestHandler = async (req, res) => {
   const { employeeIds } = parseBody(req, printEmployeeFormsSchema)

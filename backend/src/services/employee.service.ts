@@ -22,6 +22,11 @@ import {
   renderEmployeeForms,
   type EmployeeFormData,
 } from './employeeForm.service.js'
+import {
+  bundleFileName,
+  renderDocumentBundle,
+  type BundleEntry,
+} from './documentBundle.service.js'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
@@ -496,4 +501,91 @@ async function readPhotoForPrint(
     logger.warn({ err: error, employeeId }, 'photograph could not be read for the printed form')
     return null
   }
+}
+
+/**
+ * Every document this employee has actually sent in, as one PDF.
+ *
+ * The SIGNED copy where there is one, exactly as downloading a single document
+ * gives you - see openForDelivery, which makes the same choice for the same
+ * reason: a signed document and the original it was made from are different
+ * pieces of paper, and the office holds the signed one.
+ *
+ * A file the store has lost does not fail the bundle. The document still gets
+ * its separator page, saying it could not be read, so a bundle of ten always
+ * accounts for ten - silently returning nine is how somebody comes to believe
+ * a document was never collected.
+ */
+export async function bundleDocuments(
+  employeeId: number,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<{ fileName: string; pdf: Buffer }> {
+  const employee = await getById(employeeId)
+  const documents = await listDocuments(employeeId)
+
+  const included: BundleEntry[] = []
+  const pending: { documentName: string; isMandatory: boolean }[] = []
+
+  for (const document of documents) {
+    const location = await employeeDocumentRepository.findStoredFile(document.documentId)
+    const relativePath = location?.processedFilePath ?? location?.originalFilePath ?? null
+
+    if (!relativePath) {
+      pending.push({ documentName: document.documentName, isMandatory: document.isMandatory })
+      continue
+    }
+
+    const isSigned = location?.processedFilePath !== null
+    let data: Buffer
+    try {
+      data = await storage.readStoredFile(relativePath)
+    } catch (error) {
+      logger.warn(
+        { err: error, documentId: document.documentId },
+        'A document file could not be read for the bundle',
+      )
+      // Zero bytes reaches the renderer as a file it cannot read, which is
+      // what it is - and the separator page says so.
+      data = Buffer.alloc(0)
+    }
+
+    included.push({
+      documentName: document.documentName,
+      isMandatory: document.isMandatory,
+      uploadedAt: document.uploadedAt,
+      uploadedByName: document.uploadedByName,
+      // The processed copy is always a PDF, whatever the original was.
+      file: { data, mimeType: isSigned ? 'application/pdf' : (location?.mimeType ?? ''), isSigned },
+    })
+  }
+
+  if (included.length === 0) {
+    throw new ConflictError(
+      'Nothing has been uploaded for this employee yet, so there is no file to build.',
+    )
+  }
+
+  const generatedAt = new Date()
+  const pdf = await renderDocumentBundle(
+    { employee, included, pending },
+    { generatedAt, generatedBy: actor.fullName },
+  )
+
+  // ONE entry for the bundle rather than one per document: this was a single
+  // act by a single person, and ten entries a second apart would bury it.
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.DOCUMENT_DOWNLOADED,
+    entityType: AUDIT_ENTITY_TYPES.EMPLOYEE,
+    entityId: employeeId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      employeeCode: employee.employeeCode,
+      documentCount: included.length,
+      documents: included.map((entry) => entry.documentName),
+    },
+  })
+
+  return { fileName: bundleFileName(employee), pdf }
 }

@@ -20,6 +20,7 @@ import { ApiError } from '../../lib/apiError.js'
 import { saveBlob } from '../../lib/download.js'
 import { formatDate } from '../../lib/format.js'
 import {
+  downloadEmployeeDocuments,
   employeeKeys,
   fetchEmployee,
   fetchEmployeeDocuments,
@@ -85,6 +86,18 @@ export function EmployeeDetailPage() {
     onSuccess: ({ blob, fileName }) => saveBlob(blob, fileName),
   })
 
+  /**
+   * Every document this employee has sent in, as one file.
+   *
+   * Built by the server, in the checklist's order, with a page before each
+   * document saying what it is - so somebody asked for 'the file' gets one
+   * thing rather than ten downloads in whatever order they arrived.
+   */
+  const bundle = useMutation({
+    mutationFn: () => downloadEmployeeDocuments(employeeId),
+    onSuccess: ({ blob, fileName }) => saveBlob(blob, fileName),
+  })
+
   const [exitOpen, setExitOpen] = useState(false)
 
   const undo = useMutation({
@@ -119,6 +132,9 @@ export function EmployeeDetailPage() {
   const profile = employee.data
   const archiveError = archive.error instanceof ApiError ? archive.error : null
   const printError = print.error instanceof ApiError ? print.error : null
+  const bundleError = bundle.error instanceof ApiError ? bundle.error : null
+  // Nothing to bind together until something has been received.
+  const hasDocuments = profile.counts.completed > 0
 
   // An exit exists from the moment it is recorded, which is usually BEFORE the
   // employee has actually gone. Between those two points they are still ACTIVE,
@@ -153,6 +169,24 @@ export function EmployeeDetailPage() {
           >
             Print form
           </Button>
+          {can(PERMISSIONS.DOCUMENT_DOWNLOAD) ? (
+            <Button
+              variant="secondary"
+              busy={bundle.isPending}
+              busyLabel="Building..."
+              disabled={!hasDocuments}
+              // Said rather than left to be guessed: a button that does nothing
+              // and will not say why is worse than no button.
+              title={
+                hasDocuments
+                  ? 'Every document received, in one PDF'
+                  : 'Nothing has been uploaded for this employee yet'
+              }
+              onClick={() => bundle.mutate()}
+            >
+              Download all documents
+            </Button>
+          ) : null}
           {can(PERMISSIONS.EMPLOYEE_UPDATE) ? (
             <Link
               to={`/employees/${employeeId}/edit`}
@@ -202,6 +236,14 @@ export function EmployeeDetailPage() {
         <div className="mt-3">
           <Alert title="Could not print that" referenceId={printError.referenceId}>
             {printError.message}
+          </Alert>
+        </div>
+      ) : null}
+
+      {bundleError ? (
+        <div className="mt-3">
+          <Alert title="Could not build the document file" referenceId={bundleError.referenceId}>
+            {bundleError.message}
           </Alert>
         </div>
       ) : null}

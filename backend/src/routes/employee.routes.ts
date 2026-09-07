@@ -109,6 +109,17 @@ employeeRouter.get(
   employeeController.printForm,
 )
 
+/* Every document this employee has sent in, bound into one PDF.
+
+   DOCUMENT_DOWNLOAD rather than the read permission the checklist uses: this
+   hands over the files themselves, and a Viewer who may preview a document one
+   at a time must not be able to take all ten away in a single click. */
+employeeRouter.get(
+  '/:employeeId/documents/download',
+  requirePermission(PERMISSIONS.DOCUMENT_DOWNLOAD),
+  employeeController.downloadDocuments,
+)
+
 /* The signature belongs to the employee, not to any one document: it is
    uploaded once and reused on everything they sign (Section 24). */
 /* The photograph. Reading it needs only EMPLOYEE_READ - it is part of the

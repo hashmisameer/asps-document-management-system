@@ -27,6 +27,7 @@ const db = vi.hoisted(() => ({
   listForEmployee: vi.fn(),
   insertAudit: vi.fn(),
   findPhoto: vi.fn(),
+  findStoredFile: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -62,6 +63,7 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
   createChecklist: db.createChecklist,
   listForEmployee: db.listForEmployee,
   listDocumentTypeIdsForEmployee: vi.fn(),
+  findStoredFile: db.findStoredFile,
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
@@ -112,6 +114,7 @@ beforeEach(() => {
   db.touchSession.mockResolvedValue(undefined)
   db.findEmployee.mockResolvedValue(profile)
   db.findPhoto.mockResolvedValue(null)
+  db.findStoredFile.mockResolvedValue(null)
   db.listForEmployee.mockResolvedValue([])
   db.listActiveTypes.mockResolvedValue([])
   db.createChecklist.mockResolvedValue(0)
@@ -370,6 +373,40 @@ describe('printing the employee form', () => {
       .post('/api/employees/print')
       .set('Cookie', signedInAs(ROLES.VIEWER))
       .send({ employeeIds: [42] })
+
+    expect(response.status).toBe(404)
+  })
+})
+
+describe('downloading every document at once', () => {
+  it("refuses a Viewer, who may look at documents and not take them away", async () => {
+    // Section 6 gives a Viewer preview without download. A bundle would be the
+    // one way round that, so it takes the download permission rather than the
+    // read permission the checklist uses.
+    const response = await request(app)
+      .get('/api/employees/42/documents/download')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(403)
+  })
+
+  it('tells HR plainly when the employee has sent nothing in', async () => {
+    db.listForEmployee.mockResolvedValue([])
+
+    const response = await request(app)
+      .get('/api/employees/42/documents/download')
+      .set('Cookie', signedInAs(ROLES.HR))
+
+    expect(response.status).toBe(409)
+    expect(response.body.error.message).toContain('Nothing has been uploaded')
+  })
+
+  it('answers 404 for an employee who does not exist', async () => {
+    db.findEmployee.mockResolvedValue(null)
+
+    const response = await request(app)
+      .get('/api/employees/999/documents/download')
+      .set('Cookie', signedInAs(ROLES.HR))
 
     expect(response.status).toBe(404)
   })
