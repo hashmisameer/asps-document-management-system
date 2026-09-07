@@ -276,12 +276,17 @@ export async function createSelfRegisteredUser(
  *
  * Oldest first, which on this system is the account somebody set up when the
  * server was installed - the one an unattended import belongs to.
+ *
+ * The role is a ROW IN dbo.Roles, not a column on the user: dbo.Users carries
+ * RoleId, and SELECT_USER is already joined to it. Filtering on 'u.Role' is
+ * what this did, and the database refused it - halfway through an import, on
+ * the first employee, because nothing before that point needed a user.
  */
 export async function findFirstByRole(role: Role): Promise<UserRecord | null> {
   const request = await createRequest()
   const result = await request
     .input('role', sql.VarChar(20), role)
-    .query<UserRow>(`${SELECT_USER} WHERE u.Role = @role AND u.IsActive = 1 ORDER BY u.UserId`)
+    .query<UserRow>(`${SELECT_USER} WHERE r.RoleName = @role AND u.IsActive = 1 ORDER BY u.UserId`)
 
   const row = result.recordset[0]
   return row ? toRecord(row) : null
