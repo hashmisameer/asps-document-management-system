@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_EMPLOYEE_FILTERS,
   activeFilterChips,
+  archivedAreShown,
   employeeFiltersToSearch,
+  employmentChoiceFilters,
+  employmentChoiceOf,
   readEmployeeFilters,
   toEmployeeListQuery,
 } from '../../src/features/employees/listParams.js'
@@ -120,5 +123,102 @@ describe('the query the API is asked', () => {
     expect(query).not.toHaveProperty('gender')
     expect(query).not.toHaveProperty('department')
     expect(query).not.toHaveProperty('search')
+  })
+})
+
+/**
+ * The Employment dropdown, and the archived.
+ *
+ * Reported from the office on 2026-09-07: 549 employees, all active, none
+ * archived. The third option on the dropdown listed all 549; archive one and it
+ * listed 548 - the opposite of what somebody choosing it expected.
+ *
+ * The dropdown had no Archived option at all. It had 'All', which does mean
+ * everybody-whose-record-is-live and did exactly that. The fix is a fourth
+ * option that asks the question people were trying to ask, and these tests hold
+ * the two axes apart: whether somebody is still HERE, and whether their RECORD
+ * has been archived.
+ */
+describe('the Employment dropdown', () => {
+  it('shows the option that matches what the list is doing', () => {
+    expect(employmentChoiceOf(read(''))).toBe('active')
+    expect(employmentChoiceOf(read('?status=left'))).toBe('left')
+    expect(employmentChoiceOf(read('?status=all'))).toBe('all')
+    expect(employmentChoiceOf(read('?archivedOnly=true&status=all'))).toBe('archived')
+  })
+
+  it('shows Archived however the employment half was left', () => {
+    // What the dashboard's Archived tile links to, and what somebody lands on
+    // after switching from Left. archivedOnly is what the list is showing, so
+    // that is what the control has to say.
+    expect(employmentChoiceOf(read('?archivedOnly=true&status=left'))).toBe('archived')
+    expect(employmentChoiceOf(read('?archivedOnly=true'))).toBe('archived')
+  })
+
+  it('asks for ONLY the archived when Archived is chosen', () => {
+    // The bug as reported. One archived employee out of 549 must give a list of
+    // one, not of 548.
+    expect(employmentChoiceFilters('archived')).toEqual({ status: 'all', archivedOnly: true })
+  })
+
+  it('sets the employment half aside under Archived, rather than guessing', () => {
+    // An archived record may belong to somebody who left in 2019 or to somebody
+    // still on the floor who was archived by mistake. Holding 'active' as well
+    // would hide half of them.
+    const query = toEmployeeListQuery(
+      { ...DEFAULT_EMPLOYEE_FILTERS, ...employmentChoiceFilters('archived') },
+      25,
+    )
+
+    expect(query).toMatchObject({ archivedOnly: true, status: 'all' })
+  })
+
+  it('stops asking for the archived as soon as another option is chosen', () => {
+    // Leaving archivedOnly set behind would answer 'Active' with an empty list
+    // and nothing on the screen to explain it.
+    for (const choice of ['active', 'left', 'all'] as const) {
+      expect(employmentChoiceFilters(choice), choice).toEqual({
+        status: choice,
+        archivedOnly: false,
+      })
+    }
+  })
+
+  it('round-trips: choose Archived, then Active, and the archived are gone again', () => {
+    const archived = { ...DEFAULT_EMPLOYEE_FILTERS, ...employmentChoiceFilters('archived') }
+    const back = { ...archived, ...employmentChoiceFilters('active') }
+
+    expect(employmentChoiceOf(archived)).toBe('archived')
+    expect(back).toMatchObject({ status: 'active', archivedOnly: false })
+    expect(employmentChoiceOf(back)).toBe('active')
+  })
+})
+
+describe('the Include archived checkbox', () => {
+  it('is the same axis as the dropdown: hidden, alongside, or on their own', () => {
+    expect(archivedAreShown(read(''))).toBe(false)
+    expect(archivedAreShown(read('?includeArchived=true'))).toBe(true)
+    // Ticked, because the archived are not merely included - they are all
+    // there is. The page shows it disabled at this point for the same reason.
+    expect(archivedAreShown(read('?archivedOnly=true&status=all'))).toBe(true)
+  })
+
+  it('leaves the checkbox alone while Archived is chosen, so it comes back', () => {
+    // Somebody who had ticked it, looked at the archived, and went back to
+    // Active should find their list as they left it.
+    const ticked = { ...DEFAULT_EMPLOYEE_FILTERS, includeArchived: true }
+    const archived = { ...ticked, ...employmentChoiceFilters('archived') }
+
+    expect(archived.includeArchived).toBe(true)
+    expect({ ...archived, ...employmentChoiceFilters('active') }).toMatchObject({
+      includeArchived: true,
+      archivedOnly: false,
+    })
+  })
+
+  it('does not put a chip under a filter the dropdown now shows', () => {
+    // Two controls for one filter, and clearing either one leaves the other
+    // saying something the list is not doing.
+    expect(activeFilterChips(read('?archivedOnly=true&status=all'))).toHaveLength(0)
   })
 })

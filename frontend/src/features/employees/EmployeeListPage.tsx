@@ -7,7 +7,6 @@ import {
   PERMISSIONS,
   type EmployeeListItem,
   type EmployeeSortKey,
-  type EmployeeStatusFilter,
   type JoinedWithinPeriod,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
@@ -30,11 +29,16 @@ import {
   printEmployeeForms,
 } from './api.js'
 import {
+  ARCHIVED_CHOICE,
   activeFilterChips,
+  archivedAreShown,
   employeeFiltersToSearch,
+  employmentChoiceFilters,
+  employmentChoiceOf,
   readEmployeeFilters,
   toEmployeeListQuery,
   type EmployeeFilters,
+  type EmploymentChoice,
 } from './listParams.js'
 
 /**
@@ -87,7 +91,7 @@ export function EmployeeListPage() {
     setSearchParams(employeeFiltersToSearch({ ...filters, page: 1, ...patch }))
   }
 
-  const { department, includeArchived, status, joinedWithin, sortBy, sortDir, page } = filters
+  const { department, archivedOnly, joinedWithin, sortBy, sortDir, page } = filters
 
   /**
    * Which employees are ticked, by id.
@@ -192,6 +196,18 @@ export function EmployeeListPage() {
   const data = employees.data
   const error = employees.error instanceof ApiError ? employees.error : null
 
+  /**
+   * The Print column.
+   *
+   * A row's print button produces that employee's FILE - their details and
+   * every document they have sent in - so it needs the permission to take
+   * documents away, and the column is not shown to somebody who has not got it.
+   * The server refuses either way; this is so nobody is offered a button that
+   * answers 403. 'Print selected' is a different paper, the checklist form, and
+   * stays open to everybody who can read the list.
+   */
+  const canPrint = can(PERMISSIONS.DOCUMENT_DOWNLOAD)
+
   return (
     <main>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -204,9 +220,9 @@ export function EmployeeListPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Printing needs only the read permission the list itself needs, so
-              this is offered to everybody who can see the page - a Viewer
-              included, which is who asked for it. */}
+          {/* The checklist form, one page per employee - not the documents. It
+              needs only the read permission the list itself needs, so it stays
+              offered to everybody who can see the page, a Viewer included. */}
           <Button
             variant="secondary"
             busy={printingSelection}
@@ -263,22 +279,39 @@ export function EmployeeListPage() {
         <div className="min-w-40">
           <Select
             label="Employment"
-            value={status}
+            // Not `status`: 'Archived' is archivedOnly, which is a different
+            // question from whether somebody is still here. See listParams.ts.
+            value={employmentChoiceOf(filters)}
             options={[
               { value: EMPLOYEE_STATUS_FILTERS.ACTIVE, label: 'Active' },
               { value: EMPLOYEE_STATUS_FILTERS.LEFT, label: 'Left' },
               { value: EMPLOYEE_STATUS_FILTERS.ALL, label: 'All' },
+              { value: ARCHIVED_CHOICE, label: 'Archived' },
             ]}
-            onChange={(event) => update({ status: event.target.value as EmployeeStatusFilter })}
+            onChange={(event) =>
+              update(employmentChoiceFilters(event.target.value as EmploymentChoice))
+            }
           />
         </div>
 
-        <label className="flex items-center gap-2 py-2 text-sm text-slate-700">
+        <label
+          className={`flex items-center gap-2 py-2 text-sm ${
+            archivedOnly ? 'text-slate-400' : 'text-slate-700'
+          }`}
+          // Said rather than left to be guessed: a checkbox that will not move
+          // and does not say why reads as a broken page.
+          title={
+            archivedOnly
+              ? 'Archived records are the only ones being listed'
+              : 'List archived records alongside the rest'
+          }
+        >
           <input
             type="checkbox"
-            checked={includeArchived}
+            checked={archivedAreShown(filters)}
+            disabled={archivedOnly}
             onChange={(event) => update({ includeArchived: event.target.checked })}
-            className="h-4 w-4 rounded border-slate-300"
+            className="h-4 w-4 rounded border-slate-300 disabled:opacity-60"
           />
           Include archived
         </label>
@@ -387,9 +420,11 @@ export function EmployeeListPage() {
               <th scope="col" className="px-4 py-2 font-medium">
                 Documents
               </th>
-              <th scope="col" className="px-4 py-2 font-medium">
-                Print
-              </th>
+              {canPrint ? (
+                <th scope="col" className="px-4 py-2 font-medium">
+                  Print
+                </th>
+              ) : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -435,20 +470,25 @@ export function EmployeeListPage() {
                 <td className="px-4 py-2">
                   <DocumentSummary employee={employee} />
                 </td>
-                <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>
-                  <IconButton
-                    label="Print employee form"
-                    icon={<PrintIcon />}
-                    busy={printingId === employee.employeeId}
-                    onClick={() => printOne(employee.employeeId)}
-                  />
-                </td>
+                {canPrint ? (
+                  <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>
+                    <IconButton
+                      label="Print employee form"
+                      icon={<PrintIcon />}
+                      busy={printingId === employee.employeeId}
+                      onClick={() => printOne(employee.employeeId)}
+                    />
+                  </td>
+                ) : null}
               </tr>
             ))}
 
             {data && data.items.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
+                <td
+                  colSpan={canPrint ? 8 : 7}
+                  className="px-4 py-10 text-center text-sm text-slate-500"
+                >
                   {debouncedSearch || department || chips.length > 0 || joinedWithin
                     ? 'No employee matches those filters.'
                     : 'No employees yet. Add the first one to start their document checklist.'}
@@ -458,7 +498,10 @@ export function EmployeeListPage() {
 
             {!data && !error ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
+                <td
+                  colSpan={canPrint ? 8 : 7}
+                  className="px-4 py-10 text-center text-sm text-slate-500"
+                >
                   Loading employees...
                 </td>
               </tr>

@@ -62,6 +62,62 @@ export const DEFAULT_EMPLOYEE_FILTERS: EmployeeFilters = {
   page: 1,
 }
 
+/* -------------------------------------------------------------------------- */
+/* The Employment control                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the toolbar's Employment dropdown offers.
+ *
+ * Two different questions are being asked through one control, and keeping them
+ * straight is the whole point of these three functions.
+ *
+ *   Active / Left / All  ask about the PERSON: are they still here.
+ *   Archived             asks about the RECORD: has the office finished with it.
+ *
+ * They are not alternatives. Somebody who left in 2019 has both left AND been
+ * archived; somebody archived by mistake may still be working. So 'Archived'
+ * does not mean a fourth employment status - it means archivedOnly, with the
+ * employment question set aside ('all'), which is exactly what the dashboard's
+ * Archived tile has always linked to.
+ *
+ * The 'Include archived' checkbox is the third state of the same axis: hidden
+ * (default), alongside the rest (checkbox), or on their own (Archived). While
+ * Archived is chosen the checkbox has nothing left to say - archived records
+ * are all that is being listed - so the page shows it ticked and disabled
+ * rather than letting somebody set a flag that changes nothing.
+ */
+export type EmploymentChoice = EmployeeStatusFilter | 'archived'
+
+export const ARCHIVED_CHOICE = 'archived'
+
+/** Which option the dropdown should be showing, given the filters in the URL. */
+export function employmentChoiceOf(
+  filters: Pick<EmployeeFilters, 'status' | 'archivedOnly'>,
+): EmploymentChoice {
+  // archivedOnly wins, because it is what the LIST is actually showing - the
+  // server applies it ahead of everything else on this axis.
+  return filters.archivedOnly ? ARCHIVED_CHOICE : filters.status
+}
+
+/** What choosing an option sets. Always both, so neither can be left behind. */
+export function employmentChoiceFilters(
+  choice: EmploymentChoice,
+): Pick<EmployeeFilters, 'status' | 'archivedOnly'> {
+  return choice === ARCHIVED_CHOICE
+    ? { status: EMPLOYEE_STATUS_FILTERS.ALL, archivedOnly: true }
+    : // Moving off Archived clears archivedOnly. Leaving it set would answer
+      // 'Active' with an empty list and nothing on screen to explain it.
+      { status: choice, archivedOnly: false }
+}
+
+/** Whether archived records are in this list - what the checkbox shows. */
+export function archivedAreShown(
+  filters: Pick<EmployeeFilters, 'includeArchived' | 'archivedOnly'>,
+): boolean {
+  return filters.archivedOnly || filters.includeArchived
+}
+
 const STATUSES: readonly string[] = Object.values(EMPLOYEE_STATUS_FILTERS)
 const PERIODS: readonly string[] = ['week', 'month', 'sixMonths', 'year']
 const GENDERS: readonly string[] = ['Male', 'Female', 'Other', 'notRecorded']
@@ -212,9 +268,9 @@ export function activeFilterChips(filters: EmployeeFilters): FilterChip[] {
   if (filters.leftThisYear) {
     chips.push({ key: 'leftThisYear', label: 'Left this year', clears: { leftThisYear: false } })
   }
-  if (filters.archivedOnly) {
-    chips.push({ key: 'archivedOnly', label: 'Archived only', clears: { archivedOnly: false } })
-  }
+  /* No chip for archivedOnly: the Employment dropdown shows it now. A chip as
+     well would be two controls for one filter, and clearing one of them would
+     leave the other saying something the list is not doing. */
   if (filters.checklist) {
     chips.push({
       key: 'checklist',
