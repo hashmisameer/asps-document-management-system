@@ -27,6 +27,7 @@ const db = vi.hoisted(() => ({
   listForEmployee: vi.fn(),
   insertAudit: vi.fn(),
   findPhoto: vi.fn(),
+  findStoredFile: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -62,6 +63,7 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
   createChecklist: db.createChecklist,
   listForEmployee: db.listForEmployee,
   listDocumentTypeIdsForEmployee: vi.fn(),
+  findStoredFile: db.findStoredFile,
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
@@ -112,6 +114,7 @@ beforeEach(() => {
   db.touchSession.mockResolvedValue(undefined)
   db.findEmployee.mockResolvedValue(profile)
   db.findPhoto.mockResolvedValue(null)
+  db.findStoredFile.mockResolvedValue(null)
   db.listForEmployee.mockResolvedValue([])
   db.listActiveTypes.mockResolvedValue([])
   db.createChecklist.mockResolvedValue(0)
@@ -293,12 +296,21 @@ describe('validation', () => {
 })
 
 describe('printing the employee form', () => {
-  it('lets a Viewer print one employee, and names the file after them', async () => {
-    // The point of the whole feature: somebody with no permission to change
-    // anything can still walk to the printer with a checklist.
+  it('refuses a Viewer, who may read documents and not take them away', async () => {
+    // The print is now the employee's details followed by their DOCUMENTS, so
+    // it takes DOCUMENT_DOWNLOAD. Enforced on the route and not by hiding the
+    // button: a Viewer who types the URL gets the same answer.
     const response = await request(app)
       .get('/api/employees/42/print')
       .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(403)
+  })
+
+  it('lets HR print one employee, and names the file after them', async () => {
+    const response = await request(app)
+      .get('/api/employees/42/print')
+      .set('Cookie', signedInAs(ROLES.HR))
 
     expect(response.status).toBe(200)
     expect(response.headers['content-type']).toContain('application/pdf')
@@ -312,7 +324,7 @@ describe('printing the employee form', () => {
   it('never lets a printed form be cached', async () => {
     const response = await request(app)
       .get('/api/employees/42/print')
-      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .set('Cookie', signedInAs(ROLES.HR))
 
     expect(response.headers['cache-control']).toBe('private, no-store')
   })
@@ -374,3 +386,4 @@ describe('printing the employee form', () => {
     expect(response.status).toBe(404)
   })
 })
+

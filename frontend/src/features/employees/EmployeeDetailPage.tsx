@@ -76,9 +76,12 @@ export function EmployeeDetailPage() {
   })
 
   /**
-   * The same form the employee list prints, for the person who is already
-   * looking at this record. Built by the server, so it is the same sheet
-   * whichever screen it was asked for from.
+   * This employee's file: the details page, and their documents behind it.
+   *
+   * Not what the list's 'Print selected' produces - that is still the checklist
+   * form, which is the right paper for chasing somebody. This is the answer to
+   * 'send me their file', built by the server so every machine gets the same
+   * pages.
    */
   const print = useMutation({
     mutationFn: () => printEmployeeForm(employeeId),
@@ -143,16 +146,21 @@ export function EmployeeDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* First, and offered to everybody who can read the record - a Viewer
-              sees no other button here and printing is what they asked for. */}
-          <Button
-            variant="secondary"
-            busy={print.isPending}
-            busyLabel="Preparing..."
-            onClick={() => print.mutate()}
-          >
-            Print form
-          </Button>
+          {/* Gated on DOCUMENT_DOWNLOAD to match the route: this is the
+              employee's details followed by their documents, not the checklist
+              it used to be, so it is offered to whoever may take documents
+              away. Hiding it is a courtesy; the route is what enforces it. */}
+          {can(PERMISSIONS.DOCUMENT_DOWNLOAD) ? (
+            <Button
+              variant="secondary"
+              busy={print.isPending}
+              busyLabel="Preparing..."
+              title="Their details, and every document received, in one PDF"
+              onClick={() => print.mutate()}
+            >
+              Print form
+            </Button>
+          ) : null}
           {can(PERMISSIONS.EMPLOYEE_UPDATE) ? (
             <Link
               to={`/employees/${employeeId}/edit`}

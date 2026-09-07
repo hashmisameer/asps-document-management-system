@@ -19,9 +19,11 @@ import { withDeadline } from './document.service.js'
 import {
   bulkFileName,
   formFileName,
+  renderEmployeeFile,
   renderEmployeeForms,
   type EmployeeFormData,
 } from './employeeForm.service.js'
+import type { DocumentEntry } from './documentPages.service.js'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
@@ -496,4 +498,90 @@ async function readPhotoForPrint(
     logger.warn({ err: error, employeeId }, 'photograph could not be read for the printed form')
     return null
   }
+}
+
+/**
+ * Which of an employee's documents have a file behind them, and where it is.
+ *
+ * NOT the file contents. Each entry carries a function that reads it when its
+ * turn comes, so a file of ten scans never holds ten scans in memory at once -
+ * see DocumentFile.read. A read that fails is left to fail there, where the
+ * renderer turns it into a page saying so; there is nothing useful to do about
+ * it here that would not amount to hiding it.
+ *
+ * The SIGNED copy where there is one, exactly as downloading a single document
+ * gives you - see openForDelivery, which makes the same choice for the same
+ * reason.
+ */
+async function collectDocumentFiles(employeeId: number): Promise<DocumentEntry[]> {
+  const documents = await listDocuments(employeeId)
+  const included: DocumentEntry[] = []
+
+  for (const document of documents) {
+    const location = await employeeDocumentRepository.findStoredFile(document.documentId)
+    const relativePath = location?.processedFilePath ?? location?.originalFilePath ?? null
+
+    // A checklist row with no file behind it is simply not in the file. It is
+    // not named as missing either: what the office is still chasing is not for
+    // the copy that gets handed to somebody outside.
+    if (!relativePath) continue
+
+    const isSigned = location?.processedFilePath !== null
+
+    included.push({
+      documentName: document.documentName,
+      isMandatory: document.isMandatory,
+      uploadedAt: document.uploadedAt,
+      uploadedByName: document.uploadedByName,
+      file: {
+        read: () => storage.readStoredFile(relativePath),
+        // The processed copy is always a PDF, whatever the original was.
+        mimeType: isSigned ? 'application/pdf' : (location?.mimeType ?? ''),
+        isSigned,
+      },
+    })
+  }
+
+  return included
+}
+
+/**
+ * One employee's file: their details, then every document they have sent in.
+ *
+ * What the Print form button on their own page now produces. It used to be the
+ * checklist - which the list page's 'Print selected' still prints, and which is
+ * still the right paper for chasing somebody. This is the other question the
+ * office gets asked: send me their file.
+ *
+ * Audited, unlike the checklist print it replaced, and for the reason the
+ * change makes necessary: this hands over the documents themselves.
+ */
+export async function printEmployeeFile(
+  employeeId: number,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<{ fileName: string; pdf: Buffer }> {
+  const employee = await getById(employeeId)
+  const included = await collectDocumentFiles(employeeId)
+
+  const generatedAt = new Date()
+  const pdf = await renderEmployeeFile(
+    { employee, photo: await readPhotoForPrint(employeeId), documents: included },
+    { generatedAt, generatedBy: actor.fullName },
+  )
+
+  await audit.record({
+    userId: actor.userId,
+    action: AUDIT_ACTIONS.DOCUMENT_DOWNLOADED,
+    entityType: AUDIT_ENTITY_TYPES.EMPLOYEE,
+    entityId: employeeId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      employeeCode: employee.employeeCode,
+      documentCount: included.length,
+      documents: included.map((entry) => entry.documentName),
+    },
+  })
+
+  return { fileName: formFileName(employee), pdf }
 }

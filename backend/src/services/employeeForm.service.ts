@@ -9,6 +9,11 @@ import {
 } from '@asps-dms/shared'
 import { logger } from '../utils/logger.js'
 import {
+  appendDocuments,
+  drawOwnFooters,
+  type DocumentEntry,
+} from './documentPages.service.js'
+import {
   A4_PORTRAIT,
   DASH,
   HEADER_FILL,
@@ -31,11 +36,19 @@ import {
 } from '../utils/pdfDraw.js'
 
 /**
- * The printed employee form.
+ * What comes out of the printer for an employee. Two different papers:
  *
- * A checklist on paper, for an office that works on paper: it goes round for
- * signatures, it sits in a file, and it is read by people who are not logged in
- * to anything. That shapes every decision here.
+ * renderEmployeeForms - the CHECKLIST form, one page per employee, used to
+ * print a selection from the list. A working sheet: what is in, what is
+ * outstanding, what is overdue, and a blank or two to fill in by hand.
+ *
+ * renderEmployeeFile - the employee's FILE, from the button on their own page:
+ * their details, then every document they have actually sent in, bound behind
+ * it. No checklist anywhere on it.
+ *
+ * Both are paper, for an office that works on paper: they go round for
+ * signatures, they sit in a file, and they are read by people who are not
+ * logged in to anything. That shapes every decision here.
  *
  * WHAT IS DELIBERATELY NOT ON IT: the Aadhaar number, the PAN number and any
  * salary. This sheet leaves the desk it was printed at - it is handed about,
@@ -44,8 +57,9 @@ import {
  * responses and out of the audit trail for that reason; a printout is the last
  * place they should reappear.
  *
- * The documents themselves are not attached either. This says what has been
- * received and what has not; it is not a bundle of the files.
+ * The checklist form does not attach the documents: it says what has been
+ * received and what has not. The file does the opposite - it IS the documents,
+ * and says nothing about what is missing.
  *
  * Rendered on the SERVER rather than through the browser's print dialogue, so
  * that every machine in the office produces the same page - same margins, same
@@ -55,11 +69,32 @@ import {
 
 const MARGIN = 42
 
+/** The employee's photograph, when one is on file. PNG or JPEG. */
+export interface EmployeePhoto {
+  data: Buffer
+  mimeType: string
+}
+
 export interface EmployeeFormData {
   employee: EmployeeProfile
   documents: readonly EmployeeDocument[]
-  /** The employee's photograph, when one is on file. PNG or JPEG. */
-  photo: { data: Buffer; mimeType: string } | null
+  photo: EmployeePhoto | null
+}
+
+/**
+ * What the Print form button on an employee's page produces: their details,
+ * and then every document they have actually sent in.
+ *
+ * NO CHECKLIST. Not the pending documents, not the deadlines, not the counts.
+ * This is the file itself - what the office holds - and a page of chasing notes
+ * in the middle of it is for the screen to show, not for the copy that gets
+ * handed to somebody outside.
+ */
+export interface EmployeeFileData {
+  employee: EmployeeProfile
+  photo: EmployeePhoto | null
+  /** In the checklist's order, and only the ones with a file behind them. */
+  documents: readonly DocumentEntry[]
 }
 
 /* -------------------------------------------------------------------------- */
@@ -129,15 +164,19 @@ function sectionHeading(sheet: Sheet, title: string): void {
   sheet.y -= 4
 }
 
-async function embedPhoto(pdf: PDFDocument, form: EmployeeFormData): Promise<PDFImage | null> {
-  if (!form.photo) return null
+async function embedPhoto(
+  pdf: PDFDocument,
+  photo: EmployeePhoto | null,
+  employeeId: number,
+): Promise<PDFImage | null> {
+  if (!photo) return null
   try {
-    return form.photo.mimeType === 'image/png'
-      ? await pdf.embedPng(form.photo.data)
-      : await pdf.embedJpg(form.photo.data)
+    return photo.mimeType === 'image/png'
+      ? await pdf.embedPng(photo.data)
+      : await pdf.embedJpg(photo.data)
   } catch (error) {
     logger.warn(
-      { err: error, employeeId: form.employee.employeeId },
+      { err: error, employeeId },
       'employee photograph could not be embedded in the printed form',
     )
     return null
@@ -153,13 +192,18 @@ async function embedPhoto(pdf: PDFDocument, form: EmployeeFormData): Promise<PDF
  * not go in: a form with no picture is still the form somebody asked for, and
  * losing a print of twenty over one thumbnail is not a trade worth making.
  */
-async function drawHeader(sheet: Sheet, form: EmployeeFormData): Promise<void> {
+async function drawHeader(
+  sheet: Sheet,
+  employee: EmployeeProfile,
+  photo: EmployeePhoto | null,
+  subtitle: string,
+): Promise<void> {
   const { page, fonts } = sheet
   const top = sheet.y
 
   const boxWidth = 74
   const boxHeight = 90
-  const image = await embedPhoto(sheet.pdf, form)
+  const image = await embedPhoto(sheet.pdf, photo, employee.employeeId)
 
   if (image) {
     const scale = Math.min(boxWidth / image.width, boxHeight / image.height)
@@ -174,7 +218,7 @@ async function drawHeader(sheet: Sheet, form: EmployeeFormData): Promise<void> {
   }
 
   draw(page, 'ASPS International LLP', { x: sheet.margin, y: top - 15, font: fonts.bold, size: 16 })
-  draw(page, 'Employee document form', {
+  draw(page, subtitle, {
     x: sheet.margin,
     y: top - 31,
     font: fonts.regular,
@@ -246,17 +290,58 @@ function detailsOf(employee: EmployeeProfile): DetailItem[] {
   return items
 }
 
+/**
+ * The details on the front of the employee file.
+ *
+ * A different list from the checklist form's, and deliberately so. This page
+ * fronts the employee's actual documents, so it says who the papers behind it
+ * belong to - date of birth, gender, mobile, address - where the checklist form
+ * is a working sheet with a blank for a father's name somebody fills in by hand.
+ *
+ * STILL NOT ON IT: the Aadhaar number, the PAN number, any salary. This file is
+ * the one thing here most likely to leave the building, which makes it the last
+ * place those belong - the same rule the checklist form has always followed.
+ */
+function fileDetailsOf(employee: EmployeeProfile): DetailItem[] {
+  const orDash = (value: string | null | undefined): string =>
+    value === null || value === undefined || value.trim() === '' ? DASH : value
+
+  const items: DetailItem[] = [
+    { label: 'Employee name', value: employee.employeeName },
+    { label: 'Employee ID', value: employee.employeeCode },
+    { label: 'Department', value: orDash(employee.department) },
+    { label: 'Designation', value: orDash(employee.designation) },
+    { label: 'Joining date', value: formatDate(employee.joiningDate) },
+    {
+      label: 'Employment status',
+      value: employee.employmentStatus === EMPLOYMENT_STATUSES.LEFT ? 'Left' : 'Active',
+    },
+    { label: 'Date of birth', value: formatDate(employee.dateOfBirth) },
+    { label: 'Gender', value: orDash(employee.gender) },
+    { label: 'Mobile number', value: orDash(employee.phoneNumber) },
+  ]
+
+  // Only for somebody who has one. On a file that says 'Left', the date they
+  // left is the next thing anybody reading it asks.
+  if (employee.resignationDate || employee.lastWorkingDate) {
+    items.push({ label: 'Last working date', value: formatDate(employee.lastWorkingDate) })
+  }
+
+  items.push({ label: 'Address', value: orDash(employee.address), span: 2 })
+
+  return items
+}
+
 const DETAIL_GUTTER = 18
 const DETAIL_LABEL_DROP = 7
 const DETAIL_VALUE_DROP = 19
 const DETAIL_LINE_HEIGHT = 12
 const DETAIL_ROW_GAP = 8
 
-function drawDetails(sheet: Sheet, employee: EmployeeProfile): void {
+function drawDetails(sheet: Sheet, items: readonly DetailItem[]): void {
   sectionHeading(sheet, 'Employee details')
 
   const columnWidth = (sheet.contentWidth - DETAIL_GUTTER) / 2
-  const items = detailsOf(employee)
 
   let column: 0 | 1 = 0
   let rowTop = sheet.y
@@ -500,13 +585,45 @@ export async function renderEmployeeForms(
 
   for (const [index, form] of forms.entries()) {
     if (index > 0) newPage(sheet)
-    await drawHeader(sheet, form)
-    drawDetails(sheet, form.employee)
+    await drawHeader(sheet, form.employee, form.photo, 'Employee document form')
+    drawDetails(sheet, detailsOf(form.employee))
     drawChecklist(sheet, form)
     drawSignatureLine(sheet, form.employee)
   }
 
   drawFooters(sheet, meta)
+
+  return toBuffer(sheet)
+}
+
+/**
+ * One employee's file: their details, then their documents, in one PDF.
+ *
+ * The details page is ours and carries a footer. Everything after it is the
+ * documents as they were filed, page for page, with only a separator in front
+ * of each - nothing is stamped across a scanned card, because what this hands
+ * over has to still be a copy of what the office holds.
+ *
+ * An employee with nothing on file gets the details page and stops there. That
+ * is a true answer to 'send me their file', and a truer one than an error.
+ */
+export async function renderEmployeeFile(file: EmployeeFileData, meta: PrintMeta): Promise<Buffer> {
+  const sheet = await createSheet({ size: A4_PORTRAIT, margin: MARGIN })
+
+  sheet.pdf.setTitle(`${file.employee.employeeCode} - ${file.employee.employeeName}`)
+  sheet.pdf.setCreator('ASPS Document Management System')
+  sheet.pdf.setProducer('ASPS Document Management System')
+  sheet.pdf.setCreationDate(meta.generatedAt)
+
+  await drawHeader(sheet, file.employee, file.photo, 'Employee file')
+  drawDetails(sheet, fileDetailsOf(file.employee))
+
+  // The details can run to a second page - a long address, an exit recorded -
+  // and every page they run to is one of ours.
+  const ownPages = new Set<number>(sheet.pdf.getPages().map((_, index) => index))
+  await appendDocuments(sheet, file.documents, ownPages)
+
+  drawOwnFooters(sheet, ownPages, meta)
 
   return toBuffer(sheet)
 }

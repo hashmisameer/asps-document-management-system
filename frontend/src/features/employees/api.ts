@@ -203,7 +203,12 @@ const PRINT_TIMEOUT_MS = 120_000
 /** The name comes from the SERVER - employee code and name, or the day of a bulk print. */
 export type PrintedForms = DownloadedFile
 
-/** One employee's form. */
+/**
+ * One employee's file: their details, then every document they have sent in.
+ *
+ * The long timeout earns its keep here - this merges the documents themselves,
+ * not a page about them.
+ */
 export async function printEmployeeForm(employeeId: number): Promise<PrintedForms> {
   const response = await api.get<Blob>(`/employees/${employeeId}/print`, {
     responseType: 'blob',

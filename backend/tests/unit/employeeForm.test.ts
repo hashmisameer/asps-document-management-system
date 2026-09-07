@@ -1,4 +1,5 @@
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, StandardFonts } from 'pdf-lib'
+import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 import {
   DEADLINE_STATE,
@@ -13,9 +14,12 @@ import {
   bulkFileName,
   checklistStatus,
   formFileName,
+  renderEmployeeFile,
   renderEmployeeForms,
+  type EmployeeFileData,
   type EmployeeFormData,
 } from '../../src/services/employeeForm.service.js'
+import type { DocumentEntry } from '../../src/services/documentPages.service.js'
 
 /**
  * The printed employee form.
@@ -379,5 +383,293 @@ describe('renderEmployeeForms', () => {
 
     expect(pages).toHaveLength(1)
     expect(pages[0]).toContain('?')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The employee file                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** A real PDF with the given words, one page each. */
+async function pdfOf(words: string[]): Promise<Buffer> {
+  const pdf = await PDFDocument.create()
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+
+  for (const text of words) {
+    const page = pdf.addPage([595.28, 841.89])
+    page.drawText(text, { x: 60, y: 700, font, size: 18 })
+  }
+  return Buffer.from(await pdf.save())
+}
+
+/** A real photograph, the shape a phone takes one. */
+async function jpegOf(): Promise<Buffer> {
+  return sharp({
+    create: { width: 1200, height: 1600, channels: 3, background: { r: 210, g: 210, b: 210 } },
+  })
+    .jpeg()
+    .toBuffer()
+}
+
+function fileEntry(
+  documentName: string,
+  file: { read: () => Promise<Buffer>; mimeType: string; isSigned?: boolean },
+): DocumentEntry {
+  return {
+    documentName,
+    isMandatory: true,
+    uploadedAt: '2026-01-18T09:15:00.000Z',
+    uploadedByName: 'Pragati Dixit',
+    file: { read: file.read, mimeType: file.mimeType, isSigned: file.isSigned ?? false },
+  }
+}
+
+const employeeFile = (documents: DocumentEntry[], profile = employee()): EmployeeFileData => ({
+  employee: profile,
+  photo: null,
+  documents,
+})
+
+describe('renderEmployeeFile', () => {
+  it('opens with the employee, not with a checklist', async () => {
+    const pages = await pagesOf(await renderEmployeeFile(employeeFile([]), META))
+    const [first = ''] = pages
+
+    expect(first).toContain('BHAGWAN SINGH')
+    expect(first).toContain('EMP-1010')
+    expect(first).toContain('JACKET FRONT')
+    expect(first).toContain('ASSTT.OPERATER')
+    expect(first).toContain('12/01/2026')
+    expect(first).toContain('07/04/1991')
+    expect(first).toContain('Male')
+    expect(first).toContain('9812345670')
+    expect(first).toContain('Faridabad')
+    expect(first).toContain('Active')
+  })
+
+  it('has no checklist on it anywhere', async () => {
+    // The whole point of the change. This file goes to somebody outside the
+    // office; what the office is still chasing is nobody else's business, and
+    // a deadline printed beside a document reads as a judgement on the person.
+    const pdf = await renderEmployeeFile(
+      employeeFile([
+        fileEntry('Appointment Letter', {
+          read: () => pdfOf(['LETTER']),
+          mimeType: 'application/pdf',
+        }),
+      ]),
+      META,
+    )
+
+    const text = (await pagesOf(pdf)).join(' ')
+    for (const word of [
+      'Document checklist',
+      'documents received',
+      'Due date',
+      'Pending',
+      'Overdue',
+      'outstanding',
+      'Not yet received',
+      'Signature on file',
+    ]) {
+      expect(text, word).not.toContain(word)
+    }
+  })
+
+  it('keeps the Aadhaar number and the PAN off it', async () => {
+    // The rule the checklist form has always followed, and this page is the
+    // one most likely to leave the building.
+    const text = (await pagesOf(await renderEmployeeFile(employeeFile([]), META))).join(' ')
+
+    expect(text).not.toContain('123456789012')
+    expect(text).not.toContain('ABCDE1234F') // asps-dms:allow-secret
+  })
+
+  it('is one page when nothing has been uploaded', async () => {
+    // Asked for somebody's file on their first day, the true answer is their
+    // details and no documents - not an error.
+    expect(await pagesOf(await renderEmployeeFile(employeeFile([]), META))).toHaveLength(1)
+  })
+
+  it('binds the documents on behind the details, in the order given', async () => {
+    const pdf = await renderEmployeeFile(
+      employeeFile([
+        fileEntry('Appointment Letter', {
+          read: () => pdfOf(['LETTER PAGE']),
+          mimeType: 'application/pdf',
+          isSigned: true,
+        }),
+        fileEntry('Service Card', {
+          read: () => pdfOf(['CARD PAGE']),
+          mimeType: 'application/pdf',
+        }),
+      ]),
+      META,
+    )
+
+    const pages = await pagesOf(pdf)
+
+    expect(pages).toHaveLength(5) // details + (separator + page) x 2
+    expect(pages[1]).toContain('Appointment Letter')
+    expect(pages[1]).toContain('Signed copy')
+    expect(pages[2]).toContain('LETTER PAGE')
+    expect(pages[3]).toContain('Service Card')
+    expect(pages[3]).toContain('As it was uploaded')
+    expect(pages[4]).toContain('CARD PAGE')
+  })
+
+  it('turns a photographed document into a page', async () => {
+    const pdf = await renderEmployeeFile(
+      employeeFile([
+        fileEntry('Aadhaar Card', { read: () => jpegOf(), mimeType: 'image/jpeg' }),
+      ]),
+      META,
+    )
+
+    const parsed = await PDFDocument.load(pdf)
+    expect(parsed.getPageCount()).toBe(3)
+
+    const page = parsed.getPage(2)
+    expect(Math.round(page.getWidth())).toBe(595)
+    expect(Math.round(page.getHeight())).toBe(842)
+  })
+
+  it('reads each document once, and only when its turn comes', async () => {
+    // Ten scans is a hundred megabytes. Reading them all up front to decide
+    // what to draw is the difference between a server that builds this and one
+    // that falls over on the third employee of the morning.
+    const reads: string[] = []
+    const watched = (name: string, mimeType: string, data: () => Promise<Buffer>): DocumentEntry =>
+      fileEntry(name, {
+        mimeType,
+        read: async () => {
+          reads.push(name)
+          return data()
+        },
+      })
+
+    await renderEmployeeFile(
+      employeeFile([
+        watched('Appointment Letter', 'application/pdf', () => pdfOf(['A'])),
+        watched('Old Archive', 'application/zip', async () => Buffer.from('zip')),
+        watched('Service Card', 'application/pdf', () => pdfOf(['B'])),
+      ]),
+      META,
+    )
+
+    // The zip is never read: nothing can be done with it, and reading it would
+    // pull a file into memory only to throw it away.
+    expect(reads).toEqual(['Appointment Letter', 'Service Card'])
+  })
+
+  it('footers its own pages and leaves the documents alone', async () => {
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Appointment Letter', {
+            read: () => pdfOf(['SCANNED CARD']),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages[0]).toContain('Generated 03/09/2026 14:20 by Sameer Hashmi')
+    expect(pages[1]).toContain('Page 2 of 3')
+    expect(pages[2]).toContain('SCANNED CARD')
+    expect(pages[2]).not.toContain('Sameer Hashmi')
+  })
+})
+
+describe('the documents inside the employee file', () => {
+  /** A real image, in whichever format is asked for. */
+  async function imageOf(format: 'png' | 'tiff' | 'webp'): Promise<Buffer> {
+    const canvas = sharp({
+      create: { width: 400, height: 600, channels: 3, background: { r: 220, g: 220, b: 220 } },
+    })
+    return format === 'png'
+      ? canvas.png().toBuffer()
+      : format === 'tiff'
+        ? canvas.tiff().toBuffer()
+        : canvas.webp().toBuffer()
+  }
+
+  it('keeps every page of a document that has several', async () => {
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Appointment Letter', {
+            read: () => pdfOf(['ONE', 'TWO', 'THREE']),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages).toHaveLength(5) // details + separator + three
+    expect(pages[2]).toContain('ONE')
+    expect(pages[3]).toContain('TWO')
+    expect(pages[4]).toContain('THREE')
+  })
+
+  it('converts the image formats a PDF cannot hold', async () => {
+    // WEBP and TIFF are both accepted uploads and neither can be embedded.
+    for (const format of ['tiff', 'webp', 'png'] as const) {
+      const data = await imageOf(format)
+      const pdf = await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Aadhaar Card', { read: async () => data, mimeType: `image/${format}` }),
+        ]),
+        META,
+      )
+
+      expect((await PDFDocument.load(pdf)).getPageCount(), format).toBe(3)
+    }
+  })
+
+  it('accounts for a document it cannot read rather than dropping it', async () => {
+    // A file the store has lost, or one that is not really a PDF. Silently
+    // handing over nine of ten is how somebody comes to believe a document was
+    // never collected.
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Bio Data Form', {
+            read: async () => Buffer.from('not a pdf at all'),
+            mimeType: 'application/pdf',
+          }),
+          fileEntry('Service Card', {
+            read: () => pdfOf(['GOOD ONE']),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages[1]).toContain('Bio Data Form')
+    expect(pages[2]).toContain('could not be read')
+    // And the one after it is unaffected.
+    expect(pages[3]).toContain('Service Card')
+    expect(pages[4]).toContain('GOOD ONE')
+  })
+
+  it('says on the separator when the type cannot be included at all', async () => {
+    const pages = await pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Old Archive', {
+            read: async () => Buffer.from('zip'),
+            mimeType: 'application/zip',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(pages).toHaveLength(2)
+    expect(pages[1]).toContain('application/zip')
   })
 })
