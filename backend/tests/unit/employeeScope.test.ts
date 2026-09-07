@@ -50,7 +50,7 @@ const employees = await import('../../src/repositories/employee.repository.js')
 const documents = await import('../../src/repositories/employeeDocument.repository.js')
 const reports = await import('../../src/repositories/report.repository.js')
 const reminders = await import('../../src/repositories/reminder.repository.js')
-const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE } = await import(
+const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE, EFFECTIVE_LEFT } = await import(
   '../../src/repositories/employeeScope.js'
 )
 
@@ -361,5 +361,78 @@ describe('one definition of who is countable', () => {
 
     expect(list).toContain('e.IsActive = 1')
     expect(list).toContain('NOT (e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today)')
+  })
+})
+/**
+ * The Employment filter, and the archived records.
+ *
+ * Reported from the office on 2026-09-07: 549 employees, all active, none
+ * archived, and the third option on the Employment dropdown listed all 549.
+ * Archive one and it listed 548. The list was answering 'everybody except the
+ * archived' to a question that read as 'only the archived'.
+ *
+ * The predicates below were correct; there was no Archived option to choose,
+ * only an 'All' that nobody reads as excluding anything. These assertions pin
+ * down what each of the four choices now sends, so the dropdown and the SQL
+ * cannot drift apart again.
+ */
+describe('which employees the list asks for', () => {
+  const where = async (overrides: Partial<EmployeeListQuery>): Promise<string> =>
+    whereOf(await employeeListSql(overrides))
+
+  it('lists the people still here by default, and leaves the archived out', async () => {
+    const sql = await where({})
+
+    expect(sql).toContain('e.IsActive = 1')
+    expect(sql).toContain(`NOT ${EFFECTIVE_LEFT}`)
+  })
+
+  it('lists those who have an exit recorded under Left', async () => {
+    const sql = await where({ status: EMPLOYEE_STATUS_FILTERS.LEFT })
+
+    expect(sql).toContain('e.ResignationDate IS NOT NULL')
+    // Still only the records the office has not finished with.
+    expect(sql).toContain('e.IsActive = 1')
+  })
+
+  it('asks nothing about the exit under All, and still leaves the archived out', async () => {
+    // What the office was reading as 'Archived'. It is not: it is everybody,
+    // here or gone, whose record is live - which is why it showed all 549.
+    const sql = await where({ status: EMPLOYEE_STATUS_FILTERS.ALL })
+
+    expect(sql).toContain('e.IsActive = 1')
+    expect(sql).not.toContain('e.ResignationDate IS NOT NULL')
+    expect(sql).not.toContain(`NOT ${EFFECTIVE_LEFT}`)
+  })
+
+  it('lists ONLY the archived when that is what was asked for', async () => {
+    // The bug as it was reported: this must be the archived one, not the
+    // other 548.
+    const sql = await where({ status: EMPLOYEE_STATUS_FILTERS.ALL, archivedOnly: true })
+
+    expect(sql).toContain('e.IsActive = 0')
+    expect(sql).not.toContain('e.IsActive = 1')
+  })
+
+  it('lists the archived alongside the rest when the checkbox is ticked', async () => {
+    const sql = await where({ includeArchived: true })
+
+    // Neither: nothing is said about IsActive at all, so both sides come back.
+    expect(sql).not.toContain('e.IsActive = 1')
+    expect(sql).not.toContain('e.IsActive = 0')
+  })
+
+  it('reads Archived as the narrower answer when the checkbox is ticked too', async () => {
+    // The two controls are the same axis - hidden, alongside, or on their own -
+    // so the narrowest wins rather than the two cancelling out.
+    const sql = await where({ archivedOnly: true, includeArchived: true })
+
+    expect(sql).toContain('e.IsActive = 0')
+  })
+
+  it('keeps the archived out of a search, which is where a stale record hurts', async () => {
+    const sql = await where({ search: 'BHAGWAN' })
+
+    expect(sql).toContain('e.IsActive = 1')
   })
 })
