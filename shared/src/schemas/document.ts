@@ -214,6 +214,18 @@ export type UpdateDocumentTypeInput = z.infer<typeof updateDocumentTypeSchema>
  * after the file is stored, so by the time anyone can decide to accept a
  * refusal, the document is already there to be looked at.
  */
+/**
+ * Confirming a document by hand.
+ *
+ * The reason is OPTIONAL, and normally absent. Confirming is one button: these
+ * are photocopies, OCR failing to read a name off one is the ordinary case, and
+ * a required sentence would be the same sentence 550 times. Where none is sent
+ * the server records MANUAL_CONFIRMATION_REASON, which says a person confirmed
+ * it and the machine did not.
+ *
+ * Still accepted where somebody has something to add, and still held to a
+ * length that means something when they do.
+ */
 export const overrideIdentityCheckSchema = z.object({
   reason: z
     .string()
@@ -222,7 +234,8 @@ export const overrideIdentityCheckSchema = z.object({
       MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
       'Say why this document is being accepted, in a few words',
     )
-    .max(500),
+    .max(500)
+    .optional(),
 })
 
 export type OverrideIdentityCheckInput = z.infer<typeof overrideIdentityCheckSchema>

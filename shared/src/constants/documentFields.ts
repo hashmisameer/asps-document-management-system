@@ -139,3 +139,19 @@ export type TextSource = (typeof TEXT_SOURCES)[keyof typeof TEXT_SOURCES]
  * so the button enables at exactly the moment the request would be accepted.
  */
 export const MIN_IDENTITY_OVERRIDE_REASON_LENGTH = 10
+
+/**
+ * What is recorded when somebody confirms a document by hand.
+ *
+ * Every identity card at this company is a low-contrast photocopy, so OCR
+ * failing to read the name is the ordinary case rather than a warning sign.
+ * Asking HR to type a sentence explaining that, 550 times, would collect 550
+ * copies of the same sentence and teach everyone to type anything at all.
+ *
+ * So it is one button and this fixed line. The wording says plainly that a
+ * PERSON confirmed it and that the machine did not - a record that read like a
+ * successful automatic check would be worse than no record, because somebody
+ * auditing it later would believe the name had been verified.
+ */
+export const MANUAL_CONFIRMATION_REASON =
+  'Manually confirmed by HR - name could not be read by OCR'

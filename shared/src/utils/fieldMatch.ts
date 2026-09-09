@@ -10,12 +10,18 @@ import {
  * or an OCR pass over a scan - so the same rules are testable directly and mean
  * the same thing wherever they run.
  *
- * The comparisons are deliberately LITERAL. Nothing here scores a similarity or
- * guesses at a near miss: this check refuses uploads, and a rule that decides
- * 'NAMDEV' is close enough to 'NAMDEO' is a rule that files a document against
- * the wrong person. Where a real document legitimately fails - a scan too poor
- * for OCR to read a digit correctly - the answer is the recorded, audited
- * override, not a matcher that quietly accepts approximations.
+ * The comparisons used to be entirely LITERAL, on the reasoning that a matcher
+ * deciding 'NAMDEV' is close enough to 'NAMDEO' is a matcher that files a
+ * document against the wrong person. That reasoning held while a failed check
+ * REFUSED the upload. It no longer does: every document is stored whatever the
+ * reading says, and the check's job is now to tell somebody whether to look.
+ *
+ * So the NAME is compared with a tolerance, and nothing else is. Every identity
+ * card at this company is a low-contrast photocopy where a character or two
+ * comes back wrong, and a name is long enough to survive that and still be
+ * unmistakable. The tolerance is by word length - see allowedSlips, which is
+ * where the safety of this actually lives. Numbers and dates stay literal: a
+ * digit that is wrong is simply a different number.
  */
 
 /** Upper case, and every run of anything but a letter or digit becomes a space. */
@@ -29,6 +35,66 @@ export function normalizeText(text: string): string {
 export function words(text: string): string[] {
   const normalized = normalizeText(text)
   return normalized.length === 0 ? [] : normalized.split(' ')
+}
+
+/**
+ * How many single-character edits turn one word into the other.
+ *
+ * The ordinary edit distance, written out because this package has no
+ * dependencies and one small loop is cheaper than acquiring one. It stops
+ * counting once the limit is passed, so a comparison against a completely
+ * different word gives up early rather than filling a table.
+ */
+export function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1
+
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i)
+
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i]
+    let best = i
+
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1)
+      const deletion = (previous[j] ?? 0) + 1
+      const insertion = (row[j - 1] ?? 0) + 1
+      const cost = Math.min(substitution, deletion, insertion)
+      row.push(cost)
+      if (cost < best) best = cost
+    }
+
+    // Nothing later in the table can be lower than the best on this row, so a
+    // row that is already past the limit settles it.
+    if (best > limit) return limit + 1
+    previous = row
+  }
+
+  return previous[b.length] ?? limit + 1
+}
+
+/**
+ * How many characters a word of this length may be wrong by.
+ *
+ * THE WHOLE SAFETY OF FUZZY MATCHING IS IN THIS TABLE. The check exists to
+ * catch one employee's document filed against another's record, and RAM and RAJ
+ * are one character apart - allowing a slip on a three-letter name would wave
+ * exactly that mistake through. A long word carries enough of itself to survive
+ * two wrong characters and still be unmistakable; a short one does not.
+ */
+export function allowedSlips(length: number): number {
+  if (length >= 8) return 2
+  if (length >= 5) return 1
+  return 0
+}
+
+/** The same word, allowing for the characters OCR gets wrong at this length. */
+export function fuzzyEquals(expected: string, candidate: string): boolean {
+  if (expected === candidate) return true
+
+  const limit = allowedSlips(expected.length)
+  if (limit === 0) return false
+
+  return editDistance(expected, candidate, limit) <= limit
 }
 
 /**
@@ -46,6 +112,19 @@ export function matchWords(expected: string, documentText: string): boolean {
 
   const present = new Set(words(documentText))
   if (wanted.every((word) => present.has(word))) return true
+
+  // The same, allowing for the characters OCR gets wrong.
+  //
+  // Every one of this company's identity cards is a low-contrast photocopy, and
+  // a name coming back one character out is the ordinary case: the office's own
+  // PAN card reads 'HHAGWAN SINGH' under every setting tried. Refusing to see
+  // the employee in that is how a real document ends up needing a human every
+  // single time.
+  //
+  // The tolerance is by word LENGTH, which is what keeps it safe - see
+  // fuzzyEquals.
+  const onPage = words(documentText)
+  if (wanted.every((word) => onPage.some((candidate) => fuzzyEquals(word, candidate)))) return true
 
   // The document may have run the name together.
   //

@@ -4,6 +4,7 @@ import {
   AUDIT_ENTITY_TYPES,
   DOCUMENT_STATUS,
   DOCUMENT_STATUS_LABEL,
+  MANUAL_CONFIRMATION_REASON,
   PERMISSIONS,
   SIGNATURE_STATUS,
   canTransitionDocument,
@@ -180,6 +181,7 @@ export async function completeIdentityCheck(
       { buffer, mimeType: location.mimeType ?? 'application/octet-stream' },
       documentType.recognitionKeywords,
       documentType.documentName,
+      documentType.documentCode,
     )
 
     if (result === null) {
@@ -443,23 +445,29 @@ export async function uploadFile(
 }
 
 /**
- * Accepts a document the check refused.
+ * Somebody has looked at the document and says it is the right one.
  *
- * The override used to travel with the upload, because the check ran inside it
- * and a refusal meant nothing was stored. Now the document is already on file
- * and this is a decision about it: a person who has looked at the page says why
- * it is right, and their name goes on that sentence.
+ * ONE CLICK, and normally no typing. These are photocopies: OCR failing to read
+ * a name off one is the ordinary case, and requiring a sentence about it made
+ * HR write the same sentence hundreds of times, which is how a required field
+ * becomes meaningless. Where nothing is given, MANUAL_CONFIRMATION_REASON is
+ * recorded - wording that says a PERSON confirmed this and the machine did not,
+ * so nobody reading the row later mistakes it for an automatic pass.
  *
- * Only a refused document can be accepted this way. Overriding a check that
- * passed, or one still running, would put a reason on a row that never needed
- * one and make the field impossible to read as evidence of anything.
+ * Their name and the time go on the row either way, which is the part that
+ * actually makes this an audit trail.
+ *
+ * Only a document whose check did not pass can be confirmed this way.
+ * Confirming one that passed, or one still being read, would put a reason on a
+ * row that never needed one.
  */
 export async function overrideIdentityCheck(
   documentId: number,
-  reason: string,
+  reason: string | undefined,
   actor: AuthUser,
   context: RequestContext,
 ): Promise<EmployeeDocument> {
+  const recorded = reason?.trim() || MANUAL_CONFIRMATION_REASON
   const record = await loadRecord(documentId)
   const location = await employeeDocumentRepository.findStoredFile(documentId)
 
@@ -480,7 +488,7 @@ export async function overrideIdentityCheck(
     status: 'Overridden',
     source: record.identityCheck.source,
     checks: record.identityCheck.checks,
-    reason,
+    reason: recorded,
     overrideBy: actor.userId,
   })
   if (!written) throw concurrentChange()
@@ -495,7 +503,7 @@ export async function overrideIdentityCheck(
       employeeCode: record.employeeCode,
       documentName: record.documentName,
       source: record.identityCheck.source,
-      reason,
+      reason: recorded,
       ...summariseChecks(record.identityCheck.checks),
     },
   })

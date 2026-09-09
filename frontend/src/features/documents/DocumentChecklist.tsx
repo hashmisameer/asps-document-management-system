@@ -7,7 +7,6 @@ import {
   DOCUMENT_STATUS,
   DOCUMENT_STATUS_LABEL,
   MAX_DOCUMENT_SIZE_BYTES,
-  MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
   PERMISSIONS,
   SIGNATURE_STATUS,
   deriveDeadline,
@@ -30,13 +29,13 @@ import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate } from '../../lib/format.js'
-import { documentFileUrl, removeDocumentFile, uploadDocument } from './api.js'
 import {
-  identityFailureOf,
-  overrideReasonHint,
-  unconfirmedLabels,
-  type IdentityFailure,
-} from './identityFailure.js'
+  confirmDocumentIdentity,
+  documentFileUrl,
+  removeDocumentFile,
+  uploadDocument,
+} from './api.js'
+
 
 /**
  * The employee's checklist, with the actions each row currently allows.
@@ -129,13 +128,10 @@ function ChecklistRow({
   // are still on disk, but nothing in the application will put them back.
   const [confirmingRemove, setConfirmingRemove] = useState(false)
 
-  // An upload the identity check refused, held with the file that was refused
-  // so that accepting it re-sends the same bytes rather than asking the person
-  // to find the file again.
-  const [refused, setRefused] = useState<
-    { file: File; message: string; failure: IdentityFailure } | null
-  >(null)
-  const [overrideReason, setOverrideReason] = useState('')
+  /* The panel that used to live here - the refused upload, its file held back,
+     and a box demanding a written reason before it could be accepted - is gone
+     with the refusal itself. Nothing is refused now: the document is stored,
+     and if the name could not be read the row says so and offers one button. */
 
   // Every action changes the counts on the employee, and several change what
   // the other buttons should be, so the whole employee prefix is refreshed
@@ -147,28 +143,31 @@ function ChecklistRow({
   }
 
   const upload = useMutation({
-    mutationFn: ({ file, overrideReason: reasonGiven }: { file: File; overrideReason?: string }) =>
-      uploadDocument(item.documentId, file, {
-        ...(reasonGiven ? { identityOverrideReason: reasonGiven } : {}),
-      }),
+    mutationFn: ({ file }: { file: File }) => uploadDocument(item.documentId, file),
     onSuccess: async () => {
       setFailure(null)
-      setRefused(null)
-      setOverrideReason('')
       await refresh()
     },
-    // A refused upload is not an error to report and move on from: it is a
-    // question for the person holding the document, so it opens the override
-    // rather than printing a sentence they cannot act on.
-    onError: (error, variables) => {
-      const identity = identityFailureOf(error)
-      if (identity && error instanceof ApiError) {
-        setFailure(null)
-        setRefused({ file: variables.file, message: error.message, failure: identity })
-        return
-      }
-      onError(error)
+    // Whatever the reading finds, the file is already stored by the time the
+    // check runs - so an error here is a real upload failure and nothing else.
+    onError,
+  })
+
+  /**
+   * A person confirming what the machine could not read.
+   *
+   * One click and nothing to type. Their name and the time go on the row, and
+   * the row then says 'Manually confirmed' rather than 'Verified' - so an audit
+   * months later can tell the two apart, which is the whole point of recording
+   * it at all.
+   */
+  const confirm = useMutation({
+    mutationFn: () => confirmDocumentIdentity(item.documentId),
+    onSuccess: async () => {
+      setFailure(null)
+      await refresh()
     },
+    onError,
   })
 
   const remove = useMutation({
@@ -195,8 +194,7 @@ function ChecklistRow({
       setFailure(`That file is larger than the ${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} MB limit.`)
       return
     }
-    setRefused(null)
-    setOverrideReason('')
+    setFailure(null)
     upload.mutate({ file })
   }
 
@@ -219,7 +217,7 @@ function ChecklistRow({
     identityStatus === 'Checking'
       ? `${DOCUMENT_STATUS_LABEL[item.status]} · reading`
       : identityStatus === 'Overridden'
-        ? `${DOCUMENT_STATUS_LABEL[item.status]} · accepted with reason`
+        ? `${DOCUMENT_STATUS_LABEL[item.status]} · manually confirmed`
         : DOCUMENT_STATUS_LABEL[item.status]
   const hasFile = item.originalFileName !== null
 
@@ -331,15 +329,28 @@ function ChecklistRow({
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>
           ) : null}
 
-          {/* Refused. For an identity card the file has already been taken back
-              off - the row is Pending again - so this sentence is the only thing
-              saying why nothing is attached. */}
+          {/* A WARNING, not a refusal. The document is on file either way.
+              Amber rather than red, and with one button: every identity card
+              here is a photocopy, so a name OCR cannot read says nothing about
+              the document - it is simply not confirmed yet, and a person
+              glancing at the page settles it. */}
           {item.identityCheck?.status === 'Failed' ? (
-            <p className="mt-1 max-w-56 text-xs text-status-rejected">
-              {item.identityCheck.failureReason ??
-                item.identityCheck.overrideReason ??
-                'This document did not match the employee.'}
-            </p>
+            <div className="mt-1 max-w-56">
+              <p className="text-xs text-status-pending">
+                {item.identityCheck.failureReason ??
+                  'Could not read the name from this document. Please confirm manually.'}
+              </p>
+              {can(PERMISSIONS.DOCUMENT_UPLOAD) ? (
+                <button
+                  type="button"
+                  onClick={() => confirm.mutate()}
+                  disabled={confirm.isPending}
+                  className="mt-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {confirm.isPending ? 'Confirming...' : 'Confirm this document'}
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </td>
 
@@ -480,65 +491,6 @@ function ChecklistRow({
                 Cancel
               </Button>
             </div>
-          </td>
-        </tr>
-      ) : null}
-
-      {refused ? (
-        <tr>
-          <td colSpan={5} className="bg-slate-50 px-4 py-3">
-            {/* The server's own sentence, because it names what it could not
-                confirm and says what to do next. */}
-            <p className="text-sm font-medium text-slate-900">{refused.message}</p>
-
-            {unconfirmedLabels(refused.failure).length > 0 ? (
-              <p className="mt-1 text-xs text-slate-600">
-                Not found in {refused.file.name}:{' '}
-                <span className="font-medium">
-                  {unconfirmedLabels(refused.failure).join(', ')}
-                </span>
-              </p>
-            ) : null}
-
-            <form
-              className="mt-3 flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (overrideReason.trim().length < MIN_IDENTITY_OVERRIDE_REASON_LENGTH) return
-                upload.mutate({ file: refused.file, overrideReason: overrideReason.trim() })
-              }}
-            >
-              <label className="flex-1">
-                <span className="text-xs font-medium text-slate-700">
-                  Accepting it anyway? Say why - it is recorded on the document under your name.
-                </span>
-                <input
-                  autoFocus
-                  value={overrideReason}
-                  maxLength={500}
-                  onChange={(event) => setOverrideReason(event.target.value)}
-                  placeholder={overrideReasonHint(refused.failure, item.documentName)}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-              <Button
-                type="submit"
-                busy={upload.isPending}
-                busyLabel="Uploading..."
-                disabled={overrideReason.trim().length < MIN_IDENTITY_OVERRIDE_REASON_LENGTH}
-              >
-                Accept and upload
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setRefused(null)
-                  setOverrideReason('')
-                }}
-              >
-                Cancel
-              </Button>
-            </form>
           </td>
         </tr>
       ) : null}

@@ -9,6 +9,8 @@ import {
   matchField,
   matchPan,
   matchesDocumentType,
+  allowedSlips,
+  editDistance,
   matchWords,
   normalizeText,
 } from '@asps-dms/shared'
@@ -385,5 +387,85 @@ describe('recognising the forms as they are actually printed', () => {
     // Being lenient about script must not become lenient about which document
     // it is: that is the whole point of the check.
     expect(matchesDocumentType('कर्मचारी राज्य बीमा', APPOINTMENT)).toBe(false)
+  })
+})
+
+/**
+ * Reading a name off a photocopy.
+ *
+ * Every identity card at this company is a low-contrast JPG photocopy, and OCR
+ * returns a character or two wrong on most of them - the office's own PAN card
+ * reads 'HHAGWAN SINGH'. These cases are why the name is now compared with a
+ * tolerance, and why that tolerance is by word length rather than a flat number.
+ */
+describe('a name read imperfectly', () => {
+  it('sees the employee through the characters OCR got wrong', () => {
+    // The real one, from the office's own card.
+    expect(matchWords('Bhagwan Singh', 'HHAGWAN SINGH')).toBe(true)
+    expect(matchWords('Bhagwan Singh', 'BHAGWAN SlNGH')).toBe(true)
+  })
+
+  it('still sees it when the words are the other way round', () => {
+    // PAN cards print the surname first often enough to matter.
+    expect(matchWords('Sameer Hashmi', 'HASHMI SAMEER')).toBe(true)
+  })
+
+  it('does not care about capitals', () => {
+    expect(matchWords('Sameer Hashmi', 'sameer hashmi')).toBe(true)
+  })
+
+  it('finds the name among the other names a card prints', () => {
+    // A PAN card carries the father's name as well.
+    const card = 'INCOME TAX DEPARTMENT PERMANENT ACCOUNT NUMBER RAJESH KUMAR SHARMA MOHAN LAL SHARMA'
+
+    expect(matchWords('Rajesh Sharma', card)).toBe(true)
+  })
+
+  it('refuses a short name that is one letter different, which is a person', () => {
+    // THE LINE THIS DRAWS. Ram and Raj are one character apart and are two
+    // employees; a tolerance that covered them would file one's card under the
+    // other, which is the one mistake this check exists to catch. So a word of
+    // four letters or fewer has to be exactly right.
+    expect(matchWords('Ram Kumar', 'RAJ KUMAR')).toBe(false)
+    expect(matchWords('Anil Gupta', 'SUNIL GUPTA')).toBe(false)
+  })
+
+  it('accepts a LONG word one letter out, and that is a deliberate trade', () => {
+    // Stated rather than hidden: Gupta and Gupte are different surnames, and
+    // this treats them as the same. At five letters the alternative is refusing
+    // BHAGWAN read as HHAGWAN, which happens on this office's own card and on
+    // most of the 550 behind it.
+    //
+    // What makes the trade sound is that it is no longer a gate. The document
+    // is stored either way; this only decides whether the screen says the name
+    // was confirmed automatically or asks a person to look.
+    expect(matchWords('Anil Gupta', 'ANIL GUPTE')).toBe(true)
+  })
+
+  it('allows more slips the longer the word is', () => {
+    expect(allowedSlips(3)).toBe(0)
+    expect(allowedSlips(4)).toBe(0)
+    expect(allowedSlips(5)).toBe(1)
+    expect(allowedSlips(7)).toBe(1)
+    expect(allowedSlips(8)).toBe(2)
+    expect(allowedSlips(14)).toBe(2)
+  })
+
+  it('counts an insertion, a deletion and a substitution alike', () => {
+    expect(editDistance('SINGH', 'SINGH', 2)).toBe(0)
+    expect(editDistance('SINGH', 'SlNGH', 2)).toBe(1) // one letter read wrong
+    expect(editDistance('SINGH', 'SINGHH', 2)).toBe(1) // one letter too many
+    expect(editDistance('SINGH', 'SNGH', 2)).toBe(1) // one letter missing
+    expect(editDistance('SINGH', 'KUMAR', 2)).toBe(3) // gives up past the limit
+  })
+
+  it('does not let two half-right words add up to a match', () => {
+    // Both words wrong by one is still both words wrong, and at four letters
+    // that is not a slip - it is a different name.
+    expect(matchWords('Amit Shah', 'AMIR SHAM')).toBe(false)
+  })
+
+  it('reads a name run together, as it always did', () => {
+    expect(matchWords('Bhagwan Singh', 'BHAGWANSINGH')).toBe(true)
   })
 })

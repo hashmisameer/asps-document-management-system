@@ -3,6 +3,7 @@ import {
   DOCUMENT_FIELD_LABEL,
   FIELD_CHECK_RESULTS,
   IDENTIFYING_DOCUMENT_FIELDS,
+  IDENTITY_CARD_DOCUMENT_CODES,
   TEXT_SOURCES,
   matchField,
   matchWords,
@@ -16,6 +17,7 @@ import {
 } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { logSafeText } from '../utils/redact.js'
 import { extractText } from './documentText.service.js'
 
 /**
@@ -27,13 +29,30 @@ import { extractText } from './documentText.service.js'
  * documentText.service gets the words and document.service decides what to do
  * with the answer; this module only says what was found.
  *
- * The check is a GUARD, not a judgement of authenticity. It catches the mistake
- * it exists to prevent - one employee's form filed under another's record - and
- * it is deliberately literal about what counts as a match, because the cost of
- * being lenient is exactly the failure being guarded against. A real document
- * that fails, because a scan is too poor for OCR to read a digit, is accepted
- * by a person who records why.
+ * NOTHING HERE REFUSES AN UPLOAD. It used to, and for the two identity cards a
+ * failure went as far as deleting the stored file again. That was wrong for
+ * this company: all 550 employees' PAN and Aadhaar documents are low-contrast
+ * JPG photocopies, so OCR failing to read a name off one is the NORMAL case,
+ * not a warning sign - and the system was treating the normal case as an error
+ * and making somebody type a sentence about it every single time.
+ *
+ * What this module now produces is advice. A document is stored whatever comes
+ * back; the answer decides whether the screen says the name was confirmed
+ * automatically or asks a person to confirm it with one click.
  */
+
+/**
+ * How well a page must have been read before its words are used to ACCUSE.
+ *
+ * Tesseract's own score, 0 to 100. Above this the reading is good enough to say
+ * 'this looks like a different document type'; below it, the absence of the
+ * expected wording says more about the photocopier than about the document.
+ *
+ * A starting figure rather than a measured one, and it is here on its own line
+ * to be changed. Every reading's confidence is logged, so a week of this
+ * office's real uploads will say what it should actually be.
+ */
+export const MIN_CONFIDENT_READING = 75
 
 /**
  * Fields whose value is never echoed back to the screen.
@@ -107,6 +126,13 @@ export function compareWithRecord(
   text: string,
   source: TextSource,
   recognitionKeywords: readonly string[] = [],
+  /**
+   * How sure the reading was, 0 to 100. Defaults to certain.
+   *
+   * Only the wrong-type warning depends on it. A PDF's own text layer and the
+   * tests are certain by definition; an OCR pass over a photocopy is not.
+   */
+  confidence = 100,
 ): IdentityCheck {
   const unreadable = source === TEXT_SOURCES.NONE || text.trim().length === 0
 
@@ -117,9 +143,17 @@ export function compareWithRecord(
   // own, so an Aadhaar card filed against the PAN Card row passes all of them.
   //
   // null when the type carries no keywords - not recognised is a different
-  // answer from recognised and wrong, and only the second refuses anything.
+  // answer from recognised and wrong, and only the second says anything.
+  //
+  // AND null when the reading was poor. Saying 'this looks like a different
+  // document' is close to telling somebody they filed the wrong paper, and it
+  // has to be earned: on a low-contrast photocopy Tesseract scores in the
+  // forties and returns text that resembles nothing at all, from which
+  // 'the keywords are absent' means only that the reading was bad. A false
+  // accusation over a genuine document is worse than saying nothing.
+  const trustworthy = confidence >= MIN_CONFIDENT_READING
   const typeRecognised =
-    recognitionKeywords.length === 0 || unreadable
+    recognitionKeywords.length === 0 || unreadable || !trustworthy
       ? null
       : matchesDocumentType(text, recognitionKeywords)
 
@@ -199,6 +233,8 @@ export async function checkUpload(
    * recorded here for the same reason its contents are not.
    */
   documentName?: string,
+  /** The type's code, which is how the identity cards are recognised here. */
+  documentCode?: string,
 ): Promise<IdentityCheck | null> {
   if (!env.IDENTITY_CHECK_ENABLED) return null
   // Nothing to check only when the type asks for NEITHER - no fields to confirm
@@ -212,100 +248,125 @@ export async function checkUpload(
   const enough = (text: string): boolean =>
     compareWithRecord(employee, fields, text, TEXT_SOURCES.OCR, recognitionKeywords).passed
 
-  const extracted = await extractText(file.buffer, file.mimeType, enough)
+  const extracted = await extractText(
+    file.buffer,
+    file.mimeType,
+    enough,
+    languagesFor(documentCode),
+  )
   const result = compareWithRecord(
     employee,
     fields,
     extracted.text,
     extracted.source,
     recognitionKeywords,
+    extracted.confidence,
   )
 
+  // Logged BEFORE the outcome is acted on, and with what is needed to work out
+  // why a reading went the way it did: what the employee is called, how sure
+  // Tesseract was, and the opening of what it made of the page.
+  //
+  // The text is MASKED AND THEN CUT SHORT - see redact.ts. This line runs on
+  // every upload, and these log files are never rotated, so the full text of
+  // 550 identity cards would otherwise accumulate on disk beside the
+  // application. What survives answers the two questions worth asking: did it
+  // read anything at all, and was the name in it.
   logger.info(
     {
       employeeId: employee.employeeId,
       documentName,
+      employeeName: employee.employeeName,
       source: result.source,
+      confidence: Math.round(extracted.confidence),
       pagesRead: extracted.pagesRead,
+      matched: result.identityConfirmed,
       passed: result.passed,
-      // The outcomes only - never the expected values, and never the text that
-      // was read out of the employee's document.
       results: result.checks.map((check) => `${check.field}:${check.result}`),
+      ...(env.IDENTITY_CHECK_LOG_TEXT ? { textPreview: logSafeText(extracted.text) } : {}),
     },
     'Identity check completed',
   )
-
-  // Only on a failure, only when switched on, and never in passing traffic.
-  // Without this, "the date is printed right there" and "OCR returned DATE OF
-  // J0lNlNG" are indistinguishable from the outside, and only one of them is a
-  // bug. See IDENTITY_CHECK_LOG_TEXT - it puts document contents in a log.
-  if (!result.passed && env.IDENTITY_CHECK_LOG_TEXT) {
-    logger.warn(
-      { employeeId: employee.employeeId, documentName, source: result.source, text: extracted.text },
-      'Identity check failed; this is what the document was read as',
-    )
-  }
 
   return result
 }
 
 /**
- * The sentence shown to whoever is uploading.
+ * Which languages to read a document type in.
  *
- * Written as what to do next rather than as a verdict: the document may well be
- * the right one, badly scanned. It says which details could not be confirmed,
- * so the person can look at the page and see for themselves.
+ * ENGLISH ONLY FOR THE TWO IDENTITY CARDS. Both are printed in English, and
+ * reading them with the Hindi model as well is actively harmful rather than
+ * merely wasteful: Tesseract finds Devanagari marks in the noise of a
+ * photocopy and hangs them off the English letters - the office's logs show
+ * 'Detected 122 diacritics' on a PAN card - so a name that would have matched
+ * comes back decorated and does not.
+ *
+ * Everything else keeps the configured behaviour, because the company's
+ * appointment letter really is printed in Hindi.
  */
-export function describeFailure(check: IdentityCheck, documentName?: string): string {
-  // Said first, because it is the more useful thing to be told. "This is not a
-  // PAN card" sends somebody to find the right file; "the PAN number was not
-  // found" sends them to squint at the wrong one.
+function languagesFor(documentCode: string | undefined): string | undefined {
+  if (!documentCode) return undefined
+  return (IDENTITY_CARD_DOCUMENT_CODES as readonly string[]).includes(documentCode)
+    ? ENGLISH_ONLY
+    : undefined
+}
+
+const ENGLISH_ONLY = 'eng'
+
+/**
+ * What could not be confirmed, in words, for whoever uploaded it.
+ *
+ * A WARNING, NOT A REFUSAL. The document is stored either way; this sentence
+ * exists so somebody can glance at the page and confirm it themselves.
+ *
+ * Every identity card at this company is a low-contrast photocopy, so a name
+ * that will not read off one is the ORDINARY case and not a sign of anything.
+ * The wording has to match that. What used to be said here - that a document
+ * 'may belong to someone else' - reads as an accusation, and it was being made
+ * against HR staff filing perfectly good paperwork, hundreds of times over.
+ *
+ * So nothing here suggests the document is wrong. It says what the machine
+ * could not read, which is the only thing actually known.
+ */
+export function describeFailure(
+  check: IdentityCheck,
+  /**
+   * Kept in the signature and deliberately unused.
+   *
+   * The old wording named the document - 'This does not look like a PAN Card' -
+   * and naming it is exactly what made the sentence read as a charge against
+   * the person filing it. The row already says which document it is; the
+   * warning does not need to say it back.
+   */
+  _documentName?: string,
+): string {
+  // Only reachable on a reading good enough to be worth repeating - see
+  // MIN_CONFIDENT_READING. 'Please check', not 'you have filed the wrong paper':
+  // the reading is confident, not correct.
   if (check.typeRecognised === false) {
-    // 'an Aadhaar Card', not 'a Aadhaar Card'. A refusal is read by somebody who
-    // is already mildly annoyed; it should not also read as broken English.
-    const named = documentName
-      ? `${/^[AEIOU]/i.test(documentName) ? 'an' : 'a'} ${documentName}`
-      : 'the right document'
-    return (
-      `This does not look like ${named}. ` +
-      'Check that the right file was chosen, then upload it again or accept it with a reason.'
-    )
+    return 'This looks like a different document type. Please check before confirming.'
   }
 
-  if (check.unreadable) {
-    return (
-      'No text could be read from this file, so it could not be checked against ' +
-      'the employee record. Check that it is the right document, then upload it ' +
-      'again or accept it with a reason.'
-    )
+  if (check.unreadable || !check.identityConfirmed) {
+    return 'Could not read the name from this document. Please confirm manually.'
   }
 
+  // The name WAS found - this is some other detail the type asks for, such as a
+  // joining date struck through in pen. Named, because a person can look for it.
   const missing = check.checks
     .filter((entry) => entry.result === FIELD_CHECK_RESULTS.NOT_FOUND)
     .map((entry) => DOCUMENT_FIELD_LABEL[entry.field].toLowerCase())
+
+  if (missing.length === 0) {
+    return 'Could not read the name from this document. Please confirm manually.'
+  }
 
   const list =
     missing.length === 1
       ? missing[0]
       : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`
 
-  // 'It may belong to someone else' is only ever said when nothing on the page
-  // identified the employee. Where the name or the code DID match, that sentence
-  // was simply untrue - it was printed over a document with the right person's
-  // name on it - and an upload that reaches this point without identity
-  // confirmed no longer happens for that reason anyway.
-  if (check.identityConfirmed) {
-    return (
-      `This document is the right employee's, but their ${list} could not be ` +
-      'read from it. Upload it again or accept it with a reason.'
-    )
-  }
-
-  return (
-    `This document does not mention the employee's ${list}, so it may belong to ` +
-    'someone else. Check that it is the right document, then upload it again or ' +
-    'accept it with a reason.'
-  )
+  return `Could not read the ${list} from this document. Please confirm manually.`
 }
 
 /**
@@ -325,15 +386,29 @@ export async function checkNameOnly(
   expectedName: string,
   documentName: string,
 ): Promise<{ readable: boolean; matched: boolean; nameFound: string | null }> {
-  const extracted = await extractText(file.buffer, file.mimeType, (text) =>
-    matchWords(expectedName, text),
+  // English only. This path exists for the Aadhaar and PAN cards and for
+  // nothing else, both are printed in English, and the Hindi model decorates
+  // English letters with marks it finds in the noise of a photocopy.
+  const extracted = await extractText(
+    file.buffer,
+    file.mimeType,
+    (text) => matchWords(expectedName, text),
+    ENGLISH_ONLY,
   )
 
   const readable = extracted.source !== TEXT_SOURCES.NONE && extracted.text.trim().length > 0
   const matched = readable && matchWords(expectedName, extracted.text)
 
   logger.info(
-    { documentName, source: extracted.source, readable, matched },
+    {
+      documentName,
+      employeeName: expectedName,
+      source: extracted.source,
+      confidence: Math.round(extracted.confidence),
+      readable,
+      matched,
+      ...(env.IDENTITY_CHECK_LOG_TEXT ? { textPreview: logSafeText(extracted.text) } : {}),
+    },
     'Identity documents checked before the employee record exists',
   )
 
