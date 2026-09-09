@@ -8,7 +8,13 @@ import { employeeKeys } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDateTime } from '../../lib/format.js'
 import { SignatureCaptureDialog } from './SignatureCaptureDialog.js'
-import { fetchSignature, signatureImageUrl, signatureKeys, uploadSignature } from './api.js'
+import {
+  fetchSignature,
+  signatureImageUrl,
+  signatureKeys,
+  uploadSignature,
+  type SignatureCapture,
+} from './api.js'
 
 /**
  * The employee's signature.
@@ -45,7 +51,8 @@ export function SignatureCard({
   })
 
   const save = useMutation({
-    mutationFn: (png: Blob) => uploadSignature(employeeId, png),
+    mutationFn: (signed: { png: Blob; capture: SignatureCapture }) =>
+      uploadSignature(employeeId, signed.png, signed.capture),
     onSuccess: async () => {
       setFailure(null)
       setSigning(false)
@@ -138,7 +145,7 @@ export function SignatureCard({
           setSigning(false)
           setFailure(null)
         }}
-        onSave={(png) => save.mutate(png)}
+        onSave={(png, capture) => save.mutate({ png, capture })}
       />
     </div>
   )

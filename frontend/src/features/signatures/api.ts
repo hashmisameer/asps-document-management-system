@@ -33,7 +33,9 @@ export async function fetchSignature(employeeId: number): Promise<EmployeeSignat
  * name to anyone, so a real one would only be personal data travelling for no
  * reason. `capture` records that this was drawn rather than scanned.
  */
-function signatureForm(png: Blob, capture: 'Drawn' | 'Uploaded' = 'Drawn'): FormData {
+export type SignatureCapture = 'Drawn' | 'Uploaded'
+
+function signatureForm(png: Blob, capture: SignatureCapture = 'Drawn'): FormData {
   const form = new FormData()
   form.append('file', new File([png], 'signature.png', { type: 'image/png' }))
   form.append('capture', capture)
@@ -43,10 +45,11 @@ function signatureForm(png: Blob, capture: 'Drawn' | 'Uploaded' = 'Drawn'): Form
 export async function uploadSignature(
   employeeId: number,
   png: Blob,
+  capture: SignatureCapture = 'Drawn',
 ): Promise<EmployeeSignatureSummary> {
   const response = await api.post<{ signature: EmployeeSignatureSummary }>(
     `/employees/${employeeId}/signature`,
-    signatureForm(png),
+    signatureForm(png, capture),
   )
   return response.data.signature
 }
@@ -73,10 +76,13 @@ export async function fetchMySignature(): Promise<UserSignatureSummary> {
   return response.data.signature
 }
 
-export async function saveMySignature(png: Blob): Promise<UserSignatureSummary> {
+export async function saveMySignature(
+  png: Blob,
+  capture: SignatureCapture = 'Drawn',
+): Promise<UserSignatureSummary> {
   const response = await api.post<{ signature: UserSignatureSummary }>(
     '/me/signature',
-    signatureForm(png),
+    signatureForm(png, capture),
   )
   return response.data.signature
 }
