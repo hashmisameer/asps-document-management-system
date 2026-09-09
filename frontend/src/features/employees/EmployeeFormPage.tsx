@@ -1,7 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createEmployeeSchema, type Employee } from '@asps-dms/shared'
+import {
+  MANUAL_CONFIRMATION_REASON,
+  createEmployeeSchema,
+  type Employee,
+} from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { DateField } from '../../components/ui/DateField.js'
@@ -185,11 +189,11 @@ export function EmployeeFormPage() {
       const document = documents.find((d) => d.documentTypeId === Number(typeId))
       if (!document) continue
       try {
-        // The reason travels with the file. Without it the card would be read a
-        // second time on the server, fail again, and - for an identity card - be
-        // removed, silently undoing the decision a person just made.
+        // A card somebody already confirmed on the form carries that decision
+        // with it, so the server does not read it a second time and ask again.
+        // Anything else is read on arrival and reported on the checklist.
         await uploadDocument(document.documentId, entry.file, {
-          ...(entry.acceptedReason ? { identityOverrideReason: entry.acceptedReason } : {}),
+          ...(entry.confirmed ? { identityOverrideReason: MANUAL_CONFIRMATION_REASON } : {}),
         })
       } catch (error) {
         // The employee record already exists and must not be lost. The failure
@@ -275,7 +279,7 @@ export function EmployeeFormPage() {
         ...current,
         [documentTypeId]: {
           file,
-          state: 'refused',
+          state: 'unconfirmed',
           problem: 'Enter the employee name first - these documents are checked against it.',
         },
       }))
@@ -290,37 +294,45 @@ export function EmployeeFormPage() {
       if (result.matched) {
         setFiles((current) => ({
           ...current,
-          [documentTypeId]: { file, state: 'attached', checkedAgainst: employeeName },
+          [documentTypeId]: { file, state: 'verified', checkedAgainst: employeeName },
         }))
         return
       }
 
-      const problem = !result.readable
-        ? `The name could not be read from this ${documentName}. Check the file, or accept it with a reason.`
-        : result.nameFound
-          ? `This document appears to name ${result.nameFound}, but you entered ${employeeName}. Choose the right file.`
-          : `This ${documentName} does not appear to name ${employeeName}. Choose the right file.`
+      // The file is attached either way - see AttachedDocument. All that
+      // changes is whether the machine confirmed the name or a person has to.
+      //
+      // Where the document plainly names SOMEBODY ELSE that is worth saying,
+      // because it is usually the wrong file rather than a bad photocopy. It is
+      // still not a refusal: the reading is a guess, and the person holding the
+      // card is the one who knows.
+      const problem = result.nameFound
+        ? `This document appears to name ${result.nameFound}, not ${employeeName}. Check it before confirming.`
+        : 'Could not read the name from this document. Please confirm manually.'
 
       setFiles((current) => ({
         ...current,
         [documentTypeId]: {
           file,
-          state: 'refused',
+          state: 'unconfirmed',
           problem,
           nameFound: result.nameFound,
           checkedAgainst: employeeName,
         },
       }))
     } catch (error) {
+      // Even a check that could not run leaves the file attached. The reading
+      // is advice; losing the document because the advice failed would be the
+      // same mistake in a different place.
       setFiles((current) => ({
         ...current,
         [documentTypeId]: {
           file,
-          state: 'refused',
+          state: 'unconfirmed',
           problem:
             error instanceof ApiError
               ? error.message
-              : 'This document could not be checked. Try again, or accept it with a reason.',
+              : 'Could not read the name from this document. Please confirm manually.',
         },
       }))
     }
@@ -576,11 +588,11 @@ export function EmployeeFormPage() {
           onFile={(documentTypeId, file) => {
             void checkAndAttach(documentTypeId, file)
           }}
-          onAccept={(documentTypeId, reason) => {
+          onAccept={(documentTypeId) => {
             setFiles((current) => {
               const entry = current[documentTypeId]
               if (!entry) return current
-              return { ...current, [documentTypeId]: { ...entry, acceptedReason: reason } }
+              return { ...current, [documentTypeId]: { ...entry, confirmed: true } }
             })
           }}
         />

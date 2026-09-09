@@ -42,6 +42,21 @@ export async function uploadDocument(
   return response.data.document
 }
 
+/**
+ * A person has looked at the document and says it is the right one.
+ *
+ * No reason travels with it. Every identity card here is a photocopy, OCR
+ * failing to read a name off one is the ordinary case, and the server records a
+ * fixed line saying a person confirmed it - see MANUAL_CONFIRMATION_REASON.
+ */
+export async function confirmDocumentIdentity(documentId: number): Promise<EmployeeDocument> {
+  const response = await api.post<{ document: EmployeeDocument }>(
+    `/documents/${documentId}/identity-override`,
+    {},
+  )
+  return response.data.document
+}
+
 export async function verifyDocument(documentId: number): Promise<EmployeeDocument> {
   const response = await api.post<{ document: EmployeeDocument }>(`/documents/${documentId}/verify`)
   return response.data.document

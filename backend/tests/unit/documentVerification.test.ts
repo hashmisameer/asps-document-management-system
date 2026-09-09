@@ -128,7 +128,9 @@ describe('a document that names the employee is theirs, even read imperfectly', 
     const message = describeFailure({ ...result, passed: false }, 'Service Card')
 
     expect(message).not.toContain('someone else')
-    expect(message).toContain("right employee's")
+    // What is said instead: the detail that would not read, and nothing about
+    // whose document it is.
+    expect(message).toContain('Could not read the date of joining')
   })
 })
 
@@ -219,8 +221,16 @@ describe('compareWithRecord', () => {
   })
 })
 
+/**
+ * What HR is told, now that nothing is refused.
+ *
+ * These are photocopies. The old wording said a document 'may belong to
+ * someone else', which reads as an accusation and was being made hundreds of
+ * times against good paperwork. Nothing here may suggest the document is wrong;
+ * it says only what could not be read.
+ */
 describe('describeFailure', () => {
-  it('names the details that could not be found, without quoting an identity number', () => {
+  it('says the name could not be read, and never that the document is wrong', () => {
     const result = compareWithRecord(
       employee({ employeeName: 'Anita Desai', aadhaarNumber: '999988887777' }),
       [DOCUMENT_FIELDS.EMPLOYEE_NAME, DOCUMENT_FIELDS.AADHAAR_NUMBER],
@@ -230,12 +240,14 @@ describe('describeFailure', () => {
 
     const message = describeFailure(result)
 
-    expect(message).toContain('employee name')
-    expect(message).toContain('aadhaar number')
+    expect(message).toBe('Could not read the name from this document. Please confirm manually.')
+    for (const accusation of ['someone else', 'does not mention', 'wrong', 'Check that']) {
+      expect(message, accusation).not.toContain(accusation)
+    }
     expect(message).not.toContain('999988887777')
   })
 
-  it('says the file could not be read when that is what happened', () => {
+  it('asks for a person rather than reporting a failure when nothing could be read', () => {
     const result = compareWithRecord(
       employee(),
       [DOCUMENT_FIELDS.EMPLOYEE_NAME],
@@ -243,6 +255,79 @@ describe('describeFailure', () => {
       TEXT_SOURCES.NONE,
     )
 
-    expect(describeFailure(result)).toContain('No text could be read')
+    expect(describeFailure(result)).toBe(
+      'Could not read the name from this document. Please confirm manually.',
+    )
+  })
+
+  it('names the other details it could not read, once the name itself was found', () => {
+    // Not the identity numbers themselves - those are named by label only.
+    const result = compareWithRecord(
+      employee({ employeeName: 'Anita Desai', aadhaarNumber: '999988887777' }),
+      [DOCUMENT_FIELDS.EMPLOYEE_NAME, DOCUMENT_FIELDS.AADHAAR_NUMBER],
+      'ANITA DESAI, service card',
+      TEXT_SOURCES.OCR,
+    )
+
+    const message = describeFailure(result)
+
+    expect(message).toContain('aadhaar number')
+    expect(message).toContain('Please confirm manually')
+    expect(message).not.toContain('999988887777')
+  })
+})
+
+/**
+ * The wrong-type warning, and the confidence it has to be earned by.
+ *
+ * Telling somebody they have filed the wrong paper is the one thing here that
+ * is close to an accusation, so it is only said when the reading was good
+ * enough to be worth repeating.
+ */
+describe('the wrong document type', () => {
+  const keywords = ['income tax department', 'permanent account number']
+
+  it('says so plainly when the reading was clear and the wording is absent', () => {
+    const result = compareWithRecord(
+      employee(),
+      [DOCUMENT_FIELDS.EMPLOYEE_NAME],
+      'EMPLOYEES PROVIDENT FUND ORGANISATION - form 11',
+      TEXT_SOURCES.OCR,
+      keywords,
+      92,
+    )
+
+    expect(result.typeRecognised).toBe(false)
+    expect(describeFailure(result, 'PAN Card')).toBe(
+      'This looks like a different document type. Please check before confirming.',
+    )
+  })
+
+  it('says nothing at all when the reading was poor', () => {
+    // The photocopy case. At 41 the text is a guess, and 'these words are not
+    // in it' says more about the photocopier than about the document.
+    const result = compareWithRecord(
+      employee(),
+      [DOCUMENT_FIELDS.EMPLOYEE_NAME],
+      'lNCOMt lAX Dtl~AR MtNl ...',
+      TEXT_SOURCES.OCR,
+      keywords,
+      41,
+    )
+
+    expect(result.typeRecognised).toBeNull()
+    expect(describeFailure(result, 'PAN Card')).not.toContain('different document type')
+  })
+
+  it('trusts a PDF text layer, which is not a guess at all', () => {
+    const result = compareWithRecord(
+      employee(),
+      [DOCUMENT_FIELDS.EMPLOYEE_NAME],
+      'EMPLOYEES PROVIDENT FUND ORGANISATION',
+      TEXT_SOURCES.PDF_TEXT,
+      keywords,
+    )
+
+    expect(result.typeRecognised).toBe(false)
   })
 })

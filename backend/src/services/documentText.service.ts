@@ -27,6 +27,23 @@ export interface ExtractedText {
   text: string
   source: TextSource
   pagesRead: number
+  /**
+   * How sure Tesseract was, 0 to 100. 0 when nothing was read.
+   *
+   * The BEST any pass achieved, not the average. A page is read several times
+   * over - different layouts, different sizes - and the text is added together,
+   * so a pass that read badly does not make the reading as a whole untrustworthy
+   * when another read it clearly.
+   *
+   * A PDF's own text layer is 100: those are the characters the file contains,
+   * not a guess at what a photograph shows.
+   *
+   * Used for one thing only - deciding whether the reading is good enough to
+   * tell somebody their document looks like the wrong TYPE. On a photocopy OCR
+   * scores low and is often wrong, and a false accusation is worse than saying
+   * nothing.
+   */
+  confidence: number
 }
 
 /**
@@ -152,13 +169,23 @@ type PageLayout = (typeof PAGE_LAYOUTS)[number]
  */
 const PASS_BUDGET_MS = 25_000
 
-async function recognise(image: Buffer, languages: string, layout: PageLayout): Promise<string> {
+interface Recognised {
+  text: string
+  /** Tesseract's own score for the page, 0 to 100. */
+  confidence: number
+}
+
+async function recognise(
+  image: Buffer,
+  languages: string,
+  layout: PageLayout,
+): Promise<Recognised> {
   const run = ocrQueue.then(async () => {
     // Keyed by layout as well as language, so a worker is configured once and
     // never re-configured underneath a call that is already using it.
     const worker = await getOcrWorker(`${languages}|${layout}`, languages, layout)
     const result = await worker.recognize(image)
-    return result.data.text
+    return { text: result.data.text, confidence: result.data.confidence }
   })
 
   // The queue must keep going even when one recognition fails, or a single bad
@@ -315,7 +342,9 @@ async function readPdf(
 
     const text = layers.join('\n')
     if (text.replace(/\s/g, '').length >= MIN_USEFUL_TEXT_LENGTH) {
-      return { text, source: TEXT_SOURCES.PDF_TEXT, pagesRead: pageCount }
+      // 100: these are the characters the file says it contains, not a reading
+      // of a photograph. There is nothing here to be unsure about.
+      return { text, source: TEXT_SOURCES.PDF_TEXT, pagesRead: pageCount, confidence: 100 }
     }
 
     // No usable text layer: this is a scan wearing a PDF wrapper, so render the
@@ -330,19 +359,21 @@ async function readPdf(
     // rendered from a PDF is already flat, clean and correctly exposed - the
     // normalise step just crushes the faint entries it was meant to lift.
     const recognised: string[] = []
+    let confidence = 0
     let read = 0
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)
       // The scan itself where there is one, the rendered page otherwise.
       const scan = await embeddedScan(page)
       const image = scan ?? (await renderPage(page))
-      if (scan) {
-        // Scale variants only mean something on a real photograph; a rendered
-        // page is already drawn at a chosen size.
-        recognised.push(await recognise(await prepareForOcr(scan, scale), languages, layout))
-      } else {
-        recognised.push(await recognise(image, languages, layout))
-      }
+      // Scale variants only mean something on a real photograph; a rendered
+      // page is already drawn at a chosen size.
+      const result = scan
+        ? await recognise(await prepareForOcr(scan, scale), languages, layout)
+        : await recognise(image, languages, layout)
+
+      recognised.push(result.text)
+      confidence = Math.max(confidence, result.confidence)
       read = pageNumber
 
       // Stop as soon as the caller has what it came for. A form carries its
@@ -357,6 +388,7 @@ async function readPdf(
       text: ocrText,
       source: ocrText.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
       pagesRead: read,
+      confidence,
     }
   } finally {
     await pdf.destroy()
@@ -456,6 +488,66 @@ async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer> {
 }
 
 /**
+ * The shortest side a photocopy is worth reading at.
+ *
+ * Every identity card at this company arrives as a low-contrast JPG photocopy,
+ * often small. The existing rule only ever looks at WIDTH, so a card that is
+ * wide and short - which is the shape of a PAN card - is left at whatever size
+ * it came in at, and Tesseract has too few pixels per character to work with.
+ */
+const MIN_PHOTOCOPY_SIDE = 1500
+
+/**
+ * Prepares a low-contrast photocopy, which is what this office actually files.
+ *
+ * DIFFERENT FROM prepareForOcr, and deliberately a second thing rather than a
+ * change to the first. That one is tuned on the documents that already read,
+ * and the notes in this file record what happened when its steps were applied
+ * more widely: the company's PF form read WORSE, not better. So this is an
+ * extra pass with its own preparation, and its text is added to what the
+ * ordinary passes found rather than replacing it. Nothing that works today can
+ * be broken by it.
+ *
+ * The one real difference is `clahe`. `normalise` stretches the contrast of the
+ * WHOLE image at once, so a photocopy that is dark down one side stays dark
+ * down one side - the bright half uses up the range. clahe works tile by tile,
+ * lifting each small area on its own, which is exactly the shape of the problem
+ * on a page copied off a machine with a failing lamp.
+ *
+ * The shorter side is brought up to 1500px because Tesseract needs pixels per
+ * character, not pixels per page.
+ */
+async function prepareForPhotocopy(buffer: Buffer): Promise<Buffer> {
+  try {
+    const metadata = await sharp(buffer, { failOn: 'none' }).metadata()
+    const width = metadata.width ?? 0
+    const height = metadata.height ?? 0
+
+    let pipeline = sharp(buffer, { failOn: 'none' }).rotate()
+
+    const shortest = Math.min(width, height)
+    if (shortest > 0 && shortest < MIN_PHOTOCOPY_SIDE) {
+      const factor = MIN_PHOTOCOPY_SIDE / shortest
+      const capped = width * factor * (height * factor) > MAX_OCR_PIXELS
+        ? Math.sqrt(MAX_OCR_PIXELS / (width * height))
+        : factor
+      pipeline = pipeline.resize({ width: Math.round(width * capped) })
+    }
+
+    return await pipeline
+      .greyscale()
+      // Tile by tile rather than the whole page at once - see above.
+      .clahe({ width: 8, height: 8 })
+      .sharpen()
+      .png()
+      .toBuffer()
+  } catch (error) {
+    logger.warn({ err: error }, 'Could not prepare the photocopy for OCR; reading it as it arrived')
+    return buffer
+  }
+}
+
+/**
  * Reads a photograph.
  *
  * Rotation detection was built here and then taken out again, which is worth
@@ -478,12 +570,18 @@ async function readImage(
   languages: string,
   layout: PageLayout,
   scale?: number,
+  photocopy = false,
 ): Promise<ExtractedText> {
-  const text = await recognise(await prepareForOcr(buffer, scale), languages, layout)
+  const prepared = photocopy
+    ? await prepareForPhotocopy(buffer)
+    : await prepareForOcr(buffer, scale)
+  const { text, confidence } = await recognise(prepared, languages, layout)
+
   return {
     text,
     source: text.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
     pagesRead: 1,
+    confidence,
   }
 }
 
@@ -506,8 +604,22 @@ export async function extractText(
    * returned. Reading is otherwise the same whether anyone asks or not.
    */
   isEnough?: (text: string) => boolean,
+  /**
+   * Read in these languages only, whatever the environment says.
+   *
+   * Used for the identity cards. They are printed in English, and reading them
+   * with the Hindi model as well produces hundreds of false diacritics over
+   * English letters - a name that would have matched comes back decorated and
+   * does not. See checkUpload.
+   */
+  languageOverride?: string,
 ): Promise<ExtractedText> {
-  const unread: ExtractedText = { text: '', source: TEXT_SOURCES.NONE, pagesRead: 0 }
+  const unread: ExtractedText = {
+    text: '',
+    source: TEXT_SOURCES.NONE,
+    pagesRead: 0,
+    confidence: 0,
+  }
 
   const startedAt = Date.now()
 
@@ -516,11 +628,13 @@ export async function extractText(
   // ran long would throw away a name the first one found.
   let combined = ''
   let best: ExtractedText = unread
+  let bestConfidence = 0
 
   const soFarAsResult = (): ExtractedText => ({
     text: combined,
     source: combined.trim().length > 0 ? TEXT_SOURCES.OCR : TEXT_SOURCES.NONE,
     pagesRead: best.pagesRead,
+    confidence: bestConfidence,
   })
 
   const readWith = async (
@@ -528,9 +642,10 @@ export async function extractText(
     layout: PageLayout,
     scale: number | undefined,
     enoughSoFar?: (text: string) => boolean,
+    photocopy = false,
   ): Promise<ExtractedText> => {
     if (mimeType === 'application/pdf') return readPdf(buffer, languages, layout, scale, enoughSoFar)
-    if (isImageType(mimeType)) return readImage(buffer, languages, layout, scale)
+    if (isImageType(mimeType)) return readImage(buffer, languages, layout, scale, photocopy)
     return unread
   }
 
@@ -548,8 +663,9 @@ export async function extractText(
    * it just costs the extra pass rather than charging it to everything else.
    */
   const read = async (): Promise<ExtractedText> => {
-    const languageSets =
-      env.OCR_PRIMARY_LANGUAGES === env.OCR_LANGUAGES
+    const languageSets = languageOverride
+      ? [languageOverride]
+      : env.OCR_PRIMARY_LANGUAGES === env.OCR_LANGUAGES
         ? [env.OCR_LANGUAGES]
         : [env.OCR_PRIMARY_LANGUAGES, env.OCR_LANGUAGES]
 
@@ -578,6 +694,8 @@ export async function extractText(
       layout: PageLayout
       /** A multiple of the image's own size. undefined keeps the default rule. */
       scale: number | undefined
+      /** Prepared for a low-contrast photocopy instead - see prepareForPhotocopy. */
+      photocopy?: boolean
     }
 
     const isImage = isImageType(mimeType)
@@ -600,6 +718,13 @@ export async function extractText(
           { languages: fast, layout: '6', scale: OCR_SCALES[0] },
           { languages: fast, layout: '3', scale: OCR_SCALES[0] },
           { languages: fast, layout: '6', scale: OCR_SCALES[1] },
+          // The photocopy pass, placed after the ones that read the documents
+          // this office could already read and before the expensive tail. Every
+          // identity card here is a low-contrast JPG photocopy, so this is the
+          // pass most likely to rescue one - but it goes second, never first,
+          // because it must not be able to spend the budget of a document that
+          // the ordinary preparation would have read.
+          { languages: fast, layout: '6', scale: undefined, photocopy: true },
           { languages: fast, layout: '6', scale: OCR_SCALES[2] },
           { languages: fast, layout: '3', scale: OCR_SCALES[2] },
           ...languageSets.slice(1).map((languages) => ({
@@ -631,8 +756,12 @@ export async function extractText(
         break
       }
 
-      const out = await readWith(pass.languages, pass.layout, pass.scale, (soFar) =>
-        settled(combined ? `${combined}\n${soFar}` : soFar),
+      const out = await readWith(
+        pass.languages,
+        pass.layout,
+        pass.scale,
+        (soFar) => settled(combined ? `${combined}\n${soFar}` : soFar),
+        pass.photocopy ?? false,
       )
 
       // A PDF that carries its own text layer is answered exactly, once. There
@@ -642,6 +771,8 @@ export async function extractText(
 
       combined = combined ? `${combined}\n${out.text}` : out.text
       if (out.text.trim().length > 0) best = out
+      // The best any pass managed, not the last one's - see ExtractedText.
+      if (out.text.trim().length > 0) bestConfidence = Math.max(bestConfidence, out.confidence)
 
       if (settled(combined)) {
         if (index > 0) {

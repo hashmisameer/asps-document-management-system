@@ -329,8 +329,10 @@ describe('uploadFile', () => {
         expect.objectContaining({
           status: 'Failed',
           // The sentence HR reads is stored with the row rather than rebuilt on
-          // the screen, so it cannot drift from what was actually found.
-          reason: expect.stringContaining('employee name'),
+          // the screen, so it cannot drift from what was actually found. It
+          // says what could not be READ, and nothing about whose document this
+          // might be - see describeFailure.
+          reason: 'Could not read the name from this document. Please confirm manually.',
         }),
       )
       expect(db.insertAudit).toHaveBeenCalledWith(

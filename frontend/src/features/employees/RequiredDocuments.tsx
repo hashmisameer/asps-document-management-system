@@ -1,8 +1,6 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
-  MIN_IDENTITY_OVERRIDE_REASON_LENGTH,
   isIdentityCard,
   type DocumentType,
 } from '@asps-dms/shared'
@@ -37,19 +35,28 @@ const ACCEPTED_UPLOAD_EXTENSIONS = ALLOWED_DOCUMENT_EXTENSIONS.join(',')
 /**
  * One identity document as it is being attached.
  *
- * The file alone is not enough any more. These two cards are checked against
- * the typed employee name BEFORE the record exists, so a slot is also somewhere
- * a refusal lives while somebody decides what to do about it.
+ * These two cards are read against the typed employee name BEFORE the record
+ * exists, so a slot also holds what that reading found.
+ *
+ * IT NEVER HOLDS A REFUSAL. Every one of these cards is a low-contrast
+ * photocopy and OCR failing to read a name off one says nothing about the
+ * document, so a card that does not read is attached exactly like one that
+ * does - the difference is only whether the screen says the name was confirmed
+ * automatically or asks somebody to confirm it.
  */
 export interface AttachedDocument {
   file: File
-  state: 'checking' | 'attached' | 'refused'
-  /** The refusal, ready to show. Set only in the 'refused' state. */
+  /**
+   * 'verified'    - the name was read off it and matched
+   * 'unconfirmed' - it was not, which is ordinary. The file is attached anyway.
+   */
+  state: 'checking' | 'verified' | 'unconfirmed'
+  /** The warning to show. Set only in the 'unconfirmed' state. */
   problem?: string
   /** What the document seemed to say, when it disagreed and could be read. */
   nameFound?: string | null
-  /** A person's stated reason for attaching it anyway. */
-  acceptedReason?: string
+  /** True once a person has looked at the page and confirmed it. */
+  confirmed?: boolean
   /**
    * The name this was last checked against.
    *
@@ -63,10 +70,15 @@ export interface SelectedFiles {
   [documentTypeId: number]: AttachedDocument
 }
 
-/** True once this slot holds a document that may be created with the employee. */
+/**
+ * True once this slot holds a document that may be created with the employee.
+ *
+ * Which is any file whose reading has finished, confirmed or not. A card the
+ * machine could not read is still the card.
+ */
 export function isAttached(entry: AttachedDocument | undefined): boolean {
   if (!entry) return false
-  return entry.state === 'attached' || entry.acceptedReason !== undefined
+  return entry.state !== 'checking'
 }
 
 /**
@@ -98,8 +110,8 @@ export function RequiredDocuments({
   joiningDate: string
   files: SelectedFiles
   onFile: (documentTypeId: number, file: File | null) => void
-  /** Attaches a refused document anyway, with the reason a person gave. */
-  onAccept: (documentTypeId: number, reason: string) => void
+  /** A person has looked at the card and says it is the right one. */
+  onAccept: (documentTypeId: number) => void
   /** False while the employee name is empty: there is nothing to check against. */
   canCheck: boolean
   /** True once someone has tried to save, so a gap is called out rather than pre-empted. */
@@ -172,24 +184,25 @@ export function RequiredDocuments({
                 </span>
 
                 <span className="flex items-center gap-2">
-                  {/* 'Attached' means checked, or accepted by somebody who said
-                      why. A file that is merely chosen is not attached. */}
+                  {/* Green only where the machine actually read the name.
+                      Amber where a person did, or has still to - and never red,
+                      because nothing here is wrong. */}
                   <Badge
                     tone={
-                      chosen?.state === 'refused' && !chosen.acceptedReason
-                        ? 'rejected'
-                        : attached
-                          ? 'verified'
+                      chosen?.state === 'verified'
+                        ? 'verified'
+                        : chosen?.state === 'unconfirmed'
+                          ? 'pending'
                           : 'neutral'
                     }
                   >
                     {chosen?.state === 'checking'
                       ? 'Checking...'
-                      : chosen?.acceptedReason
-                        ? 'Accepted with reason'
-                        : chosen?.state === 'refused'
-                          ? 'Not attached'
-                          : attached
+                      : chosen?.state === 'verified'
+                        ? 'Name verified'
+                        : chosen?.confirmed
+                          ? 'Manually confirmed'
+                          : chosen?.state === 'unconfirmed'
                             ? 'Attached'
                             : 'Pending'}
                   </Badge>
@@ -244,17 +257,19 @@ export function RequiredDocuments({
                 </p>
               ) : null}
 
-              {chosen?.state === 'refused' && !chosen.acceptedReason ? (
-                <RefusedDocument
-                  documentName={type.documentName}
-                  problem={chosen.problem ?? 'This document could not be checked.'}
-                  onAccept={(reason) => onAccept(type.documentTypeId, reason)}
+              {chosen?.state === 'unconfirmed' && !chosen.confirmed ? (
+                <UnreadDocument
+                  problem={
+                    chosen.problem ??
+                    'Could not read the name from this document. Please confirm manually.'
+                  }
+                  onConfirm={() => onAccept(type.documentTypeId)}
                 />
               ) : null}
 
-              {chosen?.acceptedReason ? (
+              {chosen?.confirmed ? (
                 <p className="mt-1 text-xs text-status-pending">
-                  Accepted with reason: {chosen.acceptedReason}
+                  Confirmed by you - the name could not be read automatically.
                 </p>
               ) : null}
             </li>
@@ -266,64 +281,31 @@ export function RequiredDocuments({
 }
 
 /**
- * A refused identity document, and the way past it.
+ * A card whose name the machine could not read.
  *
- * Past it deliberately. OCR fails on real documents - a genuine PAN card at
- * 690x441 gives up nothing at any setting - and a screen that only says no
- * would leave whoever is holding that card unable to create the employee at
- * all. What it must not do is let the refusal pass silently, so the reason is
- * required and is carried onto the document once the record exists.
+ * A WARNING, NOT A REFUSAL, and amber rather than red. The file is attached
+ * either way; this asks the person holding the card to say it is the right one.
+ *
+ * One button and nothing to type. It used to demand a written reason, on the
+ * argument that going around a check should leave a mark - but at this company
+ * every one of these cards is a photocopy that OCR cannot read, so the mark was
+ * being demanded hundreds of times for the ordinary case, and what it collected
+ * was hundreds of copies of the same sentence. The mark that matters is who
+ * confirmed it and when, and that is recorded without anybody typing.
  */
-function RefusedDocument({
-  documentName,
+function UnreadDocument({
   problem,
-  onAccept,
+  onConfirm,
 }: {
-  documentName: string
   problem: string
-  onAccept: (reason: string) => void
+  onConfirm: () => void
 }) {
-  const [reason, setReason] = useState('')
-  const [showing, setShowing] = useState(false)
-
   return (
-    <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
-      <p className="text-xs text-status-rejected">{problem}</p>
-
-      {showing ? (
-        <div className="mt-2 flex flex-wrap items-end gap-2">
-          <label className="flex-1">
-            <span className="text-xs font-medium text-slate-700">
-              Why is this the right {documentName}?
-            </span>
-            <input
-              autoFocus
-              value={reason}
-              maxLength={500}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="I am holding the card and have checked it"
-              className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
-            />
-          </label>
-          <Button
-            disabled={reason.trim().length < MIN_IDENTITY_OVERRIDE_REASON_LENGTH}
-            onClick={() => onAccept(reason.trim())}
-          >
-            Attach anyway
-          </Button>
-          <Button variant="ghost" onClick={() => setShowing(false)}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setShowing(true)}
-          className="mt-1 text-xs font-medium text-brand-700 hover:underline"
-        >
-          Accept with reason
-        </button>
-      )}
+    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+      <p className="text-xs text-status-pending">{problem}</p>
+      <Button variant="secondary" onClick={onConfirm} className="mt-2">
+        Confirm this document
+      </Button>
     </div>
   )
 }
