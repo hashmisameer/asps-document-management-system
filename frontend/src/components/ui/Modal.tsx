@@ -76,7 +76,10 @@ export function Modal({ open, title, description, onClose, children, footer }: M
         <h2 className="text-base font-semibold text-slate-900">{title}</h2>
         {description ? <p className="mt-1 text-sm text-slate-600">{description}</p> : null}
 
-        <div className="mt-4">{children}</div>
+        {/* The BODY scrolls, not the dialog: the title stays readable and the
+            buttons stay reachable however tall the contents get. 70vh leaves
+            room for both on a short laptop screen. */}
+        <div className="mt-4 max-h-[70vh] overflow-y-auto">{children}</div>
 
         {footer ? <div className="mt-5 flex flex-wrap justify-end gap-2">{footer}</div> : null}
       </div>

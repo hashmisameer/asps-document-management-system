@@ -2,7 +2,12 @@ import { useCallback, useRef, useState } from 'react'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { Modal } from '../../components/ui/Modal.js'
-import { SignaturePad, type SignaturePadHandle } from '../../components/ui/SignaturePad.js'
+import {
+  SignaturePad,
+  type SignatureMode,
+  type SignaturePadHandle,
+} from '../../components/ui/SignaturePad.js'
+import type { SignatureCapture } from './api.js'
 
 interface SignatureCaptureDialogProps {
   open: boolean
@@ -12,7 +17,8 @@ interface SignatureCaptureDialogProps {
   /** A failure from the save, shown in the dialog so the ink is not lost with it. */
   failure?: string | null
   onCancel: () => void
-  onSave: (png: Blob) => void
+  /** `capture` says which tab it came from, and is what the record stores. */
+  onSave: (png: Blob, capture: SignatureCapture) => void
 }
 
 /**
@@ -35,10 +41,16 @@ export function SignatureCaptureDialog({
   const pad = useRef<SignaturePadHandle>(null)
   const [hasInk, setHasInk] = useState(false)
   const [empty, setEmpty] = useState(false)
+  const [mode, setMode] = useState<SignatureMode>('draw')
 
   const handleInkChange = useCallback((ink: boolean) => {
     setHasInk(ink)
     if (ink) setEmpty(false)
+  }, [])
+
+  const handleModeChange = useCallback((next: SignatureMode) => {
+    setMode(next)
+    setEmpty(false)
   }, [])
 
   const handleSave = async () => {
@@ -50,7 +62,7 @@ export function SignatureCaptureDialog({
       setEmpty(true)
       return
     }
-    onSave(png)
+    onSave(png, mode === 'upload' ? 'Uploaded' : 'Drawn')
   }
 
   return (
@@ -61,9 +73,12 @@ export function SignatureCaptureDialog({
       onClose={busy ? () => undefined : onCancel}
       footer={
         <>
-          <Button variant="ghost" onClick={() => pad.current?.undo()} disabled={busy || !hasInk}>
-            Undo
-          </Button>
+          {/* Undo is a stroke at a time, which an uploaded image does not have. */}
+          {mode === 'draw' ? (
+            <Button variant="ghost" onClick={() => pad.current?.undo()} disabled={busy || !hasInk}>
+              Undo
+            </Button>
+          ) : null}
           <Button
             variant="secondary"
             onClick={() => {
@@ -95,11 +110,17 @@ export function SignatureCaptureDialog({
         </div>
       ) : null}
 
-      <SignaturePad ref={pad} onInkChange={handleInkChange} disabled={busy} />
+      <SignaturePad
+        ref={pad}
+        onInkChange={handleInkChange}
+        onModeChange={handleModeChange}
+        disabled={busy}
+      />
 
       <p className="mt-2 text-xs text-slate-500">
-        Sign with the pen on the tablet, or with the mouse. The signature is cropped to the ink
-        and stored on a transparent background, so only the writing is stamped onto a document.
+        {mode === 'draw'
+          ? 'Sign with the pen on the tablet, or with the mouse. The signature is cropped to the ink and stored on a transparent background, so only the writing is stamped onto a document.'
+          : 'Upload a photograph or scan of the signature. The paper behind it is taken away so only the writing is stamped onto a document - use the slider if too much or too little is removed.'}
       </p>
     </Modal>
   )

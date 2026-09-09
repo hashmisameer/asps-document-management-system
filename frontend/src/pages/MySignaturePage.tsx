@@ -9,6 +9,7 @@ import {
   mySignatureImageUrl,
   saveMySignature,
   signatureKeys,
+  type SignatureCapture,
 } from '../features/signatures/api.js'
 import { ApiError } from '../lib/apiError.js'
 import { formatDateTime } from '../lib/format.js'
@@ -36,7 +37,8 @@ export function MySignaturePage() {
   })
 
   const save = useMutation({
-    mutationFn: (png: Blob) => saveMySignature(png),
+    mutationFn: (signed: { png: Blob; capture: SignatureCapture }) =>
+      saveMySignature(signed.png, signed.capture),
     onSuccess: async () => {
       setFailure(null)
       setSigning(false)
@@ -124,7 +126,7 @@ export function MySignaturePage() {
           setSigning(false)
           setFailure(null)
         }}
-        onSave={(png) => save.mutate(png)}
+        onSave={(png, capture) => save.mutate({ png, capture })}
       />
     </div>
   )

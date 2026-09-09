@@ -94,3 +94,106 @@ export function strokeWidth(pressure: number, min: number, max: number): number 
   const usable = pressure > 0 && pressure <= 1 ? pressure : 0.5
   return min + (max - min) * usable
 }
+
+/* -------------------------------------------------------------------------- */
+/* A signature that arrives as a file rather than as ink                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two formats a signature may be uploaded in.
+ *
+ * The same two the server accepts (ALLOWED_SIGNATURE_MIME_TYPES), because a
+ * file this rejects should never have been offered and a file it accepts must
+ * not be refused on arrival.
+ */
+export type UploadedImageType = 'image/png' | 'image/jpeg'
+
+/** How many bytes imageTypeOf needs to see. */
+export const IMAGE_HEADER_BYTES = 8
+
+/* The bytes each format begins with. Fixed by the formats themselves: every
+   PNG in the world starts with the first, every JPEG with the second. */
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+const JPEG_MAGIC = [0xff, 0xd8, 0xff]
+
+/**
+ * What a file actually IS, read from the bytes it begins with.
+ *
+ * NOT from its name. Renaming payslip.pdf to signature.png changes the name and
+ * nothing else, and a browser will happily report the type the name implies -
+ * so the name is worth nothing here. These first few bytes are written by
+ * whatever produced the file and are the only thing that says what it is.
+ *
+ * Null for anything else, which the caller turns into a refusal.
+ */
+export function imageTypeOf(header: Uint8Array): UploadedImageType | null {
+  const startsWith = (magic: readonly number[]): boolean =>
+    header.length >= magic.length && magic.every((byte, index) => header[index] === byte)
+
+  if (startsWith(PNG_MAGIC)) return 'image/png'
+  if (startsWith(JPEG_MAGIC)) return 'image/jpeg'
+  return null
+}
+
+/**
+ * How bright a pixel has to be before it counts as paper rather than ink.
+ *
+ * 200 of 255 suits a scan of a white page. A photograph taken in poor light
+ * needs it lower; a page that is grey rather than white needs it higher, which
+ * is why the pad puts it on a slider instead of fixing it here.
+ */
+export const DEFAULT_BACKGROUND_THRESHOLD = 200
+export const MIN_BACKGROUND_THRESHOLD = 100
+export const MAX_BACKGROUND_THRESHOLD = 254
+
+/**
+ * Takes the paper away and leaves the ink.
+ *
+ * A signature drawn on the pad already has a transparent background, so it sits
+ * ON a document. One that was scanned or photographed does not: a JPEG cannot
+ * hold transparency at all, so its background is solid whatever it looks like,
+ * and stamped onto a page as it stands it covers whatever it is placed over.
+ *
+ * So every pixel brighter than the threshold is made fully transparent - the
+ * paper - and everything darker is left exactly as it is - the ink. Brightness
+ * is the plain average of red, green and blue, which is enough for ink on paper
+ * and needs no explaining to whoever is moving the slider.
+ *
+ * A NEW array comes back and `data` is not touched, which is what lets the pad
+ * run this again from the original image every time the slider moves. Running
+ * it over its own output would eat the signature a little at a time.
+ */
+export function removeBackground(
+  data: Uint8ClampedArray,
+  threshold: number,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(data)
+
+  for (let i = 0; i < out.length; i += 4) {
+    const brightness = ((out[i] ?? 0) + (out[i + 1] ?? 0) + (out[i + 2] ?? 0)) / 3
+    // Only ever made MORE transparent: a PNG that already had a transparent
+    // background keeps it, whatever colour the empty pixels happen to be.
+    if (brightness > threshold) out[i + 3] = 0
+  }
+
+  return out
+}
+
+/**
+ * Where an image sits once it is scaled to fit a box and centred in it.
+ *
+ * One scale for both directions, so the signature keeps its shape: a signature
+ * stretched to fill the pad is not that person's signature any more.
+ */
+export function fitCentred(
+  source: { width: number; height: number },
+  box: { width: number; height: number },
+): InkBounds {
+  if (source.width <= 0 || source.height <= 0) return { x: 0, y: 0, width: 0, height: 0 }
+
+  const scale = Math.min(box.width / source.width, box.height / source.height)
+  const width = source.width * scale
+  const height = source.height * scale
+
+  return { x: (box.width - width) / 2, y: (box.height - height) / 2, width, height }
+}
