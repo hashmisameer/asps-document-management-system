@@ -65,6 +65,8 @@ interface EmployeeDocumentRow {
   ProcessedFilePath: string | null
   Status: string
   SignatureStatus: string
+  NotRequiredAt: Date | null
+  NotRequiredByName: string | null
   DueDate: Date | null
   UploadedByName: string | null
   UploadedAt: Date | null
@@ -87,6 +89,7 @@ const SELECT_EMPLOYEE_DOCUMENT = `
             d.DocumentTypeId, dt.DocumentName, dt.IsMandatory, dt.RequiresSignature,
             d.OriginalFileName, d.FileSizeBytes, d.MimeType, d.PageCount,
             d.ProcessedFilePath, d.Status, d.SignatureStatus, d.DueDate,
+            d.NotRequiredAt, nr.FullName AS NotRequiredByName,
             up.FullName AS UploadedByName, d.UploadedAt,
             vf.FullName AS VerifiedByName, d.VerifiedAt,
             d.RejectionReason,
@@ -98,6 +101,7 @@ const SELECT_EMPLOYEE_DOCUMENT = `
     INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
     INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
     LEFT JOIN dbo.Users AS up ON up.UserId = d.UploadedBy
+    LEFT JOIN dbo.Users AS nr ON nr.UserId = d.NotRequiredBy
     LEFT JOIN dbo.Users AS vf ON vf.UserId = d.VerifiedBy
     LEFT JOIN dbo.Users AS ov ON ov.UserId = d.IdentityOverrideBy`
 
@@ -196,6 +200,8 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     hasProcessedFile: row.ProcessedFilePath !== null,
     status: toDocumentStatus(row.Status),
     signatureStatus: toSignatureStatus(row.SignatureStatus),
+    notRequiredAt: row.NotRequiredAt?.toISOString() ?? null,
+    notRequiredByName: row.NotRequiredByName,
     dueDate: row.DueDate === null ? null : formatDateOnly(row.DueDate),
     uploadedByName: row.UploadedByName,
     uploadedAt: row.UploadedAt?.toISOString() ?? null,
@@ -553,6 +559,44 @@ export async function setStatus(
              VerifiedAt = CASE WHEN @verified = 1 THEN SYSUTCDATETIME() ELSE VerifiedAt END,
              UpdatedAt = SYSUTCDATETIME()
       WHERE  DocumentId = @documentId AND IsActive = 1 AND Status = @fromStatus`)
+
+  return (result.rowsAffected[0] ?? 0) > 0
+}
+
+/**
+ * Marks a document as not required of this employee, or puts it back.
+ *
+ * ONE function for both directions, because they are the same write with the
+ * two columns set or cleared together - the CHECK constraint on the table
+ * insists on that pairing, and so does anybody trying to answer 'who decided
+ * this' later.
+ *
+ * `NotRequiredAt IS NULL` is in the WHERE clause, matched against what the
+ * caller believed: two people pressing the button at the same moment cannot
+ * both succeed, and the second is told rather than silently overwriting the
+ * first. The same guard every other write in this file uses.
+ *
+ * THE DUE DATE IS NOT TOUCHED. Undoing this returns the document to the
+ * deadline it always had rather than to one invented on the way back.
+ */
+export async function setNotRequired(
+  documentId: number,
+  notRequired: boolean,
+  actorId: number,
+): Promise<boolean> {
+  const request = await createRequest()
+  const result = await request
+    .input('documentId', sql.Int, documentId)
+    .input('actorId', sql.Int, actorId)
+    .input('notRequired', sql.Bit, notRequired).query(`
+      UPDATE dbo.EmployeeDocuments
+      SET    NotRequiredAt = CASE WHEN @notRequired = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+             NotRequiredBy = CASE WHEN @notRequired = 1 THEN @actorId ELSE NULL END,
+             UpdatedAt = SYSUTCDATETIME()
+      WHERE  DocumentId = @documentId
+        AND  IsActive = 1
+        AND  (@notRequired = 1 AND NotRequiredAt IS NULL
+              OR @notRequired = 0 AND NotRequiredAt IS NOT NULL)`)
 
   return (result.rowsAffected[0] ?? 0) > 0
 }

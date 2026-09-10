@@ -95,6 +95,8 @@ function document(
     hasProcessedFile: false,
     status: DOCUMENT_STATUS.PENDING,
     signatureStatus: SIGNATURE_STATUS.NOT_REQUIRED,
+    notRequiredAt: null,
+    notRequiredByName: null,
     dueDate: '2026-01-22',
     deadlineUnit: 'DAY' as const,
     deadlineState: DEADLINE_STATE.NOT_DUE,

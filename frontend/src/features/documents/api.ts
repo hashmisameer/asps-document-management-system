@@ -139,3 +139,20 @@ export async function previewIdentity(
   })
   return response.data
 }
+
+/**
+ * Whether this document is expected of this employee at all.
+ *
+ * ESIC does not apply to everybody. The state is sent rather than a toggle, so
+ * two clicks in a row land on one answer instead of flipping back and forth.
+ */
+export async function setDocumentNotRequired(
+  documentId: number,
+  notRequired: boolean,
+): Promise<EmployeeDocument> {
+  const response = await api.patch<{ document: EmployeeDocument }>(
+    `/documents/${documentId}/not-required`,
+    { notRequired },
+  )
+  return response.data.document
+}

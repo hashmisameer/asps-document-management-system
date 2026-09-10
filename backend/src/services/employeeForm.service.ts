@@ -101,7 +101,7 @@ export interface EmployeeFileData {
 /* The checklist row                                                           */
 /* -------------------------------------------------------------------------- */
 
-export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue'
+export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue' | 'Not required'
 
 /**
  * The three words this sheet uses for a document.
@@ -114,6 +114,11 @@ export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue'
  * was sent has been refused, so the paper is still to be collected.
  */
 export function checklistStatus(document: EmployeeDocument): ChecklistStatus {
+  // Asked first. A document this employee is not asked for is neither received
+  // nor outstanding, and a chasing sheet that lists it sends somebody after a
+  // form that was deliberately set aside.
+  if (document.notRequiredAt !== null) return 'Not required'
+
   const received =
     document.status === DOCUMENT_STATUS.UPLOADED ||
     document.status === DOCUMENT_STATUS.UNDER_REVIEW ||
@@ -448,12 +453,16 @@ function drawChecklist(sheet: Sheet, form: EmployeeFormData): void {
   const statuses = documents.map(checklistStatus)
   const received = statuses.filter((status) => status === 'Uploaded').length
   const overdue = statuses.filter((status) => status === 'Overdue').length
-  const outstanding = documents.length - received
+  // Documents this employee is not asked for come out of the total as well as
+  // out of the count received, so the sheet reads '9 of 9' rather than '9 of 10'
+  // with one that will never arrive.
+  const expected = statuses.filter((status) => status !== 'Not required').length
+  const outstanding = expected - received
 
   sectionHeading(sheet, 'Document checklist')
 
   sheet.y -= 14
-  draw(sheet.page, `${received} of ${documents.length} documents received`, {
+  draw(sheet.page, `${received} of ${expected} documents received`, {
     x: sheet.margin,
     y: sheet.y,
     font: sheet.fonts.bold,

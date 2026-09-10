@@ -86,11 +86,26 @@ export function deriveDeadline(
      * whatever the unit, so nothing that sorts or counts is affected.
      */
     deadlineUnit?: DeadlineUnit | null
+    /**
+     * This document is not required of this employee.
+     *
+     * Asked FIRST, before the file and before the leaving date. A document
+     * nobody expects cannot be late, and it is the deadline that would
+     * otherwise keep the ESIC form of an employee it does not apply to on the
+     * overdue list for the rest of their career.
+     *
+     * Its due date is not cleared when this is set, so undoing the decision
+     * puts the original deadline straight back rather than inventing one.
+     */
+    notRequired?: boolean
   } = {},
 ): DeadlineInfo {
   const today = options.today ?? todayDateOnly()
   const threshold = options.dueSoonThresholdDays ?? DEFAULT_DUE_SOON_THRESHOLD_DAYS
 
+  if (options.notRequired) {
+    return { state: DEADLINE_STATE.NOT_APPLICABLE, daysRemaining: null, label: 'Not required' }
+  }
   if (isDocumentComplete(status)) {
     return { state: DEADLINE_STATE.COMPLETED, daysRemaining: null, label: 'Completed' }
   }

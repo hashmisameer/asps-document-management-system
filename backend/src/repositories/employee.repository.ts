@@ -21,7 +21,7 @@ import {
 } from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
 import { escapeLike } from '../utils/sqlLike.js'
-import { EFFECTIVE_LEFT, IDENTITY_CARD_CODES_SQL } from './employeeScope.js'
+import { EFFECTIVE_LEFT, EXPECTED_DOCUMENT, IDENTITY_CARD_CODES_SQL } from './employeeScope.js'
 
 /**
  * dbo.Employees access.
@@ -116,6 +116,12 @@ const SELECT_EMPLOYEE_LIST_COLUMNS = `
  *
  * OUTER APPLY rather than a GROUP BY join, so an employee with no documents yet
  * still comes back - with zeroes - instead of dropping out of the list.
+ *
+ * EXPECTED_DOCUMENT is applied here by hand. This subquery is already inside
+ * one employee, so it writes its own scope rather than reading
+ * COUNTABLE_DOCUMENT - which means it is one of the two places that has to
+ * remember. Total falls with the rest: an employee who owes nine documents
+ * reads '9', not '10' with one that will never arrive.
  */
 const COUNTS_APPLY = `
       OUTER APPLY (
@@ -130,6 +136,7 @@ const COUNTS_APPLY = `
           FROM    dbo.EmployeeDocuments AS d
           WHERE   d.EmployeeId = e.EmployeeId
             AND   d.IsActive = 1
+            AND   ${EXPECTED_DOCUMENT}
       ) AS c`
 
 /**
@@ -337,10 +344,14 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
    * same one twice.
    */
   if (query.checklist) {
+    // A document nobody is waiting for cannot make a checklist incomplete, so
+    // an employee whose only gap is an ESIC form marked Not required is
+    // complete - which is the answer the counters above already give.
     const OUTSTANDING = `SELECT 1
       FROM   dbo.EmployeeDocuments AS cd
       WHERE  cd.EmployeeId = e.EmployeeId
         AND  cd.IsActive = 1
+        AND  cd.NotRequiredAt IS NULL
         AND  cd.Status NOT IN (@stUploaded, @stUnderReview, @stVerified)`
 
     conditions.push(

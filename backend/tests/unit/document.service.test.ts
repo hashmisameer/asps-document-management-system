@@ -33,6 +33,7 @@ const db = vi.hoisted(() => ({
   findEmployee: vi.fn(),
   extractText: vi.fn(),
   recordIdentityCheck: vi.fn(),
+  setNotRequired: vi.fn(),
   readStoredFile: vi.fn(),
 }))
 
@@ -46,6 +47,7 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
   createChecklist: vi.fn(),
   listDocumentTypeIdsForEmployee: vi.fn(),
   recordIdentityCheck: db.recordIdentityCheck,
+  setNotRequired: db.setNotRequired,
 }))
 
 vi.mock('../../src/services/storage.service.js', () => ({
@@ -135,6 +137,8 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     hasProcessedFile: false,
     status: DOCUMENT_STATUS.PENDING,
     signatureStatus: SIGNATURE_STATUS.NOT_REQUIRED,
+    notRequiredAt: null,
+    notRequiredByName: null,
     dueDate: '2026-09-11',
     uploadedByName: null,
     uploadedAt: null,
@@ -571,5 +575,78 @@ describe('openForDelivery', () => {
     await expect(documentService.openForDelivery(5, 'preview', hr, context)).rejects.toMatchObject({
       statusCode: 404,
     })
+  })
+})
+
+/**
+ * A document this employee is not asked for.
+ *
+ * ESIC does not apply to everybody, and PF will be next. Nothing here names a
+ * document type - the decision is about one row - so the same button works for
+ * whichever the office decides on later.
+ */
+describe('setNotRequired', () => {
+  beforeEach(() => {
+    db.setNotRequired.mockResolvedValue(true)
+  })
+
+  it('marks a document nobody is waiting for, in the actor s own name', async () => {
+    await documentService.setNotRequired(5, true, hr, context)
+
+    expect(db.setNotRequired).toHaveBeenCalledWith(5, true, hr.userId)
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_MARKED_NOT_REQUIRED }),
+    )
+  })
+
+  it('puts it back, and records that too', async () => {
+    // Undoing is a decision as much as making it: 'why did this reappear' is a
+    // question somebody asks months later.
+    db.findById.mockResolvedValue(record({ notRequiredAt: '2026-09-10T04:00:00.000Z' }))
+
+    await documentService.setNotRequired(5, false, hr, context)
+
+    expect(db.setNotRequired).toHaveBeenCalledWith(5, false, hr.userId)
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AUDIT_ACTIONS.DOCUMENT_MARKED_REQUIRED }),
+    )
+  })
+
+  it('refuses a document that has already been received', async () => {
+    // The file is in - it was evidently required after all. A row that was both
+    // received and not required would be counted differently by different
+    // screens depending on which fact each one looked at.
+    db.findById.mockResolvedValue(record({ originalFileName: 'esic.pdf' }))
+
+    await expect(documentService.setNotRequired(5, true, hr, context)).rejects.toMatchObject({
+      statusCode: 409,
+    })
+    expect(db.setNotRequired).not.toHaveBeenCalled()
+  })
+
+  it('still lets a received document be put BACK to required', async () => {
+    // Only marking is blocked by a file. Undoing must always be available, or a
+    // decision made by mistake is permanent.
+    db.findById.mockResolvedValue(
+      record({ originalFileName: 'esic.pdf', notRequiredAt: '2026-09-10T04:00:00.000Z' }),
+    )
+
+    await expect(documentService.setNotRequired(5, false, hr, context)).resolves.toBeDefined()
+  })
+
+  it('reports a clash rather than overwriting somebody else s decision', async () => {
+    db.setNotRequired.mockResolvedValue(false)
+
+    await expect(documentService.setNotRequired(5, true, hr, context)).rejects.toMatchObject({
+      statusCode: 409,
+    })
+  })
+
+  it('is quiet when the row already says what was asked for', async () => {
+    // Two people pressing the same button is not a conflict worth an error.
+    db.findById.mockResolvedValue(record({ notRequiredAt: '2026-09-10T04:00:00.000Z' }))
+    db.setNotRequired.mockResolvedValue(false)
+
+    await expect(documentService.setNotRequired(5, true, hr, context)).resolves.toBeDefined()
   })
 })

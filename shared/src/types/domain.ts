@@ -249,6 +249,23 @@ export interface EmployeeDocument {
   status: DocumentStatus
   signatureStatus: SignatureStatus
 
+  /**
+   * When somebody decided this document is not required OF THIS EMPLOYEE.
+   *
+   * ESIC does not apply to everybody. Null - which is every row until somebody
+   * says otherwise - means it is expected as usual.
+   *
+   * A document marked this way is not outstanding, not overdue, not chased and
+   * not counted against the employee. It stays on their checklist, labelled, so
+   * the decision reads as a decision rather than as a document nobody noticed.
+   *
+   * NOT a status. It is not a stage a document passes through on the way to
+   * being filed; it says this document has no journey.
+   */
+  notRequiredAt: string | null
+  /** Who decided. Null when it is expected as usual. */
+  notRequiredByName: string | null
+
   dueDate: string | null
   /**
    * How the deadline was set - which is how it is counted back on screen.

@@ -27,6 +27,12 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_ARCHIVED: 'DOCUMENT_ARCHIVED',
   /** The file taken off a checklist row, returning it to Pending. */
   DOCUMENT_FILE_REMOVED: 'DOCUMENT_FILE_REMOVED',
+  /* A document this employee is not asked for, and the undoing of that. Both
+     recorded: 'why is nobody chasing this' and 'why did this reappear' are
+     questions somebody asks months later, and only one of them is answered by
+     the row itself. */
+  DOCUMENT_MARKED_NOT_REQUIRED: 'DOCUMENT_MARKED_NOT_REQUIRED',
+  DOCUMENT_MARKED_REQUIRED: 'DOCUMENT_MARKED_REQUIRED',
   /** An upload the identity check refused, accepted anyway with a reason. */
   DOCUMENT_IDENTITY_OVERRIDDEN: 'DOCUMENT_IDENTITY_OVERRIDDEN',
   /** An upload the identity check refused, and which was not overridden. */

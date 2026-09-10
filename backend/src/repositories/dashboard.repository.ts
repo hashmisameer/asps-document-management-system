@@ -203,17 +203,22 @@ export async function getSummary(dueSoonDays: number): Promise<DashboardSummary>
            about who is complete.
 
            EXISTS and NOT EXISTS over the same condition, so the two partition
-           the active employees and always add up to Total. */
+           the active employees and always add up to Total.
+
+           NotRequiredAt is applied by hand here. These two write their own
+           scope rather than reading COUNTABLE_DOCUMENT, which makes them the
+           second of the two places that has to remember - an employee whose
+           only gap is an ESIC form nobody expects of them is complete. */
         (SELECT COUNT(*) FROM dbo.Employees AS e
           WHERE ${COUNTABLE_EMPLOYEE}
             AND NOT EXISTS (SELECT 1 FROM dbo.EmployeeDocuments AS d
-                             WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1
+                             WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1 AND d.NotRequiredAt IS NULL
                                AND d.Status NOT IN (@stUploaded, @stUnderReview, @stVerified))) AS ChecklistComplete,
 
         (SELECT COUNT(*) FROM dbo.Employees AS e
           WHERE ${COUNTABLE_EMPLOYEE}
             AND EXISTS (SELECT 1 FROM dbo.EmployeeDocuments AS d
-                         WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1
+                         WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1 AND d.NotRequiredAt IS NULL
                            AND d.Status NOT IN (@stUploaded, @stUnderReview, @stVerified))) AS ChecklistIncomplete,
 
         (SELECT COUNT(DISTINCT d.EmployeeId) FROM dbo.EmployeeDocuments AS d

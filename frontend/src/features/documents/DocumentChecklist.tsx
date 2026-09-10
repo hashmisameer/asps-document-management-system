@@ -33,6 +33,7 @@ import {
   confirmDocumentIdentity,
   documentFileUrl,
   removeDocumentFile,
+  setDocumentNotRequired,
   uploadDocument,
 } from './api.js'
 
@@ -170,6 +171,21 @@ function ChecklistRow({
     onError,
   })
 
+  /**
+   * This document is not asked for of this employee - or it is again.
+   *
+   * The dashboard counts change with it, so the whole employee prefix is
+   * refreshed like every other action here.
+   */
+  const notRequiredChange = useMutation({
+    mutationFn: (next: boolean) => setDocumentNotRequired(item.documentId, next),
+    onSuccess: async () => {
+      setFailure(null)
+      await refresh()
+    },
+    onError,
+  })
+
   const remove = useMutation({
     mutationFn: () => removeDocumentFile(item.documentId),
     onSuccess: async () => {
@@ -198,11 +214,15 @@ function ChecklistRow({
     upload.mutate({ file })
   }
 
+  /** Not asked for of this employee - ESIC, usually. */
+  const notRequired = item.notRequiredAt !== null
+
   // The unit comes with the row, so the confirmation letter reads 'Due in 5
   // months' where everything else reads in days.
   const deadline = deriveDeadline(item.dueDate, item.status, {
     employeeHasLeft,
     deadlineUnit: item.deadlineUnit,
+    notRequired,
   })
 
   /**
@@ -213,8 +233,9 @@ function ChecklistRow({
    * when it finished, so the table jumped under whoever was reading it.
    */
   const identityStatus = item.identityCheck?.status
-  const statusText =
-    identityStatus === 'Checking'
+  const statusText = notRequired
+    ? 'Not required'
+    : identityStatus === 'Checking'
       ? `${DOCUMENT_STATUS_LABEL[item.status]} · reading`
       : identityStatus === 'Overridden'
         ? `${DOCUMENT_STATUS_LABEL[item.status]} · manually confirmed`
@@ -225,6 +246,20 @@ function ChecklistRow({
     !employeeHasLeft &&
     can(PERMISSIONS.DOCUMENT_UPLOAD) &&
     (!hasFile || can(PERMISSIONS.DOCUMENT_REPLACE))
+
+  /**
+   * Whether this row may be set aside, or brought back.
+   *
+   * DEADLINE_UPDATE - HR and Admin, not a Viewer. It is the same shape of
+   * decision as moving a deadline: it changes what the employee is asked for
+   * rather than recording something they produced.
+   *
+   * Never where a file is already in. Undoing it stays available on a row
+   * already marked, so a decision made by mistake is one click from being
+   * reversed.
+   */
+  const canSetNotRequired =
+    can(PERMISSIONS.DEADLINE_UPDATE) && !employeeHasLeft && (notRequired || !hasFile)
   // There is no verification step. A document is done when its file is in:
   // isDocumentComplete already counts 'Uploaded', so nothing sits overdue
   // waiting for a second person to agree it arrived. A wrong document is
@@ -296,11 +331,15 @@ function ChecklistRow({
       <tr>
         <td className="px-4 py-2 align-top">
           <span className="font-medium text-slate-900">{item.documentName}</span>
-          {/* Whether the document is expected at all belongs beside its name,
-              not in the status column - it is a fact about the document type,
-              and it never changes. */}
+          {/* A fact about the document TYPE, which is why it sits beside the
+              name rather than in the status column.
+
+              'Optional', not 'Not required' - those words now mean something
+              else and more specific on this screen: that THIS employee is not
+              asked for this document at all. Optional means the office does not
+              chase it; not required means nobody is waiting for it. */}
           <span className="ml-2 align-middle text-xs text-slate-500">
-            {item.isMandatory ? 'Mandatory' : 'Not required'}
+            {item.isMandatory ? 'Mandatory' : 'Optional'}
           </span>
           {/* The signature line that used to sit here is gone. Whether this
               document needs signing, and whether it has been, is said by the
@@ -322,8 +361,45 @@ function ChecklistRow({
                 &#10003;
               </span>
             ) : null}
-            <Badge tone={DOCUMENT_STATUS_TONE[item.status]}>{statusText}</Badge>
+            <Badge tone={notRequired ? 'neutral' : DOCUMENT_STATUS_TONE[item.status]}>
+              {statusText}
+            </Badge>
           </span>
+
+          {/* Who decided, and when. A document that quietly stopped being
+              chased with nobody's name against it is not a decision on the
+              record - it is a gap that looks like one. */}
+          {notRequired && item.notRequiredByName ? (
+            <p className="mt-1 max-w-56 text-xs text-slate-500">
+              Marked by {item.notRequiredByName}
+              {item.notRequiredAt ? ` on ${formatDate(item.notRequiredAt)}` : ''}
+            </p>
+          ) : null}
+
+          {/* Setting a document aside, and taking that back.
+
+              A text button under the badge rather than a sixth icon in the
+              actions column: that column is five fixed positions read down the
+              table, and this is a decision about the ROW rather than an action
+              on a file.
+
+              Offered only where there is no file. A document that has arrived
+              was evidently required after all, and the server refuses it for
+              the same reason. */}
+          {canSetNotRequired ? (
+            <button
+              type="button"
+              onClick={() => notRequiredChange.mutate(!notRequired)}
+              disabled={notRequiredChange.isPending}
+              className="mt-1 text-xs font-medium text-slate-600 underline hover:text-slate-900 disabled:opacity-50"
+            >
+              {notRequiredChange.isPending
+                ? 'Saving...'
+                : notRequired
+                  ? 'Mark as required'
+                  : 'Not required for this employee'}
+            </button>
+          ) : null}
 
           {item.status === DOCUMENT_STATUS.REJECTED && item.rejectionReason ? (
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>

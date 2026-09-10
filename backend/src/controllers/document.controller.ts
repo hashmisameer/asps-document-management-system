@@ -5,6 +5,7 @@ import {
   overrideIdentityCheckSchema,
   previewIdentitySchema,
   rejectDocumentSchema,
+  setNotRequiredSchema,
   updateDeadlineSchema,
   uploadDocumentSchema,
   type AuthUser,
@@ -153,6 +154,24 @@ export const download: RequestHandler = async (req, res) => {
 export const removeFile: RequestHandler = async (req, res) => {
   const { documentId } = parseParams(req, documentParamsSchema)
   const document = await documentService.removeFile(documentId, actorOf(req), requestContext(req))
+  res.json({ document })
+}
+
+/**
+ * This document is not required of this employee - or it is again.
+ *
+ * One handler for both directions, with the intended state in the body, so the
+ * two are impossible to get out of step and a repeated click is not an error.
+ */
+export const setNotRequired: RequestHandler = async (req, res) => {
+  const documentId = parseParams(req, documentParamsSchema).documentId
+  const { notRequired } = parseBody(req, setNotRequiredSchema)
+  const document = await documentService.setNotRequired(
+    documentId,
+    notRequired,
+    actorOf(req),
+    requestContext(req),
+  )
   res.json({ document })
 }
 

@@ -153,6 +153,8 @@ function checklistRecord(overrides: Partial<EmployeeDocumentRecord> = {}): Emplo
     hasProcessedFile: false,
     status: DOCUMENT_STATUS.PENDING,
     signatureStatus: SIGNATURE_STATUS.NOT_REQUIRED,
+    notRequiredAt: null,
+    notRequiredByName: null,
     dueDate: null,
     uploadedByName: null,
     uploadedAt: null,

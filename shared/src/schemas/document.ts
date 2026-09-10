@@ -215,6 +215,19 @@ export type UpdateDocumentTypeInput = z.infer<typeof updateDocumentTypeSchema>
  * refusal, the document is already there to be looked at.
  */
 /**
+ * Whether this document is expected of this employee at all.
+ *
+ * The intended state rather than a toggle, so pressing the button twice by
+ * accident - or two people pressing it at once - lands on one answer instead of
+ * flipping back and forth.
+ */
+export const setNotRequiredSchema = z.object({
+  notRequired: z.boolean(),
+})
+
+export type SetNotRequiredInput = z.infer<typeof setNotRequiredSchema>
+
+/**
  * Confirming a document by hand.
  *
  * The reason is OPTIONAL, and normally absent. Confirming is one button: these

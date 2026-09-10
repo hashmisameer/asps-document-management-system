@@ -65,6 +65,8 @@ export function withDeadline(
   const { employeeHasLeft, ...document } = record
   const deadline = deriveDeadline(record.dueDate, record.status, {
     employeeHasLeft: options.employeeHasLeft ?? employeeHasLeft,
+    // A document nobody expects of this employee cannot be late.
+    notRequired: record.notRequiredAt !== null,
   })
   return { ...document, deadlineState: deadline.state, daysRemaining: deadline.daysRemaining }
 }
@@ -440,6 +442,62 @@ export async function uploadFile(
       logger.error({ err: error, documentId }, 'The background identity check threw')
     })
   }
+
+  return getById(documentId)
+}
+
+/**
+ * Says this document is not required of THIS employee, or takes that back.
+ *
+ * ESIC does not apply to everybody, and neither will PF. Nothing here names a
+ * document type: the decision is about one employee's row, so the same button
+ * works for whichever document the office decides next.
+ *
+ * A DOCUMENT THAT ALREADY HAS A FILE CANNOT BE MARKED. The file is in - it was
+ * evidently required after all - and a row that is both received and not
+ * required would be counted differently by different screens depending on which
+ * fact each one looked at. Removing the file first is the honest way round.
+ */
+export async function setNotRequired(
+  documentId: number,
+  notRequired: boolean,
+  actor: AuthUser,
+  context: RequestContext,
+): Promise<EmployeeDocument> {
+  const record = await loadRecord(documentId)
+
+  if (notRequired && record.originalFileName !== null) {
+    throw new ConflictError(
+      'This document has already been received, so it cannot be marked as not required. ' +
+        'Remove the file first if it was filed by mistake.',
+    )
+  }
+
+  const changed = await employeeDocumentRepository.setNotRequired(
+    documentId,
+    notRequired,
+    actor.userId,
+  )
+  // Not an error worth raising when the row already says what was asked for -
+  // but a genuine clash with somebody else deserves the usual message.
+  if (!changed && (record.notRequiredAt !== null) !== notRequired) throw concurrentChange()
+
+  await audit.record({
+    userId: actor.userId,
+    action: notRequired
+      ? AUDIT_ACTIONS.DOCUMENT_MARKED_NOT_REQUIRED
+      : AUDIT_ACTIONS.DOCUMENT_MARKED_REQUIRED,
+    entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
+    entityId: documentId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      employeeCode: record.employeeCode,
+      documentName: record.documentName,
+      // The deadline the document goes back to if this is ever undone. Recorded
+      // because the row keeps it and nothing else says what it was.
+      dueDate: record.dueDate,
+    },
+  })
 
   return getById(documentId)
 }

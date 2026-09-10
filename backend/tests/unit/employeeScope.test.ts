@@ -436,3 +436,85 @@ describe('which employees the list asks for', () => {
     expect(sql).toContain('e.IsActive = 1')
   })
 })
+
+/**
+ * A document that is not required of THIS employee.
+ *
+ * ESIC does not apply to everybody. The decision lives on the employee's row,
+ * and the risk it carries is the one this whole file exists to catch: seven
+ * separate queries count documents, and a rule applied to six of them produces
+ * a dashboard that disagrees with the list it opens.
+ *
+ * Every one of the seven is asserted here, by name.
+ */
+describe('documents nobody is asked for', () => {
+  const NOT_REQUIRED = 'd.NotRequiredAt IS NULL'
+
+  it('is part of the one definition the counts share', async () => {
+    expect(COUNTABLE_DOCUMENT).toContain(NOT_REQUIRED)
+  })
+
+  it('is left out of every dashboard count', async () => {
+    const summary = await dashboardSql()
+
+    // Total, received, pending, overdue, due soon - all of them go through
+    // COUNTABLE_DOCUMENT, so the count of that predicate is the count of them.
+    expect(summary.split(NOT_REQUIRED).length - 1).toBeGreaterThanOrEqual(5)
+  })
+
+  it('cannot make an employee incomplete on the dashboard', async () => {
+    // The requirement in one line: nine documents in and ESIC set aside reads
+    // as Complete. These two subqueries write their own scope, so they are the
+    // ones that have to remember.
+    const summary = await dashboardSql()
+
+    expect(summary).toContain(
+      squash(`AND NOT EXISTS (SELECT 1 FROM dbo.EmployeeDocuments AS d
+        WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1 AND ${NOT_REQUIRED}`),
+    )
+    expect(summary).toContain(
+      squash(`AND EXISTS (SELECT 1 FROM dbo.EmployeeDocuments AS d
+        WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1 AND ${NOT_REQUIRED}`),
+    )
+  })
+
+  it('is left out of the counters behind the employee list and profile', async () => {
+    // 'N of N pending', the four numbers on the profile, and the sort by
+    // documents outstanding all read these. Total falls with the rest, so an
+    // employee who owes nine reads 9 rather than 10.
+    const list = await employeeListSql()
+
+    expect(list).toContain(squash(`FROM dbo.EmployeeDocuments AS d
+      WHERE d.EmployeeId = e.EmployeeId AND d.IsActive = 1 AND ${NOT_REQUIRED}`))
+  })
+
+  it('cannot keep an employee out of the Complete filter', async () => {
+    const complete = await employeeListSql({ checklist: 'complete' })
+
+    expect(complete).toContain('cd.NotRequiredAt IS NULL')
+  })
+
+  it('is left out of the documents list the tiles open', async () => {
+    for (const state of ['all', 'pending', 'overdue'] as const) {
+      expect(await documentListSql(state), state).toContain(NOT_REQUIRED)
+    }
+  })
+
+  it('is left out of both reports and of the daily reminder email', async () => {
+    // Each of these reads COUNTABLE_DOCUMENT, which now carries the rule - so
+    // nobody is chased by email for a form nobody is waiting for.
+    const readers: [string, () => Promise<unknown>][] = [
+      ['the by-document report', () => reports.byDocumentType()],
+      [
+        'the chase list',
+        () => reports.outstanding({ onlyOverdue: false, onlyMandatory: false }),
+      ],
+      ['the daily reminder email', () => reminders.findPendingDocuments()],
+    ]
+
+    for (const [name, run] of readers) {
+      await run().catch(() => undefined)
+      expect(lastSql(), name).toContain(NOT_REQUIRED)
+    }
+  })
+})
