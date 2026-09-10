@@ -787,3 +787,49 @@ describe('pages with nothing on them', () => {
     expect(pages).toHaveLength(3)
   })
 })
+
+/**
+ * A document nobody is asked for, on the chasing sheet.
+ *
+ * The row keeps its due date in the database so undoing the decision restores
+ * it. Printing that date beside 'Not required' would send somebody after a form
+ * that was deliberately set aside.
+ */
+describe('a not-required document on the printed form', () => {
+  /** The checklist with one OUTSTANDING document set aside, and a date of its own. */
+  const withOneSetAside = (): EmployeeDocument[] => {
+    const documents = fullChecklist()
+    const esic = documents[6] // outstanding, so it would otherwise be chased
+    if (!esic) throw new Error('no seventh document')
+
+    return documents.map((entry) =>
+      entry === esic
+        ? { ...entry, notRequiredAt: '2026-09-10T04:12:33.123Z', dueDate: '2026-07-19' }
+        : entry,
+    )
+  }
+
+  it('reads Not required, with no deadline beside it', async () => {
+    const [page = ''] = await pagesOf(
+      await renderEmployeeForms([form({ documents: withOneSetAside() })], META),
+    )
+
+    expect(page).toContain('Not required')
+    // Its own date, which no other row carries - so this is the date being
+    // withheld rather than simply absent from the sheet.
+    expect(page).not.toContain('19/07/2026')
+    // And every other row still prints the deadline it always had.
+    expect(page).toContain('22/01/2026')
+  })
+
+  it('is counted out of the total, not counted as missing', async () => {
+    const [page = ''] = await pagesOf(
+      await renderEmployeeForms([form({ documents: withOneSetAside() })], META),
+    )
+
+    // Six of the ten are in; one of the remaining four is not asked for. So
+    // nine are expected, not ten - and the one set aside is not outstanding.
+    expect(page).toContain('6 of 9 documents received')
+    expect(page).toContain('3 outstanding')
+  })
+})

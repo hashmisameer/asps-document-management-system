@@ -519,7 +519,13 @@ function drawChecklist(sheet: Sheet, form: EmployeeFormData): void {
       { text: document.documentName, font: sheet.fonts.regular },
       { text: document.isMandatory ? 'Mandatory' : 'Optional', font: sheet.fonts.regular },
       { text: status, font: emphasis },
-      { text: formatDate(document.dueDate), font: sheet.fonts.regular },
+      // A document nobody is asked for has no deadline to print. The row keeps
+      // its due date so undoing the decision restores it; a date on the chasing
+      // sheet beside 'Not required' would send somebody after it.
+      {
+        text: status === 'Not required' ? DASH : formatDate(document.dueDate),
+        font: sheet.fonts.regular,
+      },
       { text: formatDate(document.uploadedAt), font: sheet.fonts.regular },
     ]
 
