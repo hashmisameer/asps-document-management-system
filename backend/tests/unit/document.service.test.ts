@@ -1,3 +1,4 @@
+import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   API_ERROR_CODES,
@@ -102,11 +103,23 @@ const hr: AuthUser = {
 const viewer: AuthUser = { ...hr, userId: 9, username: 'mgr1', role: ROLES.VIEWER }
 const context = { ipAddress: '10.0.0.5', userAgent: 'test' }
 
-/** The first bytes of a real PDF; file-type reads the content, not the name. */
-const PDF_BYTES = Buffer.concat([
-  Buffer.from('%PDF-1.4\n'),
-  Buffer.from('1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'),
-])
+/**
+ * A real PDF, built rather than hand-written.
+ *
+ * It used to be a few literal bytes beginning '%PDF-', which was enough while
+ * the upload only read the first few. It is not any more: the file is opened
+ * now and asked how many pages it has, and those bytes were never a PDF that
+ * would open - the fixture would have been refused exactly as a truncated
+ * upload is.
+ */
+async function realPdf(): Promise<Buffer> {
+  const pdf = await PDFDocument.create()
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  pdf.addPage([595.28, 841.89]).drawText('PAN CARD', { x: 60, y: 700, font, size: 18 })
+  return Buffer.from(await pdf.save())
+}
+
+const PDF_BYTES = await realPdf()
 
 function uploadedFile(overrides: Partial<{ originalname: string; buffer: Buffer }> = {}) {
   const buffer = overrides.buffer ?? PDF_BYTES
@@ -648,5 +661,79 @@ describe('setNotRequired', () => {
     db.setNotRequired.mockResolvedValue(false)
 
     await expect(documentService.setNotRequired(5, true, hr, context)).resolves.toBeDefined()
+  })
+})
+
+/**
+ * A damaged file leaves the system exactly as it was.
+ *
+ * The point of catching this at upload rather than later: a rejection must be
+ * a non-event. No bytes in the store, no row touched, the document still
+ * Pending, nothing to clean up by hand afterwards.
+ *
+ * What makes it true is the ORDER in uploadFile - the file is inspected before
+ * storeDocument is called, so at the moment it is refused nothing has happened
+ * yet. These assert that order rather than trusting it.
+ */
+describe('an upload that is refused as damaged', () => {
+  /** A PDF cut off half way. It still begins %PDF-, which is the whole problem. */
+  const TRUNCATED_PDF = PDF_BYTES.subarray(0, 12)
+
+  it('writes nothing to the document store', async () => {
+    await expect(
+      documentService.uploadFile(
+        5,
+        uploadedFile({ buffer: TRUNCATED_PDF }),
+        uploadInput,
+        hr,
+        context,
+      ),
+    ).rejects.toThrow()
+
+    expect(db.storeDocument).not.toHaveBeenCalled()
+    // Nothing was written, so there is nothing to discard either - a partial
+    // file that had to be tidied up would mean the order was wrong.
+    expect(db.discardStoredFile).not.toHaveBeenCalled()
+  })
+
+  it('changes no row, so the document stays Pending', async () => {
+    await expect(
+      documentService.uploadFile(
+        5,
+        uploadedFile({ buffer: TRUNCATED_PDF }),
+        uploadInput,
+        hr,
+        context,
+      ),
+    ).rejects.toThrow()
+
+    expect(db.attachFile).not.toHaveBeenCalled()
+    expect(db.setStatus).not.toHaveBeenCalled()
+  })
+
+  it('records nothing in the audit trail, because nothing happened', async () => {
+    await expect(
+      documentService.uploadFile(
+        5,
+        uploadedFile({ buffer: TRUNCATED_PDF }),
+        uploadInput,
+        hr,
+        context,
+      ),
+    ).rejects.toThrow()
+
+    expect(db.insertAudit).not.toHaveBeenCalled()
+  })
+
+  it('tells HR the file is damaged rather than reporting a server fault', async () => {
+    await expect(
+      documentService.uploadFile(
+        5,
+        uploadedFile({ buffer: TRUNCATED_PDF }),
+        uploadInput,
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({ statusCode: 400 })
   })
 })

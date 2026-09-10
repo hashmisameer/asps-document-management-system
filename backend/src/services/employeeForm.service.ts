@@ -609,9 +609,9 @@ export async function renderEmployeeForms(
  * One employee's file: their details, then their documents, in one PDF.
  *
  * The details page is ours and carries a footer. Everything after it is the
- * documents as they were filed, page for page, with only a separator in front
- * of each - nothing is stamped across a scanned card, because what this hands
- * over has to still be a copy of what the office holds.
+ * documents as they were filed, running straight on from one another with
+ * nothing in between - nothing is stamped across a scanned card, because what
+ * this hands over has to still be a copy of what the office holds.
  *
  * An employee with nothing on file gets the details page and stops there. That
  * is a true answer to 'send me their file', and a truer one than an error.
@@ -628,9 +628,10 @@ export async function renderEmployeeFile(file: EmployeeFileData, meta: PrintMeta
   drawDetails(sheet, fileDetailsOf(file.employee))
 
   // The details can run to a second page - a long address, an exit recorded -
-  // and every page they run to is one of ours.
+  // and every page they run to is one of ours. Everything appended after this
+  // point is somebody's document and is signed by nothing.
   const ownPages = new Set<number>(sheet.pdf.getPages().map((_, index) => index))
-  await appendDocuments(sheet, file.documents, ownPages)
+  await appendDocuments(sheet, file.documents)
 
   drawOwnFooters(sheet, ownPages, meta)
 

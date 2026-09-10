@@ -511,13 +511,18 @@ describe('renderEmployeeFile', () => {
 
     const pages = await pagesOf(pdf)
 
-    expect(pages).toHaveLength(5) // details + (separator + page) x 2
-    expect(pages[1]).toContain('Appointment Letter')
-    expect(pages[1]).toContain('Signed copy')
-    expect(pages[2]).toContain('LETTER PAGE')
-    expect(pages[3]).toContain('Service Card')
-    expect(pages[3]).toContain('As it was uploaded')
-    expect(pages[4]).toContain('CARD PAGE')
+    // Details, then the documents themselves, running straight on. NO
+    // separator page: a file of ten documents was ten extra sheets to turn
+    // past, and the office already knows what it sent.
+    expect(pages).toHaveLength(3)
+    expect(pages[1]).toContain('LETTER PAGE')
+    expect(pages[2]).toContain('CARD PAGE')
+
+    // Nothing about the documents is announced in front of them.
+    const text = pages.join(' ')
+    for (const gone of ['Document 1 of', 'Signed copy', 'As it was uploaded', 'Received']) {
+      expect(text, gone).not.toContain(gone)
+    }
   })
 
   it('turns a photographed document into a page', async () => {
@@ -529,9 +534,9 @@ describe('renderEmployeeFile', () => {
     )
 
     const parsed = await PDFDocument.load(pdf)
-    expect(parsed.getPageCount()).toBe(3)
+    expect(parsed.getPageCount()).toBe(2) // details + the photograph
 
-    const page = parsed.getPage(2)
+    const page = parsed.getPage(1)
     expect(Math.round(page.getWidth())).toBe(595)
     expect(Math.round(page.getHeight())).toBe(842)
   })
@@ -577,10 +582,11 @@ describe('renderEmployeeFile', () => {
       ),
     )
 
+    // The details page is signed; the document behind it is not touched.
     expect(pages[0]).toContain('Generated 03/09/2026 14:20 by Sameer Hashmi')
-    expect(pages[1]).toContain('Page 2 of 3')
-    expect(pages[2]).toContain('SCANNED CARD')
-    expect(pages[2]).not.toContain('Sameer Hashmi')
+    expect(pages[1]).toContain('SCANNED CARD')
+    expect(pages[1]).not.toContain('Sameer Hashmi')
+    expect(pages[1]).not.toContain('Page 2 of')
   })
 })
 
@@ -610,10 +616,10 @@ describe('the documents inside the employee file', () => {
       ),
     )
 
-    expect(pages).toHaveLength(5) // details + separator + three
-    expect(pages[2]).toContain('ONE')
-    expect(pages[3]).toContain('TWO')
-    expect(pages[4]).toContain('THREE')
+    expect(pages).toHaveLength(4) // details + three
+    expect(pages[1]).toContain('ONE')
+    expect(pages[2]).toContain('TWO')
+    expect(pages[3]).toContain('THREE')
   })
 
   it('converts the image formats a PDF cannot hold', async () => {
@@ -627,14 +633,16 @@ describe('the documents inside the employee file', () => {
         META,
       )
 
-      expect((await PDFDocument.load(pdf)).getPageCount(), format).toBe(3)
+      expect((await PDFDocument.load(pdf)).getPageCount(), format).toBe(2)
     }
   })
 
-  it('accounts for a document it cannot read rather than dropping it', async () => {
-    // A file the store has lost, or one that is not really a PDF. Silently
-    // handing over nine of ten is how somebody comes to believe a document was
-    // never collected.
+  it('leaves out a document it cannot read, and the rest are unaffected', async () => {
+    // Silently, which is a deliberate choice. It should no longer be possible:
+    // a file that will not open is refused at UPLOAD now rather than stored,
+    // so a document arriving here broken means something went wrong after it
+    // was accepted - and a page of apology inside somebody's file, handed to
+    // an inspector, is not where that belongs. It is logged.
     const pages = await pagesOf(
       await renderEmployeeFile(
         employeeFile([
@@ -651,14 +659,12 @@ describe('the documents inside the employee file', () => {
       ),
     )
 
-    expect(pages[1]).toContain('Bio Data Form')
-    expect(pages[2]).toContain('could not be read')
-    // And the one after it is unaffected.
-    expect(pages[3]).toContain('Service Card')
-    expect(pages[4]).toContain('GOOD ONE')
+    expect(pages).toHaveLength(2) // details + the one that could be read
+    expect(pages[1]).toContain('GOOD ONE')
+    expect(pages.join(' ')).not.toContain('could not be read')
   })
 
-  it('says on the separator when the type cannot be included at all', async () => {
+  it('leaves out a type that cannot be merged at all', async () => {
     const pages = await pagesOf(
       await renderEmployeeFile(
         employeeFile([
@@ -671,7 +677,113 @@ describe('the documents inside the employee file', () => {
       ),
     )
 
-    expect(pages).toHaveLength(2)
-    expect(pages[1]).toContain('application/zip')
+    expect(pages).toHaveLength(1) // the details page, and nothing else
+    expect(pages[0]).not.toContain('application/zip')
+  })
+})
+
+/**
+ * Blank pages, and how timid the rule that drops them is.
+ *
+ * Documents arrive with trailing blank pages - the company's appointment letter
+ * has an empty third - and a file bound for an inspector should not carry them.
+ * The risk of the other kind of mistake is much worse, so every case below is
+ * about what must SURVIVE.
+ */
+describe('pages with nothing on them', () => {
+  /** A PDF whose pages are built one at a time, so a page can be left empty. */
+  async function pdfWithPages(
+    build: (pdf: PDFDocument, font: Awaited<ReturnType<PDFDocument['embedFont']>>) => void,
+  ): Promise<Buffer> {
+    const pdf = await PDFDocument.create()
+    const font = await pdf.embedFont(StandardFonts.Helvetica)
+    build(pdf, font)
+    return Buffer.from(await pdf.save())
+  }
+
+  const A4: [number, number] = [595.28, 841.89]
+
+  const bind = async (data: Buffer): Promise<string[]> =>
+    pagesOf(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Appointment Letter', { read: async () => data, mimeType: 'application/pdf' }),
+        ]),
+        META,
+      ),
+    )
+
+  it('drops a trailing page with nothing on it', async () => {
+    // The reported case, exactly: a letter whose third page is empty.
+    const letter = await pdfWithPages((pdf, font) => {
+      pdf.addPage(A4).drawText('APPOINTMENT LETTER', { x: 60, y: 700, font, size: 18 })
+      pdf.addPage(A4).drawText('TERMS AND CONDITIONS', { x: 60, y: 700, font, size: 18 })
+      pdf.addPage(A4) // nothing at all
+    })
+
+    const pages = await bind(letter)
+
+    expect(pages).toHaveLength(3) // details + two, not three
+    expect(pages[1]).toContain('APPOINTMENT LETTER')
+    expect(pages[2]).toContain('TERMS AND CONDITIONS')
+  })
+
+  it('keeps a page whose only mark is a single dot', async () => {
+    // A signature, an initial, a stamp - all of them are marks on a page, and
+    // one is enough. This is the case that decides whether the rule is safe.
+    const withDot = await pdfWithPages((pdf) => {
+      pdf.addPage(A4)
+      pdf.addPage(A4).drawCircle({ x: 300, y: 400, size: 1.2 })
+    })
+
+    const parsed = await PDFDocument.load(await renderEmployeeFile(
+      employeeFile([
+        fileEntry('Service Card', { read: async () => withDot, mimeType: 'application/pdf' }),
+      ]),
+      META,
+    ))
+
+    // Details + the page with the dot. The truly empty one went.
+    expect(parsed.getPageCount()).toBe(2)
+  })
+
+  it('keeps a scanned blank sheet, because a scan is a picture of paper', async () => {
+    // The honest limit of this. To the structure of a PDF, a photograph of an
+    // empty page is a page with an image on it - and telling the two apart
+    // means judging pixels, which is how a faint pencil signature gets thrown
+    // away. It stays.
+    const scan = await pdfWithPages((pdf) => {
+      pdf.addPage(A4)
+    })
+    const white = await sharp({
+      create: { width: 800, height: 1000, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .jpeg()
+      .toBuffer()
+
+    const source = await PDFDocument.load(scan)
+    const image = await source.embedJpg(white)
+    source.getPage(0).drawImage(image, { x: 0, y: 0, width: 595, height: 842 })
+
+    const parsed = await PDFDocument.load(
+      await renderEmployeeFile(
+        employeeFile([
+          fileEntry('Aadhaar Card', {
+            read: async () => Buffer.from(await source.save()),
+            mimeType: 'application/pdf',
+          }),
+        ]),
+        META,
+      ),
+    )
+
+    expect(parsed.getPageCount()).toBe(2)
+  })
+
+  it('keeps every page of a document it cannot inspect', async () => {
+    // Failing to read a file is never a reason to remove anything from it.
+    const pages = await bind(await pdfOf(['ONE', 'TWO']))
+
+    expect(pages).toHaveLength(3)
   })
 })

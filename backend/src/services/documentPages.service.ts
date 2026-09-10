@@ -7,11 +7,7 @@ import {
   RULE,
   draw,
   drawRight,
-  formatDate,
   formatTimestamp,
-  newPage,
-  rule,
-  wrap,
   type PrintMeta,
   type Sheet,
 } from '../utils/pdfDraw.js'
@@ -24,11 +20,11 @@ import {
  * what happens to a scan somebody uploaded two years ago when it has to come
  * back out again.
  *
- * THE DOCUMENTS THEMSELVES ARE REPRODUCED UNTOUCHED. No page number, no footer,
- * nothing stamped across somebody's scanned Aadhaar card: a document that comes
- * out of here is the document as it was filed. Everything added around them -
- * the separators, the page saying one could not be read - is on pages of its
- * own, and drawOwnFooters is careful to sign only those.
+ * THE DOCUMENTS THEMSELVES ARE REPRODUCED UNTOUCHED, and they run straight on
+ * from one another. No page number, no footer, no separator sheet announcing
+ * what comes next: a document that comes out of here is the document as it was
+ * filed, and drawOwnFooters signs only the pages the caller made before this
+ * was called.
  *
  * The SIGNED copy is taken where there is one, exactly as downloading a single
  * document does, so what comes out shows the signatures the office holds.
@@ -59,69 +55,86 @@ export interface DocumentEntry {
   file: DocumentFile
 }
 
-/**
- * The page before each document.
- *
- * Its whole job is to answer 'where does this one start' when somebody is
- * scrolling or has printed the lot, so the name is set large and everything
- * else sits under it.
- */
-function drawSeparator(
-  sheet: Sheet,
-  entry: DocumentEntry,
-  position: { index: number; total: number },
-  problem?: string,
-): void {
-  newPage(sheet)
-  const top = sheet.y
-
-  draw(sheet.page, `Document ${position.index} of ${position.total}`, {
-    x: sheet.margin,
-    y: top - 12,
-    font: sheet.fonts.regular,
-    size: 9,
-    color: MUTED,
-  })
-
-  const lines = wrap(entry.documentName, sheet.fonts.bold, 22, sheet.contentWidth)
-  lines.forEach((line, index) => {
-    draw(sheet.page, line, {
-      x: sheet.margin,
-      y: top - 42 - index * 26,
-      font: sheet.fonts.bold,
-      size: 22,
-    })
-  })
-
-  sheet.y = top - 42 - lines.length * 26
-  rule(sheet, 12, 14)
-
-  const facts: string[] = [
-    entry.uploadedAt ? `Received ${formatDate(entry.uploadedAt)}` : 'Received',
-    entry.uploadedByName ? `Uploaded by ${entry.uploadedByName}` : '',
-    // Which copy this is. A signed document and the original it was made from
-    // are different pieces of paper, and somebody reading the file is entitled
-    // to know which one they are looking at.
-    entry.file.isSigned ? 'Signed copy' : 'As it was uploaded',
-  ].filter(Boolean)
-
-  for (const fact of facts) {
-    draw(sheet.page, fact, { x: sheet.margin, y: sheet.y, font: sheet.fonts.regular, size: 10 })
-    sheet.y -= 15
-  }
-
-  if (problem) {
-    sheet.y -= 10
-    for (const line of wrap(problem, sheet.fonts.bold, 10, sheet.contentWidth)) {
-      draw(sheet.page, line, { x: sheet.margin, y: sheet.y, font: sheet.fonts.bold, size: 10 })
-      sheet.y -= 14
-    }
-  }
-}
-
 /* -------------------------------------------------------------------------- */
 /* The documents themselves                                                    */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Which pages of a filed PDF have anything on them.
+ *
+ * WHY THIS EXISTS: documents arrive with trailing blank pages - the company's
+ * appointment letter has an empty third page - and a file bound for an
+ * inspector should not carry them.
+ *
+ * WHAT COUNTS AS BLANK, and the rule is deliberately timid: a page is dropped
+ * only when it draws NOTHING and carries no readable character. Any image, any
+ * line, any filled shape, any word - the page stays. A signature, a stamp, a
+ * pencil initial in the corner: all of those are drawing operations, and one is
+ * enough.
+ *
+ * WHAT THIS CANNOT DO, and it is worth knowing: a photographed or scanned blank
+ * sheet is an IMAGE of white paper, and to this - as to any reader of the file's
+ * structure - that is a page with a picture on it. It stays. Catching those
+ * would mean rendering every page and judging it by its pixels, which is how a
+ * faint pencil signature gets thrown away.
+ *
+ * A document this cannot inspect keeps every page. Failing to read a file is
+ * never a reason to remove anything from it.
+ */
+async function contentfulPageIndices(data: Buffer, pageCount: number): Promise<number[]> {
+  const all = Array.from({ length: pageCount }, (_, index) => index)
+
+  try {
+    const { getDocument, OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+
+    // The operators that put something on the page, by name. Built from pdf.js
+    // rather than listed by hand so a version that adds one is covered: every
+    // painting, filling, stroking and shading operator matches, and the
+    // 'setFillColor'-style operators that only choose a colour do not.
+    const inkOps = new Set<number>()
+    for (const [name, code] of Object.entries(OPS)) {
+      if (!name.startsWith('set') && /paint|fill|stroke|shading/i.test(name)) {
+        inkOps.add(code as number)
+      }
+    }
+
+    const pdf = await getDocument({
+      data: new Uint8Array(data),
+      isEvalSupported: false,
+      useSystemFonts: false,
+    }).promise
+
+    try {
+      const keep: number[] = []
+
+      for (let number = 1; number <= pdf.numPages; number += 1) {
+        const page = await pdf.getPage(number)
+
+        const operators = await page.getOperatorList()
+        const draws = operators.fnArray.some((code) => inkOps.has(code))
+
+        if (draws) {
+          keep.push(number - 1)
+          continue
+        }
+
+        const content = await page.getTextContent()
+        const text = content.items.map((item) => ('str' in item ? item.str : '')).join('')
+        if (text.trim().length > 0) keep.push(number - 1)
+      }
+
+      // Never hand back nothing. A document every page of which reads as blank
+      // is far more likely to be one this could not understand than a file with
+      // no content at all, and dropping the lot would lose a document silently.
+      return keep.length > 0 ? keep : all
+    } finally {
+      await pdf.destroy()
+    }
+  } catch (error) {
+    logger.warn({ err: error }, 'Could not inspect a PDF for blank pages; keeping every page')
+    return all
+  }
+}
 
 /**
  * 200 dpi on an A4 page.
@@ -175,43 +188,49 @@ async function addImagePage(sheet: Sheet, data: Buffer): Promise<void> {
   })
 }
 
-/** Every page of a filed PDF, copied in as it stands. */
+/** Every page of a filed PDF that has anything on it, copied in as it stands. */
 async function addPdfPages(sheet: Sheet, data: Buffer): Promise<void> {
   // A scan produced by a photocopier is sometimes 'encrypted' with an empty
   // owner password, which stops nothing and would otherwise stop this.
   const source = await PDFDocument.load(data, { ignoreEncryption: true })
-  const pages: PDFPage[] = await sheet.pdf.copyPages(source, source.getPageIndices())
+
+  const wanted = await contentfulPageIndices(data, source.getPageCount())
+  const pages: PDFPage[] = await sheet.pdf.copyPages(source, wanted)
 
   for (const page of pages) sheet.pdf.addPage(page)
 }
 
 /**
- * Each document, behind a page saying what it is.
+ * The documents, one after another, and nothing between them.
  *
- * Page indices this adds are collected into `ownPages` - see drawOwnFooters for
- * why that distinction is worth keeping.
+ * THERE IS NO SEPARATOR PAGE. There used to be one before each document - the
+ * name, 'Document 3 of 9', the date it came in - and for a file of ten
+ * documents that was ten extra sheets to turn past. What somebody reading the
+ * file wants is the documents; the office already knows what it sent.
+ *
+ * A DOCUMENT THAT CANNOT BE MERGED IS LEFT OUT SILENTLY. That is a deliberate
+ * choice and worth naming, because the obvious objection is right: the reader
+ * cannot tell it was ever there. The answer is that it should no longer be
+ * possible - a file that cannot be opened is now refused at upload rather than
+ * stored (see fileValidation.service.ts), so a document reaching this point
+ * broken means something went wrong AFTER it was accepted, and a page of
+ * apology inside somebody's file is not where that belongs. It is logged.
  */
 export async function appendDocuments(
   sheet: Sheet,
   entries: readonly DocumentEntry[],
-  ownPages: Set<number>,
 ): Promise<void> {
-  for (const [index, entry] of entries.entries()) {
-    const unsupported = !(
+  for (const entry of entries) {
+    const supported =
       entry.file.mimeType === 'application/pdf' || entry.file.mimeType.startsWith('image/')
-    )
 
-    drawSeparator(
-      sheet,
-      entry,
-      { index: index + 1, total: entries.length },
-      unsupported
-        ? `This document is a ${entry.file.mimeType} file and could not be included. Download it on its own.`
-        : undefined,
-    )
-    ownPages.add(sheet.pdf.getPageCount() - 1)
-
-    if (unsupported) continue
+    if (!supported) {
+      logger.warn(
+        { documentName: entry.documentName, mimeType: entry.file.mimeType },
+        'A document of an unmergeable type was left out of the employee file',
+      )
+      continue
+    }
 
     try {
       // Read here, one document at a time, so the largest file in memory is the
@@ -221,28 +240,11 @@ export async function appendDocuments(
       if (entry.file.mimeType === 'application/pdf') await addPdfPages(sheet, data)
       else await addImagePage(sheet, data)
     } catch (error) {
-      // One unreadable file does not lose the other nine. The separator has
-      // already been written, so the file still accounts for every document;
-      // this only adds why its pages are not behind it.
+      // One unreadable file does not lose the other nine.
       logger.warn(
         { err: error, documentName: entry.documentName },
-        'A document could not be added to the employee file',
+        'A document could not be added to the employee file and was left out',
       )
-      const page = sheet.pdf.addPage([A4_PORTRAIT.width, A4_PORTRAIT.height])
-      ownPages.add(sheet.pdf.getPageCount() - 1)
-      draw(page, 'This document could not be read, and is not in this file.', {
-        x: MARGIN,
-        y: A4_PORTRAIT.height - MARGIN - 20,
-        font: sheet.fonts.bold,
-        size: 11,
-      })
-      draw(page, 'Download it on its own to see what is wrong with it.', {
-        x: MARGIN,
-        y: A4_PORTRAIT.height - MARGIN - 38,
-        font: sheet.fonts.regular,
-        size: 10,
-        color: MUTED,
-      })
     }
   }
 }
