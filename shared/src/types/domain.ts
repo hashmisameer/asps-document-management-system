@@ -165,6 +165,19 @@ export interface DocumentType {
    * the office's rule.
    */
   requiredAtCreation: boolean
+  /**
+   * Whether HR may set this document aside for one employee.
+   *
+   * ESIC does not apply to everybody, so it may. PAN, Form 16 and the
+   * appointment letter are statutory: nobody at this company decides they do
+   * not apply to somebody, and a mis-click on one of those rows would take a
+   * document off an employee's file and out of every count.
+   *
+   * Data rather than code, like refuseOnCheckFailure beside it: which documents
+   * these are is an office decision about paperwork, and the next one should be
+   * an UPDATE rather than a deployment.
+   */
+  canBeMarkedNotRequired: boolean
   createdAt: string
   updatedAt: string
 }
@@ -239,6 +252,15 @@ export interface EmployeeDocument {
   documentName: string
   isMandatory: boolean
   requiresSignature: boolean
+  /**
+   * Whether this document type may be set aside for one employee at all.
+   *
+   * Carried on the row like isMandatory beside it, so the checklist can offer
+   * the option on an ESIC form and not on a PAN card without a second request.
+   * The server checks it too - see setNotRequired; hiding a button is a
+   * courtesy, not a control.
+   */
+  canBeMarkedNotRequired: boolean
 
   originalFileName: string | null
   fileSizeBytes: number | null

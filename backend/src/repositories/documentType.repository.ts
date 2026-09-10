@@ -30,6 +30,7 @@ interface DocumentTypeRow {
   RecognitionKeywords: string | null
   RefuseOnCheckFailure: boolean
   RequiredAtCreation: boolean
+  CanBeMarkedNotRequired: boolean
   CreatedAt: Date
   UpdatedAt: Date
 }
@@ -38,7 +39,7 @@ const SELECT_DOCUMENT_TYPE = `
     SELECT  dt.DocumentTypeId, dt.DocumentName, dt.DocumentCode, dt.IsMandatory,
             dt.IsActive, dt.RequiresSignature, dt.DeadlineValue, dt.DeadlineUnit,
             dt.SortOrder, dt.RequiredFields, dt.RecognitionKeywords,
-            dt.RefuseOnCheckFailure, dt.RequiredAtCreation,
+            dt.RefuseOnCheckFailure, dt.RequiredAtCreation, dt.CanBeMarkedNotRequired,
             dt.CreatedAt, dt.UpdatedAt
     FROM    dbo.DocumentTypes AS dt`
 
@@ -118,6 +119,7 @@ function toDocumentType(row: DocumentTypeRow): DocumentType {
     recognitionKeywords: parseKeywords(row.RecognitionKeywords),
     refuseOnCheckFailure: row.RefuseOnCheckFailure,
     requiredAtCreation: row.RequiredAtCreation,
+    canBeMarkedNotRequired: row.CanBeMarkedNotRequired,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }

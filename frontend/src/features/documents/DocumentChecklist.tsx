@@ -259,7 +259,15 @@ function ChecklistRow({
    * reversed.
    */
   const canSetNotRequired =
-    can(PERMISSIONS.DEADLINE_UPDATE) && !employeeHasLeft && (notRequired || !hasFile)
+    can(PERMISSIONS.DEADLINE_UPDATE) &&
+    !employeeHasLeft &&
+    // Only where the office has opened this type. PAN, Form 16 and the
+    // appointment letter are statutory - nobody here decides they do not apply
+    // to somebody - and the row that was marked before a type was closed can
+    // still be put back, because being unable to undo a decision is worse than
+    // the decision.
+    (notRequired || item.canBeMarkedNotRequired) &&
+    (notRequired || !hasFile)
   // There is no verification step. A document is done when its file is in:
   // isDocumentComplete already counts 'Uploaded', so nothing sits overdue
   // waiting for a second person to agree it arrived. A wrong document is

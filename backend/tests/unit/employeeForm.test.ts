@@ -88,6 +88,7 @@ function document(
     documentName: `Document ${documentId}`,
     isMandatory: true,
     requiresSignature: false,
+    canBeMarkedNotRequired: false,
     originalFileName: null,
     fileSizeBytes: null,
     mimeType: null,
