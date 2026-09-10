@@ -1,5 +1,7 @@
 import path from 'node:path'
 import { fileTypeFromBuffer } from 'file-type'
+import { PDFDocument } from 'pdf-lib'
+import sharp from 'sharp'
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
   ALLOWED_DOCUMENT_MIME_TYPES,
@@ -25,6 +27,16 @@ import { MalformedImageError, assertDecodablePng } from './pngIntegrity.service.
  * everything downstream, from the preview to the signature stamping, decides
  * what to do from the type, and a file that lies about itself will fail there
  * instead, further from the person who could fix it.
+ *
+ * AND THE FILE IS THEN OPENED. Knowing what a file claims to be is not the same
+ * as knowing it works: a half-downloaded PDF still begins '%PDF-'. See
+ * assertOpensCleanly, which is the difference between catching that here and
+ * discovering it weeks later, when somebody prints the employee's file.
+ *
+ * Everything in this module runs BEFORE anything is written. A file refused
+ * here leaves nothing behind - no bytes in the store, no row changed, the
+ * document still Pending - because at the moment it is refused, nothing has
+ * happened yet.
  */
 
 export interface InspectedFile {
@@ -106,21 +118,85 @@ export async function inspectDocumentUpload(file: UploadedFile): Promise<Inspect
     )
   }
 
-  // The same proof as a signature image, and for the same reason: an image
-  // document is rasterised for the identity check and embedded whole by the
-  // stamper, so a PNG that ends early would reach the same looping decoder.
-  if (detected.mime === 'image/png') {
+  await assertOpensCleanly(file.buffer, detected.mime)
+
+  return { extension, mimeType: detected.mime, safeOriginalName }
+}
+
+/**
+ * Opens the file for real, and refuses it if it will not open.
+ *
+ * THE GAP THIS CLOSES. Everything above reads the first few bytes: enough to
+ * know a file is not an .exe wearing a .pdf name, and nothing at all about
+ * whether the rest of it survived. A PDF whose download was cut off still
+ * begins '%PDF-', so it passed every check and was filed as received - and the
+ * damage surfaced weeks later when somebody tried to print the employee's file
+ * and half of it was missing.
+ *
+ * THIS IS THE ONE PLACE WHERE BLOCKING AN UPLOAD IS RIGHT, and it is worth
+ * being clear how it differs from the identity check, which blocks nothing. OCR
+ * failing to read a name means the READING failed; the document is a perfectly
+ * good photocopy and belongs on the record. This means the FILE is broken -
+ * unopenable now and unopenable in five years, when somebody needs it.
+ *
+ * The work is deliberately shallow: the file is opened and asked how many pages
+ * it has, or how large the image is. That is what catches a truncated or
+ * corrupt file. Rendering every page to be sure none of them is damaged would
+ * cost seconds per upload to catch almost nothing more.
+ */
+async function assertOpensCleanly(buffer: Buffer, mime: AllowedDocumentMimeType): Promise<void> {
+  if (mime === 'application/pdf') {
+    let pageCount: number
     try {
-      assertDecodablePng(file.buffer)
+      // ignoreEncryption, because a scan from an office photocopier is often
+      // 'encrypted' with an empty owner password - which stops nothing, and
+      // which those files have always been accepted with.
+      const pdf = await PDFDocument.load(buffer, { ignoreEncryption: true })
+      pageCount = pdf.getPageCount()
+    } catch {
+      throw new BadRequestError(
+        'This PDF could not be opened - it may be damaged, or protected with a password. ' +
+          'Check that it opens on your own machine, then upload it again.',
+      )
+    }
+
+    // A PDF with no pages parses perfectly and contains nothing. Preview shows
+    // an empty window, the employee file gains nothing, and the checklist says
+    // the document is in.
+    if (pageCount === 0) {
+      throw new BadRequestError(
+        'This PDF has no pages in it. Check the file, then upload it again.',
+      )
+    }
+    return
+  }
+
+  // A PNG is proved by its own chunk structure - see pngIntegrity.service.ts,
+  // which exists because a PNG that ends early sends pdf-lib's decoder into a
+  // loop on the one thread that serves every request.
+  if (mime === 'image/png') {
+    try {
+      assertDecodablePng(buffer)
     } catch (error) {
       if (error instanceof MalformedImageError) {
         throw new BadRequestError(`${error.message} Try exporting or scanning it again.`)
       }
       throw error
     }
+    return
   }
 
-  return { extension, mimeType: detected.mime, safeOriginalName }
+  // JPEG, WebP and TIFF: sharp reads the header and the structure behind it,
+  // and a file that has lost its end has no dimensions to report.
+  try {
+    const { width, height } = await sharp(buffer, { failOn: 'error' }).metadata()
+    if (!width || !height) throw new Error('no dimensions')
+  } catch {
+    throw new BadRequestError(
+      'This image could not be read - the file looks damaged. Scan or export it again, ' +
+        'then upload it.',
+    )
+  }
 }
 
 /**

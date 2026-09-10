@@ -101,7 +101,7 @@ export interface EmployeeFileData {
 /* The checklist row                                                           */
 /* -------------------------------------------------------------------------- */
 
-export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue'
+export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue' | 'Not required'
 
 /**
  * The three words this sheet uses for a document.
@@ -114,6 +114,11 @@ export type ChecklistStatus = 'Uploaded' | 'Pending' | 'Overdue'
  * was sent has been refused, so the paper is still to be collected.
  */
 export function checklistStatus(document: EmployeeDocument): ChecklistStatus {
+  // Asked first. A document this employee is not asked for is neither received
+  // nor outstanding, and a chasing sheet that lists it sends somebody after a
+  // form that was deliberately set aside.
+  if (document.notRequiredAt !== null) return 'Not required'
+
   const received =
     document.status === DOCUMENT_STATUS.UPLOADED ||
     document.status === DOCUMENT_STATUS.UNDER_REVIEW ||
@@ -448,12 +453,16 @@ function drawChecklist(sheet: Sheet, form: EmployeeFormData): void {
   const statuses = documents.map(checklistStatus)
   const received = statuses.filter((status) => status === 'Uploaded').length
   const overdue = statuses.filter((status) => status === 'Overdue').length
-  const outstanding = documents.length - received
+  // Documents this employee is not asked for come out of the total as well as
+  // out of the count received, so the sheet reads '9 of 9' rather than '9 of 10'
+  // with one that will never arrive.
+  const expected = statuses.filter((status) => status !== 'Not required').length
+  const outstanding = expected - received
 
   sectionHeading(sheet, 'Document checklist')
 
   sheet.y -= 14
-  draw(sheet.page, `${received} of ${documents.length} documents received`, {
+  draw(sheet.page, `${received} of ${expected} documents received`, {
     x: sheet.margin,
     y: sheet.y,
     font: sheet.fonts.bold,
@@ -600,9 +609,9 @@ export async function renderEmployeeForms(
  * One employee's file: their details, then their documents, in one PDF.
  *
  * The details page is ours and carries a footer. Everything after it is the
- * documents as they were filed, page for page, with only a separator in front
- * of each - nothing is stamped across a scanned card, because what this hands
- * over has to still be a copy of what the office holds.
+ * documents as they were filed, running straight on from one another with
+ * nothing in between - nothing is stamped across a scanned card, because what
+ * this hands over has to still be a copy of what the office holds.
  *
  * An employee with nothing on file gets the details page and stops there. That
  * is a true answer to 'send me their file', and a truer one than an error.
@@ -619,9 +628,10 @@ export async function renderEmployeeFile(file: EmployeeFileData, meta: PrintMeta
   drawDetails(sheet, fileDetailsOf(file.employee))
 
   // The details can run to a second page - a long address, an exit recorded -
-  // and every page they run to is one of ours.
+  // and every page they run to is one of ours. Everything appended after this
+  // point is somebody's document and is signed by nothing.
   const ownPages = new Set<number>(sheet.pdf.getPages().map((_, index) => index))
-  await appendDocuments(sheet, file.documents, ownPages)
+  await appendDocuments(sheet, file.documents)
 
   drawOwnFooters(sheet, ownPages, meta)
 

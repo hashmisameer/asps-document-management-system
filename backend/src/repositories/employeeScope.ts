@@ -55,12 +55,34 @@ export const COUNTABLE_EMPLOYEE =
 export const EFFECTIVE_LEFT = '(e.LastWorkingDate IS NOT NULL AND e.LastWorkingDate < @today)'
 
 /**
+ * A document that is not required of this employee.
+ *
+ * ESIC does not apply to everybody, and neither will PF. The decision is on the
+ * EMPLOYEE'S ROW rather than on the document type, because 'not applicable to
+ * this person' is a different statement from 'optional for everybody'.
+ *
+ * A document marked this way is not outstanding, not overdue, not chased and
+ * not counted against the employee - it is simply not expected. It stays on
+ * their checklist, labelled, so the decision is visible rather than looking
+ * like a document nobody noticed was missing.
+ */
+export const EXPECTED_DOCUMENT = 'd.NotRequiredAt IS NULL'
+
+/**
  * The document rows those employees own.
  *
  * `d.IsActive = 1` excludes the superseded row behind a replacement, so a
  * document that was uploaded twice is counted once.
+ *
+ * EXPECTED_DOCUMENT is here rather than at each call site for the reason this
+ * whole file exists: five of the seven places that count documents read this
+ * line, so a document that stops being expected stops being counted everywhere
+ * at once - the dashboard, the documents list, both reports and the daily
+ * chase email. The two that do not are the per-employee counters in
+ * employee.repository.ts and the complete/incomplete pair on the dashboard;
+ * both write their own scope and both apply this by hand.
  */
-export const COUNTABLE_DOCUMENT = `d.IsActive = 1 AND ${COUNTABLE_EMPLOYEE}`
+export const COUNTABLE_DOCUMENT = `d.IsActive = 1 AND ${EXPECTED_DOCUMENT} AND ${COUNTABLE_EMPLOYEE}`
 
 /**
  * The two identity cards, as an IN list.

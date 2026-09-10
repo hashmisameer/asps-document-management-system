@@ -68,6 +68,17 @@ documentRouter.post(
   documentController.overrideIdentityCheck,
 )
 
+/* Not required of THIS employee - and the undoing of it.
+
+   DEADLINE_UPDATE, which HR and Admin hold and a Viewer does not. This is the
+   same shape of decision as moving a deadline: it changes what the employee is
+   asked for, rather than recording something they produced. */
+documentRouter.patch(
+  '/:documentId/not-required',
+  requirePermission(PERMISSIONS.DEADLINE_UPDATE),
+  documentController.setNotRequired,
+)
+
 documentRouter.post(
   '/:documentId/reject',
   requirePermission(PERMISSIONS.DOCUMENT_REJECT),

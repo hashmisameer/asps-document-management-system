@@ -1,3 +1,4 @@
+import { PDFDocument, StandardFonts } from 'pdf-lib'
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOCUMENT_STATUS, ROLES, SIGNATURE_STATUS, type Role } from '@asps-dms/shared'
@@ -102,7 +103,22 @@ function signedInAs(role: Role) {
   return [`${COOKIE_NAME}=${'a'.repeat(64)}`]
 }
 
-const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n')
+/**
+ * A real PDF, built rather than hand-written.
+ *
+ * It used to be a few literal bytes beginning '%PDF-', which was enough while
+ * the upload only read the first few. The file is opened now and asked how
+ * many pages it has, and those bytes were never a PDF that would open - the
+ * fixture would have been refused exactly as a truncated upload is.
+ */
+async function realPdf(): Promise<Buffer> {
+  const pdf = await PDFDocument.create()
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  pdf.addPage([595.28, 841.89]).drawText('PAN CARD', { x: 60, y: 700, font, size: 18 })
+  return Buffer.from(await pdf.save())
+}
+
+const PDF_BYTES = await realPdf()
 
 const documentRecord = {
   documentId: 5,
