@@ -28,7 +28,7 @@ import {
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
-import { formatBytes, formatDate } from '../../lib/format.js'
+import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
 import {
   confirmDocumentIdentity,
   documentFileUrl,
@@ -259,7 +259,15 @@ function ChecklistRow({
    * reversed.
    */
   const canSetNotRequired =
-    can(PERMISSIONS.DEADLINE_UPDATE) && !employeeHasLeft && (notRequired || !hasFile)
+    can(PERMISSIONS.DEADLINE_UPDATE) &&
+    !employeeHasLeft &&
+    // Only where the office has opened this type. PAN, Form 16 and the
+    // appointment letter are statutory - nobody here decides they do not apply
+    // to somebody - and the row that was marked before a type was closed can
+    // still be put back, because being unable to undo a decision is worse than
+    // the decision.
+    (notRequired || item.canBeMarkedNotRequired) &&
+    (notRequired || !hasFile)
   // There is no verification step. A document is done when its file is in:
   // isDocumentComplete already counts 'Uploaded', so nothing sits overdue
   // waiting for a second person to agree it arrived. A wrong document is
@@ -372,7 +380,12 @@ function ChecklistRow({
           {notRequired && item.notRequiredByName ? (
             <p className="mt-1 max-w-56 text-xs text-slate-500">
               Marked by {item.notRequiredByName}
-              {item.notRequiredAt ? ` on ${formatDate(item.notRequiredAt)}` : ''}
+              {/* formatDateTime, not formatDate: this is a timestamp, and the
+                  date-only formatter reads 'YYYY-MM-DD' by splitting on '-'.
+                  Given a timestamp it built an Invalid Date and Intl threw,
+                  which blanked this page for every employee with a document
+                  marked here. */}
+              {item.notRequiredAt ? ` on ${formatDateTime(item.notRequiredAt)}` : ''}
             </p>
           ) : null}
 
@@ -431,7 +444,13 @@ function ChecklistRow({
         </td>
 
         <td className="px-4 py-2 align-top">
-          {item.dueDate ? (
+          {/* A document nobody is asked for has no deadline to show.
+              The row keeps its due date in the database, so undoing the
+              decision puts the original one back - it is simply not a date
+              anybody is working towards while this stands. */}
+          {notRequired ? (
+            <span className="text-xs text-slate-500">&mdash;</span>
+          ) : item.dueDate ? (
             <div className="flex flex-col gap-1">
               <span className="text-slate-700">{formatDate(item.dueDate)}</span>
               {deadline.state === DEADLINE_STATE.NOT_APPLICABLE ||

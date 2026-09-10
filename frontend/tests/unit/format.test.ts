@@ -66,3 +66,51 @@ describe('parseDisplayDate', () => {
     expect(toDisplayDate('')).toBe('')
   })
 })
+
+/**
+ * A date these cannot read must never take the page down.
+ *
+ * REPORTED FROM THE SERVER, 2026-09-10: marking one document as Not required
+ * blanked the whole employee page. A timestamp had been passed to formatDate,
+ * which reads 'YYYY-MM-DD' by splitting on '-' - the time part became NaN, the
+ * Date became Invalid, and Intl throws RangeError on an invalid Date. Thrown
+ * from inside a render, that unmounts everything above it: white screen, and
+ * the real message only in the browser console.
+ *
+ * A missing date on screen is a small, visible, self-explaining fault. An
+ * exception is a blank page. These pin the first and forbid the second.
+ */
+describe('a date that cannot be read', () => {
+  const UNREADABLE = [
+    ['null', null],
+    ['undefined', undefined],
+    ['an empty string', ''],
+    ['only spaces', '   '],
+    ['a word', 'not a date'],
+    ['a half-typed date', '2026-'],
+    ['a month that does not exist', '2026-13-45'],
+    ['the 31st of February', '2026-02-31'],
+    ['a timestamp where a date was expected', '2026-09-10T04:12:33.123Z'],
+    ['a number as text', '1757480000000'],
+  ] as const
+
+  for (const [name, value] of UNREADABLE) {
+    it(`shows a dash for ${name}, and does not throw`, () => {
+      expect(() => formatDate(value)).not.toThrow()
+      expect(formatDate(value)).toBe('-')
+    })
+  }
+
+  it('shows a dash for a timestamp nothing can parse, and does not throw', () => {
+    for (const value of [null, undefined, '', '   ', 'not a date', '2026-99-99T99:99:99Z']) {
+      expect(() => formatDateTime(value)).not.toThrow()
+      expect(formatDateTime(value)).toBe('-')
+    }
+  })
+
+  it('still renders the values that ARE readable', () => {
+    // The guard must not have made these quietly useless.
+    expect(formatDate('2026-09-01')).toBe('01/09/2026')
+    expect(formatDateTime('2026-09-10T04:12:33.123Z')).toContain('2026')
+  })
+})

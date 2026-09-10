@@ -143,6 +143,7 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     documentName: 'PAN Card',
     isMandatory: true,
     requiresSignature: false,
+    canBeMarkedNotRequired: false,
     originalFileName: null,
     fileSizeBytes: null,
     mimeType: null,
@@ -601,6 +602,15 @@ describe('openForDelivery', () => {
 describe('setNotRequired', () => {
   beforeEach(() => {
     db.setNotRequired.mockResolvedValue(true)
+    // ESIC: a type the office has opened. The describe below covers one it
+    // has not.
+    db.findDocumentType.mockResolvedValue({
+      documentTypeId: 1,
+      documentName: 'ESIC Form',
+      requiredFields: [],
+      recognitionKeywords: [],
+      canBeMarkedNotRequired: true,
+    })
   })
 
   it('marks a document nobody is waiting for, in the actor s own name', async () => {

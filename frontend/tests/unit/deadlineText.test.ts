@@ -30,6 +30,7 @@ function typeFor(documentCode: string): DocumentType {
     recognitionKeywords: [],
     refuseOnCheckFailure: false,
     requiredAtCreation: false,
+    canBeMarkedNotRequired: false,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
   }

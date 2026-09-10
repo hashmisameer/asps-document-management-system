@@ -466,6 +466,23 @@ export async function setNotRequired(
 ): Promise<EmployeeDocument> {
   const record = await loadRecord(documentId)
 
+  // WHICH DOCUMENTS MAY BE SET ASIDE AT ALL, checked here and not only by
+  // hiding the button. A URL is a URL, and this one takes a document off an
+  // employee's file and out of every count.
+  //
+  // Only on the way IN. A type the office has since closed may still have rows
+  // marked from when it was open, and those must always be reversible - being
+  // unable to undo a decision is worse than the decision.
+  if (notRequired) {
+    const documentType = await documentTypeRepository.findById(record.documentTypeId)
+    if (!documentType?.canBeMarkedNotRequired) {
+      throw new ConflictError(
+        `${record.documentName} is required of every employee, so it cannot be marked as ` +
+          'not required. Ask your administrator if that is wrong.',
+      )
+    }
+  }
+
   if (notRequired && record.originalFileName !== null) {
     throw new ConflictError(
       'This document has already been received, so it cannot be marked as not required. ' +

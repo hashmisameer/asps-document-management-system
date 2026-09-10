@@ -58,6 +58,7 @@ interface EmployeeDocumentRow {
   DocumentName: string
   IsMandatory: boolean
   RequiresSignature: boolean
+  CanBeMarkedNotRequired: boolean
   OriginalFileName: string | null
   FileSizeBytes: string | number | null
   MimeType: string | null
@@ -87,6 +88,7 @@ const SELECT_EMPLOYEE_DOCUMENT = `
     SELECT  d.DocumentId, d.EmployeeId, e.EmployeeCode, e.EmployeeName,
             e.LastWorkingDate, dt.DeadlineUnit,
             d.DocumentTypeId, dt.DocumentName, dt.IsMandatory, dt.RequiresSignature,
+            dt.CanBeMarkedNotRequired,
             d.OriginalFileName, d.FileSizeBytes, d.MimeType, d.PageCount,
             d.ProcessedFilePath, d.Status, d.SignatureStatus, d.DueDate,
             d.NotRequiredAt, nr.FullName AS NotRequiredByName,
@@ -190,6 +192,7 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     documentName: row.DocumentName,
     isMandatory: row.IsMandatory,
     requiresSignature: row.RequiresSignature,
+    canBeMarkedNotRequired: row.CanBeMarkedNotRequired,
     originalFileName: row.OriginalFileName,
     // BIGINT arrives as a string from tedious when it exceeds the safe integer
     // range; a file size never does, but Number() keeps the type honest.

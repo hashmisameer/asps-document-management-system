@@ -1,4 +1,4 @@
-import { parseDateOnly } from '@asps-dms/shared'
+import { isDateOnly, parseDateOnly } from '@asps-dms/shared'
 
 /**
  * Display formatting.
@@ -35,16 +35,46 @@ const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
   minute: '2-digit',
 })
 
-/** '2026-09-01' -> '01/09/2026'. */
-export function formatDate(dateOnly: string | null): string {
-  if (!dateOnly) return '-'
+/** Shown where a date should be and there is nothing usable to put there. */
+const NO_DATE = '-'
+
+/**
+ * A DATE A COMPONENT CANNOT RENDER MUST NOT TAKE THE PAGE DOWN.
+ *
+ * Intl throws RangeError on an invalid Date, and thrown from inside a render it
+ * unmounts everything above it - the whole employee page goes white, with the
+ * real message only in the browser console.
+ *
+ * That is not a theory. A timestamp was passed to formatDate, which reads
+ * 'YYYY-MM-DD' by splitting on '-': the time part became NaN, the Date became
+ * Invalid, and marking one document as Not required blanked the page for
+ * everybody looking at that employee.
+ *
+ * So every value that is not a date it can read - null, undefined, an empty
+ * string, a timestamp where a date was expected, anything at all - comes back
+ * as a dash. A missing date on the screen is a small, visible, self-explaining
+ * fault; an exception here is a blank page.
+ */
+/**
+ * '2026-09-01' -> '01/09/2026'. Anything it cannot read is a dash.
+ *
+ * isDateOnly rather than a NaN check, and the difference matters: JavaScript
+ * rolls an impossible date over instead of refusing it, so '2026-13-45' becomes
+ * 14/02/2027 - a plausible wrong answer, which is worse than an obvious one.
+ * The shared rule insists the value round-trips, so only a real calendar day in
+ * 'YYYY-MM-DD' renders, and a timestamp does not.
+ */
+export function formatDate(dateOnly: string | null | undefined): string {
+  if (!dateOnly || !isDateOnly(dateOnly)) return NO_DATE
   return DATE_FORMAT.format(parseDateOnly(dateOnly))
 }
 
-/** An ISO instant -> local date and time. */
-export function formatDateTime(iso: string | null): string {
-  if (!iso) return '-'
-  return DATE_TIME_FORMAT.format(new Date(iso))
+/** An ISO instant -> local date and time. Anything it cannot read is a dash. */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return NO_DATE
+
+  const parsed = new Date(iso)
+  return Number.isNaN(parsed.getTime()) ? NO_DATE : DATE_TIME_FORMAT.format(parsed)
 }
 
 /** '1.4 MB'. Sizes are shown so someone can tell a scan from a photograph. */
