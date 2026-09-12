@@ -92,7 +92,7 @@ describe('the document list', () => {
     )
   })
 
-  it('is the ten the office keeps, and nothing else', () => {
+  it('is the nine the office keeps, and nothing else', () => {
     expect(types.map((type) => type.documentName)).toEqual([
       'Appointment Letter',
       'Bio Data Form',
@@ -100,11 +100,16 @@ describe('the document list', () => {
       'PAN Card',
       'PF Form',
       'ESIC Form',
-      'Service Card',
       'Payment of Gratuity',
       'Form No. 16',
       'Confirmation Letter',
     ])
+  })
+
+  it('has no Service Card, which the office retired in 0029', () => {
+    // Collected for years and retired on 2026-09-12. A fresh database must
+    // never grow it back.
+    expect(types.some((type) => type.documentCode === 'SERVICE_CARD')).toBe(false)
   })
 
   it('has no Bank Proof, which was never on the company list', () => {
@@ -156,11 +161,10 @@ describe('the dates a new employee is given', () => {
   )
 
   it('fills every one of them in from the joining date', () => {
-    // Nobody types these. Seven days for the five collected on the way in.
+    // Nobody types these. Seven days for the four collected on the way in.
     for (const code of [
       'APPOINTMENT_LETTER',
       'BIO_DATA',
-      'SERVICE_CARD',
       'GRATUITY_FORM',
       'FORM_16',
     ]) {
@@ -230,7 +234,7 @@ describe('what the checklist says about each row', () => {
   })
 
   it('counts every other document in days', () => {
-    expect(deadlineFor('SERVICE_CARD', '2026-09-01', '2026-09-08').label).toBe('Due in 7 days')
+    expect(deadlineFor('GRATUITY_FORM', '2026-09-01', '2026-09-08').label).toBe('Due in 7 days')
     expect(deadlineFor('FORM_16', '2026-09-20', '2026-09-08').label).toBe('Overdue by 12 days')
     expect(deadlineFor('BIO_DATA', '2026-09-08', '2026-09-08').label).toBe('Due today')
   })
