@@ -5,8 +5,8 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  *
  * THE ONE PLACE THIS IS DECIDED. It was configurable - a Settings screen wrote
  * it into dbo.DocumentTypes - and the office asked for it back in code: the list
- * has been the same ten documents for years, and a screen that can change it is
- * a screen somebody changes by accident on a Friday.
+ * has been the same documents for years, and a screen that can change it is a
+ * screen somebody changes by accident on a Friday.
  *
  * The database still holds a row per type, because every checklist row points at
  * one and a file uploaded years ago has to keep pointing at something. What it
@@ -81,13 +81,6 @@ export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
     isMandatory: false,
     deadlineValue: null,
     deadlineUnit: null,
-  },
-  {
-    documentCode: 'SERVICE_CARD',
-    documentName: 'Service Card',
-    isMandatory: true,
-    deadlineValue: 7,
-    deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
     documentCode: 'GRATUITY_FORM',

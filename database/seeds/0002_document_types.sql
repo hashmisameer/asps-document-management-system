@@ -15,6 +15,9 @@
        9  Form No. 16                        7 days
       10  Confirmation letter                6 months from date of joining
 
+   Service Card was retired on 2026-09-12 (migration 0029) and is no longer
+   seeded.
+
    ONLY the Aadhaar Card and the PAN Card are mandatory. Every other document is
    OPTIONAL, and the marks on the original sheet - the struck-through ones, the
    circled (E), the unmarked Service Card - do not make any of them required.
@@ -84,9 +87,6 @@ USING (VALUES
 
     ('ESIC_FORM',          N'ESIC Form',          0, 1, NULL, NULL,   60,
      N'EmployeeName'),
-
-    ('SERVICE_CARD',       N'Service Card',       1, 1,  7, 'DAY',    70,
-     N'EmployeeName,EmployeeCode,JoiningDate'),
 
     ('GRATUITY_FORM',      N'Payment of Gratuity',   1, 1,  7, 'DAY',    80,
      N'EmployeeName'),

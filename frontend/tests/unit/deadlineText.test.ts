@@ -47,13 +47,13 @@ describe('the deadline column', () => {
   it('stays blank while the date is still being typed', () => {
     // A half-typed date gives no deadlines rather than nonsense ones.
     for (const halfTyped of ['2026', '2026-0', '2026-09', '2026-09-']) {
-      expect(deadlineText(typeFor('SERVICE_CARD'), halfTyped), halfTyped).toBe('')
+      expect(deadlineText(typeFor('GRATUITY_FORM'), halfTyped), halfTyped).toBe('')
     }
   })
 
   it('fills in the moment the date is complete', () => {
     expect(deadlineText(typeFor('APPOINTMENT_LETTER'), '2026-09-01')).toBe('08/09/2026')
-    expect(deadlineText(typeFor('SERVICE_CARD'), '2026-09-01')).toBe('08/09/2026')
+    expect(deadlineText(typeFor('GRATUITY_FORM'), '2026-09-01')).toBe('08/09/2026')
   })
 
   it('moves every row when the joining date is corrected', () => {
