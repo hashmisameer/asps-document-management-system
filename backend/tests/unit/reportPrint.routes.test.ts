@@ -161,3 +161,58 @@ describe('printing a document chase list', () => {
     expect(db.allEmployees).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * The same list for the spreadsheet: every row, as JSON, through the same
+ * unpaged query the PDF reads. The CSV was once built from the page on screen,
+ * which is the exact mistake the print route exists to avoid.
+ */
+const ALL_URL = '/api/reports/by-document-type/5/employees/all'
+
+describe('the whole document chase list, for the spreadsheet', () => {
+  it('lets a Viewer read it, and returns every row the query gives', async () => {
+    const response = await request(app).get(ALL_URL).set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(200)
+    expect(response.headers['content-type']).toContain('application/json')
+    expect(response.body).toEqual({
+      rows: [
+        expect.objectContaining({ employeeCode: 'EMP-1001', state: 'Overdue', daysOverdue: 14 }),
+      ],
+    })
+  })
+
+  it('passes the screen filters and sort through unchanged, and asks for every row', async () => {
+    await request(app)
+      .get(`${ALL_URL}?department=CUTTING&onlyOverdue=true&outstandingOnly=false&sortBy=employeeName&sortDir=desc`)
+      .set('Cookie', signedInAs(ROLES.HR))
+
+    // The same filters and the same ORDER BY as the table - so the file reads
+    // in the order the person exporting it was looking at.
+    expect(db.allEmployees).toHaveBeenCalledWith({
+      documentTypeId: 5,
+      department: 'CUTTING',
+      onlyOverdue: true,
+      outstandingOnly: false,
+      sortBy: 'employeeName',
+      sortDir: 'desc',
+    })
+    expect(db.pagedEmployees).not.toHaveBeenCalled()
+  })
+
+  it('ignores a page number a caller sends anyway', async () => {
+    await request(app).get(`${ALL_URL}?page=3&pageSize=25`).set('Cookie', signedInAs(ROLES.HR))
+
+    const [filters] = db.allEmployees.mock.calls[0] ?? []
+    expect(filters).not.toHaveProperty('page')
+    expect(filters).not.toHaveProperty('pageSize')
+    expect(db.pagedEmployees).not.toHaveBeenCalled()
+  })
+
+  it('refuses an unauthenticated request', async () => {
+    const response = await request(app).get(ALL_URL)
+
+    expect(response.status).toBe(401)
+    expect(db.allEmployees).not.toHaveBeenCalled()
+  })
+})

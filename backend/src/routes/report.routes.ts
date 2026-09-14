@@ -28,6 +28,15 @@ reportRouter.get(
   reportController.employeesForDocumentType,
 )
 
+/* The same list without its paging, for the spreadsheet. Its own path rather
+   than an 'all' flag on the one above, so the paged route stays paged whatever
+   a caller puts in the query string. */
+reportRouter.get(
+  '/by-document-type/:documentTypeId/employees/all',
+  requirePermission(PERMISSIONS.REPORT_READ),
+  reportController.allEmployeesForDocumentType,
+)
+
 /* The same list as a PDF. Its own path rather than a format parameter on the
    one above, so the JSON route keeps returning JSON whatever a caller asks for
    in a query string. */

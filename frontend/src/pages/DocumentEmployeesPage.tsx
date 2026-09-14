@@ -12,6 +12,7 @@ import { formatDate } from '../lib/format.js'
 import { employeeKeys, fetchFacets } from '../features/employees/api.js'
 import { documentTypeKeys, listDocumentTypes } from '../features/employees/api.js'
 import {
+  fetchAllEmployeesForDocumentType,
   fetchEmployeesForDocumentType,
   printDocumentEmployeeList,
   reportKeys,
@@ -28,7 +29,10 @@ import {
  * shown here is the server's own total, not the length of the page.
  *
  * Paged rather than loaded whole. There are 568 employees; a screen that shows
- * twenty-five of them has no business asking for all of them.
+ * twenty-five of them has no business asking for all of them. The two exports
+ * are the exception: the PDF and the CSV both ask the server for every row the
+ * filters match, because a file that quietly held one page of them was
+ * forwarded as if it were the whole list.
  */
 
 const PAGE_SIZE = 25
@@ -87,23 +91,13 @@ export function DocumentEmployeesPage() {
   // because the office asked to see them - they simply never read as overdue.
   const tracksOverdue = type?.isMandatory ?? true
 
-  const error = list.error instanceof ApiError ? list.error : null
-  const printError = print.error instanceof ApiError ? print.error : null
-  const total = list.data?.total ?? 0
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
-
-  const sortOn = (key: DocumentEmployeeSortKey) => {
-    if (sortBy === key) {
-      setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortBy(key)
-      setSortDir('asc')
-    }
-    setPage(1)
-  }
-
   /**
-   * The list as it is on screen, as a spreadsheet.
+   * The list as a spreadsheet.
+   *
+   * Every row the filters match, in the order on screen - the same filters and
+   * the same sort the table and the PDF use, with only the page stripped. It
+   * was built from the rows already on screen, which was one page of them, and
+   * a file that stops at row twenty-five is forwarded as if it were complete.
    *
    * NO identity numbers and no pay. This file is emailed to a department head,
    * which puts it outside every control this system has - so it carries only
@@ -129,6 +123,27 @@ export function DocumentEmployeesPage() {
     )
   }
 
+  const exportCsv = useMutation({
+    mutationFn: () => fetchAllEmployeesForDocumentType(documentTypeId, filters),
+    onSuccess: exportRows,
+  })
+
+  const error = list.error instanceof ApiError ? list.error : null
+  const printError = print.error instanceof ApiError ? print.error : null
+  const exportError = exportCsv.error instanceof ApiError ? exportCsv.error : null
+  const total = list.data?.total ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const sortOn = (key: DocumentEmployeeSortKey) => {
+    if (sortBy === key) {
+      setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortBy(key)
+      setSortDir('asc')
+    }
+    setPage(1)
+  }
+
   return (
     <main>
       <Link to="/reports" className="text-sm text-slate-600 hover:text-slate-900">
@@ -148,7 +163,8 @@ export function DocumentEmployeesPage() {
         </div>
 
         {/* Both, deliberately. The spreadsheet is what gets forwarded to a
-            department head; the PDF is what gets carried round and ticked. */}
+            department head; the PDF is what gets carried round and ticked.
+            Both hold every row the filters match, not the page on screen. */}
         {list.data && list.data.rows.length > 0 ? (
           <div className="flex items-center gap-2">
             <Button
@@ -159,7 +175,12 @@ export function DocumentEmployeesPage() {
             >
               Print list
             </Button>
-            <Button variant="secondary" onClick={() => exportRows(list.data.rows)}>
+            <Button
+              variant="secondary"
+              busy={exportCsv.isPending}
+              busyLabel="Preparing..."
+              onClick={() => exportCsv.mutate()}
+            >
               Export CSV
             </Button>
           </div>
@@ -221,6 +242,14 @@ export function DocumentEmployeesPage() {
         <div className="mt-4">
           <Alert title="Could not print that list" referenceId={printError.referenceId}>
             {printError.message}
+          </Alert>
+        </div>
+      ) : null}
+
+      {exportError ? (
+        <div className="mt-4">
+          <Alert title="Could not export that list" referenceId={exportError.referenceId}>
+            {exportError.message}
           </Alert>
         </div>
       ) : null}
