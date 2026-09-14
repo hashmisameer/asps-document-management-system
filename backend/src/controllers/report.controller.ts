@@ -68,6 +68,27 @@ export const employeesForDocumentType: RequestHandler = async (req, res) => {
 }
 
 /**
+ * The same list, whole, for the spreadsheet.
+ *
+ * Parsed with the PRINT schema - the filters and the sort, and no paging - and
+ * read through the same unpaged query the PDF is drawn from. The CSV used to be
+ * built from the twenty-five rows on screen, which handed a department head a
+ * file that silently left everybody on the other pages off it: the mistake the
+ * print route was built to avoid, made again one button over.
+ *
+ * JSON rather than CSV, because the file itself is still written in the
+ * browser: the columns and the Excel-safe escaping live in one place there,
+ * and a second copy here would be the two drifting apart.
+ */
+export const allEmployeesForDocumentType: RequestHandler = async (req, res) => {
+  const documentTypeId = idParamSchema.parse(req.params.documentTypeId)
+  const filters = parseQuery(req, printDocumentEmployeesQuerySchema)
+
+  const rows = await reportRepository.allEmployeesForDocumentType({ ...filters, documentTypeId })
+  res.json({ rows })
+}
+
+/**
  * requireAuth runs before every route here, so a missing user means the router
  * was wired wrong. Failing closed is the only safe way to report that.
  */

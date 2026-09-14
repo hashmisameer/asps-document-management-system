@@ -139,6 +139,28 @@ export async function fetchEmployeesForDocumentType(
 }
 
 /**
+ * The same list, whole, for the spreadsheet.
+ *
+ * The page and page size are stripped exactly as they are for printing, and
+ * the filters and the sort go through untouched: what comes back is every
+ * employee the screen's filters match, in the screen's order. The CSV was once
+ * built from the page on screen, which left everybody on the other pages out
+ * of a file that was then forwarded as complete.
+ */
+export async function fetchAllEmployeesForDocumentType(
+  documentTypeId: number,
+  filters: DocumentEmployeeFilters,
+): Promise<DocumentEmployeeRow[]> {
+  const { page: _page, pageSize: _pageSize, ...unpaged } = filters
+
+  const response = await api.get<{ rows: DocumentEmployeeRow[] }>(
+    `/reports/by-document-type/${documentTypeId}/employees/all`,
+    { params: unpaged },
+  )
+  return response.data.rows
+}
+
+/**
  * The same list as a PDF, built by the server.
  *
  * The PAGE AND PAGE SIZE ARE DELIBERATELY NOT SENT. The endpoint prints every
