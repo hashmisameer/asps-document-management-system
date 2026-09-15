@@ -98,7 +98,7 @@ describe('the document list', () => {
       'Bio Data Form',
       'Aadhaar Card',
       'PAN Card',
-      'PF FORM/FORM 11',
+      'PF Form / Form 11',
       'ESIC Form',
       'Payment of Gratuity',
       'Form No. 16',

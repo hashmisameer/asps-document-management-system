@@ -70,7 +70,7 @@ export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
   },
   {
     documentCode: 'PF_FORM',
-    documentName: 'PF FORM/FORM 11',
+    documentName: 'PF Form / Form 11',
     isMandatory: false,
     deadlineValue: null,
     deadlineUnit: null,
