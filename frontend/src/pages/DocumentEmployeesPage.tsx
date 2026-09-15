@@ -105,9 +105,13 @@ export function DocumentEmployeesPage() {
    */
   const exportRows = (rows: DocumentEmployeeRow[]) => {
     downloadCsv(
-      `asps-dms-${(type?.documentName ?? 'document').toLowerCase().replace(/\s+/g, '-')}-${new Date()
-        .toISOString()
-        .slice(0, 10)}.csv`,
+      // Reduced to what a file name can hold: 'PF FORM/FORM 11' is a document,
+      // not a folder, and a slash in a download name is whatever the browser
+      // decides to make of it.
+      `asps-dms-${(type?.documentName ?? 'document')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')}-${new Date().toISOString().slice(0, 10)}.csv`,
       toCsv(rows, [
         { header: 'Employee ID', value: (r) => r.employeeCode },
         { header: 'Name', value: (r) => r.employeeName },
