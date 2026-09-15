@@ -51,7 +51,10 @@ import {
  * The values are the enum the API accepts; only the labels are for reading.
  */
 const JOINED_WITHIN_CHOICES = [
-  { value: 'week', label: 'Last week' },
+  /* 'Last 7 days', because that is what it is: a rolling seven days back from
+     today, not the previous calendar week. The value stays 'week' - it is in
+     the URL, and a bookmark does not know the label changed. */
+  { value: 'week', label: 'Last 7 days' },
   { value: 'month', label: 'Last month' },
   { value: 'sixMonths', label: 'Last 6 months' },
   { value: 'year', label: 'Last year' },
