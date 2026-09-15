@@ -78,7 +78,7 @@ describe('needs attention', () => {
     expect(byKey(tiles, 'overdue').to).toBe('/documents?state=overdue')
     expect(byKey(tiles, 'dueSoon').to).toBe('/documents?state=dueSoon')
     expect(filtersFor(byKey(tiles, 'missingIdCard').to).missingIdCard).toBe(true)
-    expect(filtersFor(byKey(tiles, 'withoutSignature').to).withoutSignature).toBe(true)
+    expect(filtersFor(byKey(tiles, 'withoutSignature').to).signature).toBe('unsigned')
   })
 
   it('sends the document tiles to the documents list, not the employee list', () => {
@@ -240,7 +240,7 @@ describe('every tile', () => {
       25,
     )
 
-    expect(query.withoutSignature).toBe(true)
+    expect(query.signature).toBe('unsigned')
     expect(query.status).toBe('active')
     expect(query.page).toBe(1)
   })

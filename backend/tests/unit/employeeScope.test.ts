@@ -262,13 +262,33 @@ describe('the employee tiles and the employee list', () => {
 
   it('opens Pending employee signature on the employees who have never signed', async () => {
     const summary = await dashboardSql()
-    const list = await employeeListSql({ withoutSignature: true })
+    const list = await employeeListSql({ signature: 'unsigned' })
 
     expect(summary).toContain('NOT EXISTS (SELECT 1 FROM dbo.EmployeeSignatures')
     expect(squash(list)).toContain('NOT EXISTS ( SELECT 1 FROM dbo.EmployeeSignatures AS sig')
     // An enrolled signature that was later replaced leaves an inactive row
     // behind; both sides count only the live one.
     expect(squash(list)).toContain('sig.IsActive = 1')
+  })
+
+  it('still reads the old withoutSignature flag as unsigned', async () => {
+    // The dashboard linked to ?withoutSignature=true for a fortnight, and a
+    // bookmark does not know the spelling changed.
+    const list = await employeeListSql({ withoutSignature: true })
+
+    expect(squash(list)).toContain('NOT EXISTS ( SELECT 1 FROM dbo.EmployeeSignatures AS sig')
+  })
+
+  it('lists the signed as the exact complement of the unsigned', async () => {
+    const signed = squash(await employeeListSql({ signature: 'signed' }))
+    const unsigned = squash(await employeeListSql({ signature: 'unsigned' }))
+
+    // The same subquery, with and without NOT - so the two halves add up to
+    // the whole and nobody is in both.
+    const clause = 'EXISTS ( SELECT 1 FROM dbo.EmployeeSignatures AS sig WHERE sig.EmployeeId = e.EmployeeId AND sig.IsActive = 1 )'
+    expect(signed).toContain(`AND ${clause}`)
+    expect(signed).not.toContain(`NOT ${clause}`)
+    expect(unsigned).toContain(`NOT ${clause}`)
   })
 
   it('splits by gender the way the dashboard splits it', async () => {

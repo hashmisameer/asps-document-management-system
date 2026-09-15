@@ -8,6 +8,7 @@ import {
   type CreateEmployeeInput,
   type Employee,
   type EmployeeDocumentCounts,
+  type EmployeeListAllQuery,
   type EmployeeListItem,
   type EmployeeListQuery,
   type EmployeeProfile,
@@ -45,6 +46,23 @@ interface EmployeeCountsRow {
   Overdue: number | null
   SignatureReview: number | null
 }
+
+/** The list's rows carry whether the person has signed; the profile reads when. */
+interface EmployeeListRow extends EmployeeRow {
+  HasSignature: number
+}
+
+/**
+ * Whether this employee has signed on the pad.
+ *
+ * ONE expression for the column the list shows, the filter it offers, and the
+ * dashboard's 'Pending employee signature' tile, so the three cannot disagree
+ * about who has signed. Names the employee table `e`.
+ */
+const HAS_SIGNATURE = `EXISTS (
+      SELECT 1 FROM dbo.EmployeeSignatures AS sig
+      WHERE  sig.EmployeeId = e.EmployeeId AND sig.IsActive = 1
+    )`
 
 interface EmployeeRow extends EmployeeCountsRow {
   EmployeeId: number
@@ -232,8 +250,20 @@ const SORT_COLUMNS: Readonly<Record<EmployeeSortKey, string>> = {
   createdAt: 'e.CreatedAt',
 }
 
-export async function list(query: EmployeeListQuery): Promise<Paginated<EmployeeListItem>> {
-  const request = bindCountParams(await createRequest(), todayDateOnly())
+/**
+ * The predicates and the ordering, built once for both readers of the list.
+ *
+ * The screen pages through it; 'select all' and the spreadsheet take the whole
+ * of it. They MUST select the same people in the same order - a CSV that
+ * quietly holds a different set from the table it was exported from is worse
+ * than no CSV - so the two share this, and the only difference between them is
+ * the paging. Every parameter a condition names is bound here, on the request
+ * passed in.
+ */
+function employeeListShape(
+  request: sql.Request,
+  query: EmployeeListAllQuery,
+): { where: string; orderBy: string } {
   const conditions: string[] = []
 
   // 'Only the archived' is a different question from 'archived as well', and
@@ -323,11 +353,17 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
     )`)
   }
 
-  if (query.withoutSignature) {
-    conditions.push(`NOT EXISTS (
-      SELECT 1 FROM dbo.EmployeeSignatures AS sig
-      WHERE  sig.EmployeeId = e.EmployeeId AND sig.IsActive = 1
-    )`)
+  /*
+   * The employee's own signature, not any document's.
+   *
+   * EXISTS and NOT EXISTS over one expression, so 'signed' and 'unsigned'
+   * between them return every employee the other filters allow and never the
+   * same one twice. The old withoutSignature flag still reads as 'unsigned':
+   * the dashboard tile linked to it, and a bookmark does not know it changed.
+   */
+  const signature = query.signature ?? (query.withoutSignature ? 'unsigned' : undefined)
+  if (signature) {
+    conditions.push(signature === 'signed' ? HAS_SIGNATURE : `NOT ${HAS_SIGNATURE}`)
   }
 
   /*
@@ -361,11 +397,30 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
 
   // Literals only: every condition above is a fixed string naming a parameter,
   // never a caller's value.
-  const WHERE_CLAUSE = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
   const DIRECTION = query.sortDir === 'desc' ? 'DESC' : 'ASC'
   // EmployeeId breaks ties so paging is stable: without it, two rows that sort
   // equally can appear on two pages, or on none.
-  const ORDER_BY_CLAUSE = `${SORT_COLUMNS[query.sortBy]} ${DIRECTION}, e.EmployeeId ASC`
+  return {
+    where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    orderBy: `${SORT_COLUMNS[query.sortBy]} ${DIRECTION}, e.EmployeeId ASC`,
+  }
+}
+
+/** The columns both list queries select. Written once so the two cannot drift apart. */
+const SELECT_LIST_ROW = `
+      SELECT ${SELECT_EMPLOYEE_LIST_COLUMNS},
+             c.Total, c.Completed, c.Overdue, c.SignatureReview,
+             CASE WHEN ${HAS_SIGNATURE} THEN 1 ELSE 0 END AS HasSignature
+      FROM   dbo.Employees AS e
+      ${COUNTS_APPLY}`
+
+function toListItem(row: EmployeeListRow): EmployeeListItem {
+  return { ...toEmployee(row), counts: toCounts(row), hasSignature: row.HasSignature === 1 }
+}
+
+export async function list(query: EmployeeListQuery): Promise<Paginated<EmployeeListItem>> {
+  const request = bindCountParams(await createRequest(), todayDateOnly())
+  const { where: WHERE_CLAUSE, orderBy: ORDER_BY_CLAUSE } = employeeListShape(request, query)
 
   request
     .input('offset', sql.Int, (query.page - 1) * query.pageSize)
@@ -373,11 +428,8 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
 
   // Two statements in one round trip, so the page and the total it reports
   // are read against the same state of the table.
-  const result = await request.query<EmployeeRow>(`
-      SELECT ${SELECT_EMPLOYEE_LIST_COLUMNS},
-             c.Total, c.Completed, c.Overdue, c.SignatureReview
-      FROM   dbo.Employees AS e
-      ${COUNTS_APPLY}
+  const result = await request.query<EmployeeListRow>(`
+      ${SELECT_LIST_ROW}
       ${WHERE_CLAUSE}
       ORDER BY ${ORDER_BY_CLAUSE}
       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
@@ -390,12 +442,31 @@ export async function list(query: EmployeeListQuery): Promise<Paginated<Employee
   const totalCount = countRecordset?.[0]?.TotalCount ?? 0
 
   return {
-    items: result.recordset.map((row) => ({ ...toEmployee(row), counts: toCounts(row) })),
+    items: result.recordset.map(toListItem),
     page: query.page,
     pageSize: query.pageSize,
     totalCount,
     totalPages: Math.max(1, Math.ceil(totalCount / query.pageSize)),
   }
+}
+
+/**
+ * Every employee the filters match, in the order the screen would show them.
+ *
+ * What 'select all' selects and what the spreadsheet holds. The same predicates
+ * and the same ORDER BY as the page above, with nothing fetched by offset: the
+ * only line that differs is the one that is missing.
+ */
+export async function listAll(query: EmployeeListAllQuery): Promise<EmployeeListItem[]> {
+  const request = bindCountParams(await createRequest(), todayDateOnly())
+  const { where: WHERE_CLAUSE, orderBy: ORDER_BY_CLAUSE } = employeeListShape(request, query)
+
+  const result = await request.query<EmployeeListRow>(`
+      ${SELECT_LIST_ROW}
+      ${WHERE_CLAUSE}
+      ORDER BY ${ORDER_BY_CLAUSE}`)
+
+  return result.recordset.map(toListItem)
 }
 
 export async function findById(employeeId: number): Promise<EmployeeProfile | null> {
