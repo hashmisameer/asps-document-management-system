@@ -4,8 +4,9 @@ import {
   type EmployeeStatusFilter,
   type GenderFilter,
   type JoinedWithinPeriod,
+  type SignatureFilter,
 } from '@asps-dms/shared'
-import type { EmployeeListParams } from './api.js'
+import type { EmployeeListAllParams, EmployeeListParams } from './api.js'
 
 /**
  * The employee list's filters, held in the URL.
@@ -34,7 +35,11 @@ export interface EmployeeFilters {
   archivedOnly: boolean
   gender: GenderFilter | ''
   missingIdCard: boolean
-  withoutSignature: boolean
+  /**
+   * The employee's own signature - the one on the pad - not any document's.
+   * 'unsigned' is what the dashboard's 'Pending employee signature' tile opens.
+   */
+  signature: SignatureFilter | ''
   leftThisYear: boolean
   /** Whether their whole checklist is in - what the two Documents cards open. */
   checklist: 'complete' | 'incomplete' | ''
@@ -54,7 +59,7 @@ export const DEFAULT_EMPLOYEE_FILTERS: EmployeeFilters = {
   archivedOnly: false,
   gender: '',
   missingIdCard: false,
-  withoutSignature: false,
+  signature: '',
   leftThisYear: false,
   checklist: '',
   sortBy: 'employeeName',
@@ -122,6 +127,7 @@ const STATUSES: readonly string[] = Object.values(EMPLOYEE_STATUS_FILTERS)
 const PERIODS: readonly string[] = ['week', 'month', 'sixMonths', 'year']
 const GENDERS: readonly string[] = ['Male', 'Female', 'Other', 'notRecorded']
 const CHECKLIST_STATES: readonly string[] = ['complete', 'incomplete']
+const SIGNATURE_STATES: readonly string[] = ['signed', 'unsigned']
 const SORT_KEYS: readonly string[] = [
   'documentsPending',
   'employeeCode',
@@ -152,7 +158,11 @@ export function readEmployeeFilters(params: URLSearchParams): EmployeeFilters {
     archivedOnly: flag(params.get('archivedOnly')),
     gender: oneOf<GenderFilter | ''>(params.get('gender'), GENDERS, ''),
     missingIdCard: flag(params.get('missingIdCard')),
-    withoutSignature: flag(params.get('withoutSignature')),
+    // The old spelling, ?withoutSignature=true, still reads as 'unsigned': the
+    // dashboard linked to it and a bookmark does not know it changed.
+    signature:
+      oneOf<SignatureFilter | ''>(params.get('signature'), SIGNATURE_STATES, '') ||
+      (flag(params.get('withoutSignature')) ? 'unsigned' : ''),
     leftThisYear: flag(params.get('leftThisYear')),
     checklist: oneOf<'complete' | 'incomplete' | ''>(
       params.get('checklist'),
@@ -184,10 +194,11 @@ export function employeeFiltersToSearch(filters: EmployeeFilters): URLSearchPara
   put('joinedWithin', filters.joinedWithin)
   put('gender', filters.gender)
   put('checklist', filters.checklist)
+  put('signature', filters.signature)
   put('sortBy', filters.sortBy)
   put('sortDir', filters.sortDir)
 
-  for (const key of ['includeArchived', 'archivedOnly', 'missingIdCard', 'withoutSignature', 'leftThisYear'] as const) {
+  for (const key of ['includeArchived', 'archivedOnly', 'missingIdCard', 'leftThisYear'] as const) {
     if (filters[key]) params.set(key, 'true')
   }
 
@@ -210,14 +221,25 @@ export function toEmployeeListQuery(
     includeArchived: filters.includeArchived,
     archivedOnly: filters.archivedOnly,
     missingIdCard: filters.missingIdCard,
-    withoutSignature: filters.withoutSignature,
     leftThisYear: filters.leftThisYear,
     ...(filters.search ? { search: filters.search } : {}),
     ...(filters.department ? { department: filters.department } : {}),
     ...(filters.joinedWithin ? { joinedWithin: filters.joinedWithin } : {}),
     ...(filters.gender ? { gender: filters.gender } : {}),
     ...(filters.checklist ? { checklist: filters.checklist } : {}),
+    ...(filters.signature ? { signature: filters.signature } : {}),
   }
+}
+
+/**
+ * The same filters without the page, for 'select all' and the spreadsheet.
+ *
+ * Built from the paged query rather than beside it, so a filter added to one
+ * cannot be forgotten by the other: the only thing this takes away is the page.
+ */
+export function toEmployeeListAllQuery(filters: EmployeeFilters): EmployeeListAllParams {
+  const { page: _page, pageSize: _pageSize, ...unpaged } = toEmployeeListQuery(filters, 1)
+  return unpaged
 }
 
 /**
@@ -258,13 +280,8 @@ export function activeFilterChips(filters: EmployeeFilters): FilterChip[] {
       clears: { missingIdCard: false },
     })
   }
-  if (filters.withoutSignature) {
-    chips.push({
-      key: 'withoutSignature',
-      label: 'Pending employee signature',
-      clears: { withoutSignature: false },
-    })
-  }
+  /* No chip for signature: the toolbar's Employee signature dropdown shows it.
+     A chip as well would be two controls for one filter. */
   if (filters.leftThisYear) {
     chips.push({ key: 'leftThisYear', label: 'Left this year', clears: { leftThisYear: false } })
   }

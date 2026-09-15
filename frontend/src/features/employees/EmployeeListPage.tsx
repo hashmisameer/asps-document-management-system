@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import {
   EMPLOYEE_STATUS_FILTERS,
   MAX_FORMS_PER_PRINT,
@@ -8,6 +8,7 @@ import {
   type EmployeeListItem,
   type EmployeeSortKey,
   type JoinedWithinPeriod,
+  type SignatureFilter,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Badge } from '../../components/ui/Badge.js'
@@ -18,12 +19,14 @@ import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { useAuth } from '../auth/useAuth.js'
 import { ApiError } from '../../lib/apiError.js'
+import { downloadCsv, toCsv } from '../../lib/csv.js'
 import { saveBlob } from '../../lib/download.js'
 import { formatDate } from '../../lib/format.js'
 import { useDebounced } from '../../lib/useDebounced.js'
 import {
   employeeKeys,
   fetchFacets,
+  listAllEmployees,
   listEmployees,
   printEmployeeForm,
   printEmployeeForms,
@@ -36,6 +39,7 @@ import {
   employmentChoiceFilters,
   employmentChoiceOf,
   readEmployeeFilters,
+  toEmployeeListAllQuery,
   toEmployeeListQuery,
   type EmployeeFilters,
   type EmploymentChoice,
@@ -101,6 +105,13 @@ export function EmployeeListPage() {
    * itself on 'Next' would make that impossible. It is cleared when the FILTERS
    * change, because at that point the rows on screen are a different set of
    * people and a hidden selection is one somebody prints by accident.
+   *
+   * THE SELECTION IS WHAT COMES OUT. Export CSV exports it - every id in the
+   * set, whichever page it was ticked on, and nothing that is not in it - with
+   * no cap. Print selected prints it up to MAX_FORMS_PER_PRINT and refuses
+   * above that, on screen, before anything is sent: a print of everybody would
+   * build the whole PDF in the server's memory, and the office decided not to
+   * carry that risk for a rare case. Neither falls back to the page on screen.
    */
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set())
   /** The row whose own print button is working, and the toolbar's. */
@@ -117,6 +128,8 @@ export function EmployeeListPage() {
   }, [searchParams, debouncedSearch])
 
   const params = { ...toEmployeeListQuery(filters, PAGE_SIZE), search: debouncedSearch || undefined }
+  /** The same filters with no page: what 'select all' and the spreadsheet ask for. */
+  const allParams = { ...toEmployeeListAllQuery(filters), search: debouncedSearch || undefined }
   const chips = activeFilterChips(filters)
 
   const employees = useQuery({
@@ -130,7 +143,9 @@ export function EmployeeListPage() {
   const facets = useQuery({ queryKey: employeeKeys.facets(), queryFn: fetchFacets })
 
   const rows = employees.data?.items ?? []
-  const allOnPageSelected = rows.length > 0 && rows.every((row) => selected.has(row.employeeId))
+  const totalMatching = employees.data?.totalCount ?? 0
+  /** Every employee the filters match is ticked - the header box's own state. */
+  const allSelected = totalMatching > 0 && selected.size >= totalMatching
   const tooManySelected = selected.size > MAX_FORMS_PER_PRINT
 
   const toggleSelected = (employeeId: number) => {
@@ -141,17 +156,64 @@ export function EmployeeListPage() {
     })
   }
 
-  /** The header tick box takes the whole page in or out, never other pages. */
-  const togglePage = () => {
-    setSelected((current) => {
-      const next = new Set(current)
-      for (const row of rows) {
-        if (allOnPageSelected) next.delete(row.employeeId)
-        else next.add(row.employeeId)
-      }
-      return next
-    })
+  /**
+   * The header tick box: every employee the filters match, or none.
+   *
+   * ALL means all - across every page, not the twenty-five on screen. It used
+   * to take the page, and 'select all' followed by 'export' handed a department
+   * head a file that stopped at row twenty-five and read as complete. So it
+   * asks the server for the whole list under the same filters and the same
+   * sort, and takes every id it gets. Unticking empties the set.
+   */
+  const selectAll = useMutation({
+    mutationFn: () => listAllEmployees(allParams),
+    onSuccess: (all) => setSelected(new Set(all.map((row) => row.employeeId))),
+  })
+
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set())
+    else selectAll.mutate()
   }
+
+  /**
+   * The selection as a spreadsheet.
+   *
+   * The rows come from the server under the current filters and sort, and
+   * ONLY THE TICKED ONES are kept: select all and the file holds everybody
+   * the filters match; tick three and it holds those three; select all and
+   * untick two and it holds the rest. The selection is the source of truth,
+   * not the filter, and the page on screen never is.
+   *
+   * NO identity numbers. The list never carries them, and this file is what
+   * gets emailed to a department head - outside every control this system
+   * has - so it holds only what is on the screen it was exported from.
+   */
+  const exportCsv = useMutation({
+    mutationFn: async () => {
+      const all = await listAllEmployees(allParams)
+      return all.filter((row) => selected.has(row.employeeId))
+    },
+    onSuccess: (chosen) => {
+      downloadCsv(
+        `asps-dms-employees-${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(chosen, [
+          { header: 'Employee ID', value: (r) => r.employeeCode },
+          { header: 'Name', value: (r) => r.employeeName },
+          { header: 'Joined', value: (r) => formatDate(r.joiningDate) },
+          { header: 'Department', value: (r) => r.department ?? '' },
+          { header: 'Designation', value: (r) => r.designation ?? '' },
+          { header: 'Documents pending', value: (r) => r.counts.pending },
+          { header: 'Documents total', value: (r) => r.counts.total },
+          { header: 'Overdue', value: (r) => r.counts.overdue },
+          { header: 'Documents to sign', value: (r) => r.counts.signatureReviewRequired },
+          { header: 'Employee signature', value: (r) => (r.hasSignature ? 'Signed' : 'Not signed') },
+          { header: 'Archived', value: (r) => (r.isActive ? '' : 'Yes') },
+        ]),
+      )
+    },
+  })
+  const exportError = exportCsv.error instanceof ApiError ? exportCsv.error : null
+  const selectAllError = selectAll.error instanceof ApiError ? selectAll.error : null
 
   /**
    * Asks the server for the PDF and hands it to the browser.
@@ -232,6 +294,15 @@ export function EmployeeListPage() {
           >
             {selected.size > 0 ? `Print selected (${selected.size})` : 'Print selected'}
           </Button>
+          <Button
+            variant="secondary"
+            busy={exportCsv.isPending}
+            busyLabel="Preparing..."
+            disabled={selected.size === 0}
+            onClick={() => exportCsv.mutate()}
+          >
+            {selected.size > 0 ? `Export CSV (${selected.size})` : 'Export CSV'}
+          </Button>
           {can(PERMISSIONS.EMPLOYEE_CREATE) ? (
             <Link
               to="/employees/new"
@@ -290,6 +361,24 @@ export function EmployeeListPage() {
             ]}
             onChange={(event) =>
               update(employmentChoiceFilters(event.target.value as EmploymentChoice))
+            }
+          />
+        </div>
+
+        <div className="min-w-40">
+          <Select
+            label="Employee signature"
+            // The employee's own signature, on the pad - not the SignatureStatus
+            // of any document. 'Not signed' is the dashboard's Pending employee
+            // signature tile.
+            placeholder="All"
+            value={filters.signature}
+            options={[
+              { value: 'signed', label: 'Signed' },
+              { value: 'unsigned', label: 'Not signed' },
+            ]}
+            onChange={(event) =>
+              update({ signature: event.target.value as SignatureFilter | '' })
             }
           />
         </div>
@@ -364,6 +453,22 @@ export function EmployeeListPage() {
         </div>
       ) : null}
 
+      {exportError ? (
+        <div className="mt-4">
+          <Alert title="Could not export that" referenceId={exportError.referenceId}>
+            {exportError.message}
+          </Alert>
+        </div>
+      ) : null}
+
+      {selectAllError ? (
+        <div className="mt-4">
+          <Alert title="Could not select every employee" referenceId={selectAllError.referenceId}>
+            {selectAllError.message}
+          </Alert>
+        </div>
+      ) : null}
+
       <section className="mt-4 overflow-x-auto rounded-card border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs tracking-wide text-slate-500 uppercase">
@@ -372,18 +477,15 @@ export function EmployeeListPage() {
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300"
-                  checked={allOnPageSelected}
-                  // Ticked for some of the page, not all of it: the box says so
-                  // rather than claiming the whole page is in.
+                  checked={allSelected}
+                  // Some ticked, not everybody: the box says so rather than
+                  // claiming the whole list is in.
                   ref={(node) => {
-                    if (node) {
-                      node.indeterminate =
-                        !allOnPageSelected && rows.some((row) => selected.has(row.employeeId))
-                    }
+                    if (node) node.indeterminate = !allSelected && selected.size > 0
                   }}
-                  onChange={togglePage}
-                  aria-label="Select every employee on this page"
-                  disabled={rows.length === 0}
+                  onChange={toggleAll}
+                  aria-label="Select every employee matching these filters"
+                  disabled={rows.length === 0 || selectAll.isPending}
                 />
               </th>
               <SortableHeader

@@ -27,7 +27,12 @@ describe('reading filters out of a URL', () => {
 
   it('reads every filter a dashboard tile can set', () => {
     expect(read('?missingIdCard=true')).toMatchObject({ missingIdCard: true, status: 'active' })
-    expect(read('?withoutSignature=true')).toMatchObject({ withoutSignature: true })
+    expect(read('?signature=unsigned')).toMatchObject({ signature: 'unsigned' })
+    expect(read('?signature=signed')).toMatchObject({ signature: 'signed' })
+    // The old spelling the tile linked to, and a bookmark still holds.
+    expect(read('?withoutSignature=true')).toMatchObject({ signature: 'unsigned' })
+    // A spelling the API would refuse is no filter at all.
+    expect(read('?signature=maybe')).toMatchObject({ signature: '' })
     expect(read('?gender=notRecorded')).toMatchObject({ gender: 'notRecorded' })
     expect(read('?archivedOnly=true&status=all')).toMatchObject({
       archivedOnly: true,

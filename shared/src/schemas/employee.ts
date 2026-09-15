@@ -216,6 +216,11 @@ export type GenderFilter = (typeof GENDER_FILTERS)[number]
 
 export type JoinedWithinPeriod = (typeof JOINED_WITHIN_PERIODS)[number]
 
+/** Whether the employee has signed on the pad - theirs, not any document's. */
+export const SIGNATURE_FILTERS = ['signed', 'unsigned'] as const
+
+export type SignatureFilter = (typeof SIGNATURE_FILTERS)[number]
+
 export const employeeListQuerySchema = paginationQuerySchema.extend({
   department: z.string().trim().max(100).optional(),
   designation: z.string().trim().max(100).optional(),
@@ -254,7 +259,19 @@ export const employeeListQuerySchema = paginationQuerySchema.extend({
    * tile: somebody whose Aadhaar or PAN has never come in.
    */
   missingIdCard: booleanQueryParam.default(false),
-  /** Employees who have never signed on the pad. */
+  /**
+   * Whether the employee has signed on the pad.
+   *
+   * The EMPLOYEE'S signature - the one row in dbo.EmployeeSignatures that is
+   * active - and not the SignatureStatus of any document. The two values
+   * partition the employees the other filters allow, and 'unsigned' is exactly
+   * the dashboard's 'Pending employee signature' count.
+   */
+  signature: z.enum(SIGNATURE_FILTERS).optional(),
+  /**
+   * The old spelling of signature=unsigned, which the dashboard tile has linked
+   * to and which somebody may have bookmarked. Read, never written.
+   */
   withoutSignature: booleanQueryParam.default(false),
   /**
    * Whether their checklist is finished.
@@ -282,6 +299,21 @@ export const employeeListQuerySchema = paginationQuerySchema.extend({
 })
 
 export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>
+
+/**
+ * The same list without its paging, for 'select all' and the spreadsheet.
+ *
+ * The filters and the sort, and deliberately NOT the page: what comes back is
+ * every employee the filters match, which is what 'select all' has to mean. A
+ * tick box that took in the twenty-five rows on screen and called that
+ * everybody is how a department's CSV came to stop at row twenty-five.
+ */
+export const employeeListAllQuerySchema = employeeListQuerySchema.omit({
+  page: true,
+  pageSize: true,
+})
+
+export type EmployeeListAllQuery = z.infer<typeof employeeListAllQuerySchema>
 
 /**
  * Recording that an employee has left.

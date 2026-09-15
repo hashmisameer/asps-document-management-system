@@ -8,6 +8,7 @@ import {
   type CreateEmployeeInput,
   type EmployeeDocument,
   type EmployeeListItem,
+  type EmployeeListAllQuery,
   type EmployeeListQuery,
   type EmployeeProfile,
   type MarkEmployeeLeftInput,
@@ -51,6 +52,11 @@ function isUniqueViolation(error: unknown): boolean {
 
 export async function list(query: EmployeeListQuery): Promise<Paginated<EmployeeListItem>> {
   return employeeRepository.list(query)
+}
+
+/** Every employee the filters match - what 'select all' and the spreadsheet mean. */
+export async function listAll(query: EmployeeListAllQuery): Promise<EmployeeListItem[]> {
+  return employeeRepository.listAll(query)
 }
 
 export async function listFacets(): Promise<{ departments: string[]; designations: string[] }> {

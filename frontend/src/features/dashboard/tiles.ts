@@ -76,7 +76,7 @@ export function needsAttentionTiles(summary: DashboardSummary): DashboardTile[] 
       value: summary.signatures.employeesWithoutSignature,
       hint: 'Employees who have not signed on the pad yet',
       tone: alarm(summary.signatures.employeesWithoutSignature, 'warn'),
-      to: '/employees?withoutSignature=true',
+      to: '/employees?signature=unsigned',
     },
   ]
 }

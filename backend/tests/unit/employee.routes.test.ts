@@ -16,6 +16,7 @@ const db = vi.hoisted(() => ({
   touchSession: vi.fn(),
   revokeSession: vi.fn(),
   listEmployees: vi.fn(),
+  listAllEmployees: vi.fn(),
   findEmployee: vi.fn(),
   createEmployee: vi.fn(),
   updateEmployee: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../../src/repositories/session.repository.js', () => ({
 
 vi.mock('../../src/repositories/employee.repository.js', () => ({
   list: db.listEmployees,
+  listAll: db.listAllEmployees,
   findById: db.findEmployee,
   create: db.createEmployee,
   update: db.updateEmployee,
@@ -292,6 +294,80 @@ describe('validation', () => {
       .set('Cookie', signedInAs(ROLES.HR))
 
     expect(db.listEmployees.mock.calls[0]?.[0].includeArchived).toBe(false)
+  })
+})
+
+/**
+ * The whole list, for 'select all' and the spreadsheet.
+ *
+ * What is asserted is the boundary: the filters and the sort reach the unpaged
+ * query unchanged, the paging does not, and the paged query - the screen's - is
+ * never what answers.
+ */
+describe('the whole employee list', () => {
+  const listed = {
+    employeeId: 1,
+    employeeCode: 'EMP001',
+    employeeName: 'Ravi Kumar',
+    joiningDate: '2026-09-01',
+    department: 'Accounts',
+    designation: 'Officer',
+    isActive: true,
+    counts: { total: 9, completed: 4, pending: 5, overdue: 1, signatureReviewRequired: 0 },
+    hasSignature: false,
+  }
+
+  it('lets a Viewer read it, as a route rather than as an employee id', async () => {
+    db.listAllEmployees.mockResolvedValue([listed])
+
+    const response = await request(app)
+      .get('/api/employees/all')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ items: [listed] })
+    expect(db.findEmployee).not.toHaveBeenCalled()
+  })
+
+  it('passes the screen filters and sort through unchanged, and asks for every row', async () => {
+    db.listAllEmployees.mockResolvedValue([])
+
+    await request(app)
+      .get('/api/employees/all?signature=signed&department=Accounts&status=all&sortBy=joiningDate&sortDir=desc')
+      .set('Cookie', signedInAs(ROLES.HR))
+
+    expect(db.listAllEmployees).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signature: 'signed',
+        department: 'Accounts',
+        status: 'all',
+        sortBy: 'joiningDate',
+        sortDir: 'desc',
+      }),
+    )
+    expect(db.listEmployees).not.toHaveBeenCalled()
+  })
+
+  it('ignores a page number a caller sends anyway', async () => {
+    db.listAllEmployees.mockResolvedValue([])
+
+    await request(app)
+      .get('/api/employees/all?page=3&pageSize=25')
+      .set('Cookie', signedInAs(ROLES.HR))
+
+    // 'All' means every row: the twenty-five on screen were never what it meant.
+    const [query] = db.listAllEmployees.mock.calls[0] ?? []
+    expect(query).not.toHaveProperty('page')
+    expect(query).not.toHaveProperty('pageSize')
+  })
+
+  it('refuses a signature filter the API does not know', async () => {
+    const response = await request(app)
+      .get('/api/employees/all?signature=maybe')
+      .set('Cookie', signedInAs(ROLES.HR))
+
+    expect(response.status).toBe(400)
+    expect(db.listAllEmployees).not.toHaveBeenCalled()
   })
 })
 

@@ -2,6 +2,7 @@ import type {
   CreateEmployeeInput,
   DocumentType,
   EmployeeDocument,
+  EmployeeListAllQuery,
   EmployeeListItem,
   EmployeeListQuery,
   Employee,
@@ -22,6 +23,7 @@ import { fileFromResponse, type DownloadedFile } from '../../lib/download.js'
  */
 
 export type EmployeeListParams = Partial<EmployeeListQuery>
+export type EmployeeListAllParams = Partial<EmployeeListAllQuery>
 
 export interface EmployeeFacets {
   departments: string[]
@@ -33,6 +35,18 @@ export async function listEmployees(
 ): Promise<Paginated<EmployeeListItem>> {
   const response = await api.get<Paginated<EmployeeListItem>>('/employees', { params })
   return response.data
+}
+
+/**
+ * Every employee the filters match, in the list's order.
+ *
+ * What 'select all' selects and what the spreadsheet holds. The page is not
+ * part of these params, and the server would not read one: 'all' means every
+ * row, which is the whole point of asking.
+ */
+export async function listAllEmployees(params: EmployeeListAllParams): Promise<EmployeeListItem[]> {
+  const response = await api.get<{ items: EmployeeListItem[] }>('/employees/all', { params })
+  return response.data.items
 }
 
 export async function fetchFacets(): Promise<EmployeeFacets> {

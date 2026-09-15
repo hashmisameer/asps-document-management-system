@@ -2,6 +2,7 @@ import type { Request, RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import {
   createEmployeeSchema,
+  employeeListAllQuerySchema,
   employeeListQuerySchema,
   idParamSchema,
   markEmployeeLeftSchema,
@@ -37,6 +38,18 @@ function actorOf(req: Request): AuthUser {
 export const list: RequestHandler = async (req, res) => {
   const query = parseQuery(req, employeeListQuerySchema)
   res.json(await employeeService.list(query))
+}
+
+/**
+ * The same list, whole: every employee the filters match, in the list's order.
+ *
+ * What 'select all' selects and what the spreadsheet holds. Parsed with the
+ * unpaged schema, so a page number sent anyway is not a filter - the twenty-five
+ * on screen were never what 'all' meant.
+ */
+export const listAll: RequestHandler = async (req, res) => {
+  const query = parseQuery(req, employeeListAllQuerySchema)
+  res.json({ items: await employeeService.listAll(query) })
 }
 
 /** The departments and designations in use, for the list page's filters. */

@@ -19,6 +19,15 @@ export const employeeRouter: Router = Router()
 
 employeeRouter.get('/', requirePermission(PERMISSIONS.EMPLOYEE_READ), employeeController.list)
 
+/* The same list without its paging. Its own path rather than an 'all' flag on
+   the one above, so the paged route stays paged whatever a caller puts in the
+   query string. Declared before the parameterised routes, like /facets. */
+employeeRouter.get(
+  '/all',
+  requirePermission(PERMISSIONS.EMPLOYEE_READ),
+  employeeController.listAll,
+)
+
 employeeRouter.get(
   '/facets',
   requirePermission(PERMISSIONS.EMPLOYEE_READ),

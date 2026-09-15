@@ -118,6 +118,8 @@ export interface EmployeeDocumentCounts {
 
 export interface EmployeeListItem extends EmployeeSummary {
   counts: EmployeeDocumentCounts
+  /** Whether they have signed on the pad - the employee's own signature. */
+  hasSignature: boolean
 }
 
 export interface EmployeeProfile extends Employee {
