@@ -82,7 +82,7 @@ USING (VALUES
      N'EmployeeName'),
 
     -- Optional: filed with the government, not collected from the employee.
-    ('PF_FORM',            N'PF FORM/FORM 11',    0, 1, NULL, NULL,   50,
+    ('PF_FORM',            N'PF Form / Form 11',  0, 1, NULL, NULL,   50,
      N'EmployeeName'),
 
     ('ESIC_FORM',          N'ESIC Form',          0, 1, NULL, NULL,   60,
