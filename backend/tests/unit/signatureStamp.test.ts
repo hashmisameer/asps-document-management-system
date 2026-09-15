@@ -1,6 +1,6 @@
 import { PDFDocument, degrees } from 'pdf-lib'
 import { describe, expect, it } from 'vitest'
-import { toDrawParams, stampSignature } from '../../src/services/signatureStamp.service.js'
+import { fitInside, toDrawParams, stampSignature } from '../../src/services/signatureStamp.service.js'
 
 /**
  * Drawing a signature onto a page.
@@ -139,6 +139,51 @@ async function makePdf(pageCount: number, rotation = 0): Promise<Buffer> {
   return Buffer.from(await pdf.save())
 }
 
+describe('fitInside', () => {
+  // A passport photograph - 3:4 portrait - into the ESIC form's landscape box.
+  const PORTRAIT = { width: 1200, height: 1600 }
+  // A box 30% wide and 10% tall on a 600 x 800 page: 180 x 80 points.
+  const LANDSCAPE_BOX = { x: 0.6, y: 0.1, width: 0.3, height: 0.1 }
+
+  it('keeps the photograph its own shape, touching the box top and bottom', () => {
+    const fitted = fitInside(LANDSCAPE_BOX, PORTRAIT, PAGE_WIDTH, PAGE_HEIGHT, 0)
+
+    // Height is the limit: 80 points tall, so 60 points wide at 3:4.
+    expect(fitted.height).toBeCloseTo(80 / PAGE_HEIGHT, 6)
+    expect(fitted.width).toBeCloseTo(60 / PAGE_WIDTH, 6)
+    // The drawn shape is the image's, never the box's.
+    expect((fitted.width * PAGE_WIDTH) / (fitted.height * PAGE_HEIGHT)).toBeCloseTo(0.75, 6)
+  })
+
+  it('centres it, with the spare room split either side', () => {
+    const fitted = fitInside(LANDSCAPE_BOX, PORTRAIT, PAGE_WIDTH, PAGE_HEIGHT, 0)
+
+    // 180 wide, 60 used: 60 spare each side.
+    expect(fitted.x).toBeCloseTo(LANDSCAPE_BOX.x + 60 / PAGE_WIDTH, 6)
+    expect(fitted.y).toBeCloseTo(LANDSCAPE_BOX.y, 6)
+  })
+
+  it('never leaves the box', () => {
+    for (const image of [PORTRAIT, { width: 1600, height: 1200 }, { width: 500, height: 500 }]) {
+      const fitted = fitInside(LANDSCAPE_BOX, image, PAGE_WIDTH, PAGE_HEIGHT, 0)
+      expect(fitted.x).toBeGreaterThanOrEqual(LANDSCAPE_BOX.x - 1e-9)
+      expect(fitted.y).toBeGreaterThanOrEqual(LANDSCAPE_BOX.y - 1e-9)
+      expect(fitted.x + fitted.width).toBeLessThanOrEqual(LANDSCAPE_BOX.x + LANDSCAPE_BOX.width + 1e-9)
+      expect(fitted.y + fitted.height).toBeLessThanOrEqual(LANDSCAPE_BOX.y + LANDSCAPE_BOX.height + 1e-9)
+    }
+  })
+
+  it('measures the box in the DISPLAYED page, so a rotated page does not squash it', () => {
+    // On a page shown rotated 90, the displayed page is 800 wide and 600 tall,
+    // so the same normalized box is 240 x 60 points as the person saw it.
+    const fitted = fitInside(LANDSCAPE_BOX, PORTRAIT, PAGE_WIDTH, PAGE_HEIGHT, 90)
+
+    expect(fitted.height).toBeCloseTo(60 / PAGE_WIDTH, 6)
+    expect(fitted.width).toBeCloseTo(45 / PAGE_HEIGHT, 6)
+    expect((fitted.width * PAGE_HEIGHT) / (fitted.height * PAGE_WIDTH)).toBeCloseTo(0.75, 6)
+  })
+})
+
 describe('stampSignature', () => {
   const placement = {
     pageNumber: 1,
@@ -161,6 +206,32 @@ describe('stampSignature', () => {
     expect(reopened.getPageCount()).toBe(3)
     // The page keeps its size: stamping draws onto the page, it does not rebuild it.
     expect(reopened.getPage(1).getSize()).toEqual({ width: PAGE_WIDTH, height: PAGE_HEIGHT })
+  })
+
+  it('draws a photograph box from the Photo image, not the signature', async () => {
+    const source = await makePdf(1)
+
+    const output = await stampSignature({
+      source,
+      sourceMimeType: 'application/pdf',
+      signatures: { Photo: { data: PNG_1X1, mimeType: 'image/png' } },
+      placements: [{ ...placement, signerRole: 'Photo' }],
+    })
+
+    expect(output.subarray(0, 5).toString()).toBe('%PDF-')
+  })
+
+  it('refuses a photograph box when no photograph was supplied', async () => {
+    const source = await makePdf(1)
+
+    await expect(
+      stampSignature({
+        source,
+        sourceMimeType: 'application/pdf',
+        signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
+        placements: [{ ...placement, signerRole: 'Photo' }],
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('photograph') })
   })
 
   it('turns an image document into a one-page PDF sized to the image', async () => {

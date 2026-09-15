@@ -53,26 +53,54 @@ export const SIGNATURE_STATUS_LABEL: Readonly<Record<SignatureStatus, string>> =
 }
 
 /**
- * Whose signature a placement carries.
+ * What a placement carries.
  *
  * Two people sign a document, and they sign different boxes on it: the
  * EMPLOYEE, whose signature is enrolled once and reused (Section 24), and the
  * AUTHORISER - the HR user who is signing the document off. The role has to
  * travel with the placement because it is what tells the stamper which of the
- * two images to draw; a placement that only said WHERE would leave that to be
+ * images to draw; a placement that only said WHERE would leave that to be
  * guessed, and a signature drawn in the wrong person's name is worse than one
  * drawn in the wrong place.
+ *
+ * PHOTO is the third: the employee's photograph, the one on their record,
+ * pasted into the box the ESIC form prints for it. It is a stamp and not a
+ * signature - see SIGNATURE_ROLES for the difference that makes - and it is
+ * offered on that one form only, which the service enforces.
  */
 export const SIGNER_ROLES = {
   EMPLOYEE: 'Employee',
   AUTHORISER: 'Authoriser',
+  PHOTO: 'Photo',
 } as const
 
 export type SignerRole = (typeof SIGNER_ROLES)[keyof typeof SIGNER_ROLES]
 
+/**
+ * The roles that are a SIGNATURE, as opposed to a picture.
+ *
+ * Saving a placement set marks the document signed only when it holds at least
+ * one of these. A photograph on its own is a valid stamp - the PDF is rebuilt
+ * and the box is kept - but it signs nothing, and a document that read
+ * 'Signature added' over a photograph would close the skip path and tell a
+ * lie on the checklist.
+ */
+export const SIGNATURE_ROLES: readonly SignerRole[] = [
+  SIGNER_ROLES.EMPLOYEE,
+  SIGNER_ROLES.AUTHORISER,
+]
+
+export function isSignatureRole(role: SignerRole): boolean {
+  return SIGNATURE_ROLES.includes(role)
+}
+
+/** The one document type that carries a photograph box. */
+export const PHOTO_DOCUMENT_CODE = 'ESIC_FORM'
+
 export const SIGNER_ROLE_LABEL: Readonly<Record<SignerRole, string>> = {
   [SIGNER_ROLES.EMPLOYEE]: 'Employee signature',
   [SIGNER_ROLES.AUTHORISER]: 'HR signature',
+  [SIGNER_ROLES.PHOTO]: 'Employee photo',
 }
 
 /**

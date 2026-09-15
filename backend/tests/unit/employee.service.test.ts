@@ -145,6 +145,7 @@ function checklistRecord(overrides: Partial<EmployeeDocumentRecord> = {}): Emplo
     employeeName: 'Ravi Kumar',
     documentTypeId: 1,
     documentName: 'PAN Card',
+    documentCode: 'PAN_CARD',
     isMandatory: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,

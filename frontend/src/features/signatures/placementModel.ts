@@ -1,5 +1,6 @@
 import {
   MIN_PLACEMENT_SIZE,
+  SIGNER_ROLES,
   clampToPage,
   type NormalizedRect,
   type PageRotation,
@@ -30,18 +31,30 @@ export interface DraftPlacement {
 const DEFAULT_RECT: NormalizedRect = { x: 0.62, y: 0.78, width: 0.28, height: 0.09 }
 
 /**
+ * A photograph's box starts where a form prints one - top right - and roughly
+ * passport-shaped. The picture keeps its own proportions inside whatever the
+ * box is dragged to, so this only has to be a sensible place to start.
+ */
+const PHOTO_RECT: NormalizedRect = { x: 0.76, y: 0.06, width: 0.16, height: 0.14 }
+
+/**
  * Nudges each new box clear of the last one on the same page.
  *
  * Two boxes dropped at the same default would sit exactly on top of each other,
  * and the one underneath cannot be grabbed. Offsetting keeps both reachable.
  */
-export function nextRect(existing: readonly DraftPlacement[], pageNumber: number): NormalizedRect {
+export function nextRect(
+  existing: readonly DraftPlacement[],
+  pageNumber: number,
+  signerRole: SignerRole = SIGNER_ROLES.EMPLOYEE,
+): NormalizedRect {
   const onPage = existing.filter((placement) => placement.pageNumber === pageNumber).length
   const step = 0.03 * onPage
+  const start = signerRole === SIGNER_ROLES.PHOTO ? PHOTO_RECT : DEFAULT_RECT
   return clampToPage({
-    ...DEFAULT_RECT,
-    x: DEFAULT_RECT.x - step,
-    y: DEFAULT_RECT.y - step,
+    ...start,
+    x: start.x - step,
+    y: start.y - step,
   })
 }
 
@@ -56,7 +69,7 @@ export function newPlacement(
     pageNumber,
     pageRotation,
     signerRole,
-    rect: nextRect(existing, pageNumber),
+    rect: nextRect(existing, pageNumber, signerRole),
   }
 }
 

@@ -29,7 +29,7 @@ export const placementSchema = z
      * it, so nobody can sign a document off in a colleague's name.
      */
     signerRole: z
-      .enum([SIGNER_ROLES.EMPLOYEE, SIGNER_ROLES.AUTHORISER])
+      .enum([SIGNER_ROLES.EMPLOYEE, SIGNER_ROLES.AUTHORISER, SIGNER_ROLES.PHOTO])
       .default(SIGNER_ROLES.EMPLOYEE),
     confidence: z.number().min(0).max(1).nullable().default(null),
   })

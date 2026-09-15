@@ -56,6 +56,7 @@ interface EmployeeDocumentRow {
   DeadlineUnit: string | null
   DocumentTypeId: number
   DocumentName: string
+  DocumentCode: string
   IsMandatory: boolean
   RequiresSignature: boolean
   CanBeMarkedNotRequired: boolean
@@ -87,7 +88,7 @@ interface EmployeeDocumentRow {
 const SELECT_EMPLOYEE_DOCUMENT = `
     SELECT  d.DocumentId, d.EmployeeId, e.EmployeeCode, e.EmployeeName,
             e.LastWorkingDate, dt.DeadlineUnit,
-            d.DocumentTypeId, dt.DocumentName, dt.IsMandatory, dt.RequiresSignature,
+            d.DocumentTypeId, dt.DocumentName, dt.DocumentCode, dt.IsMandatory, dt.RequiresSignature,
             dt.CanBeMarkedNotRequired,
             d.OriginalFileName, d.FileSizeBytes, d.MimeType, d.PageCount,
             d.ProcessedFilePath, d.Status, d.SignatureStatus, d.DueDate,
@@ -190,6 +191,7 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     deadlineUnit: toDeadlineUnit(row.DeadlineUnit),
     documentTypeId: row.DocumentTypeId,
     documentName: row.DocumentName,
+    documentCode: row.DocumentCode,
     isMandatory: row.IsMandatory,
     requiresSignature: row.RequiresSignature,
     canBeMarkedNotRequired: row.CanBeMarkedNotRequired,

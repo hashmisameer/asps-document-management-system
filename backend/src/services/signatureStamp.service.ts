@@ -1,6 +1,7 @@
 import { PDFDocument, degrees, type PDFImage, type PDFPage } from 'pdf-lib'
 import {
   SIGNER_ROLES,
+  displayedPageSize,
   normalizeRotation,
   toPdfUserSpace,
   type NormalizedRect,
@@ -28,7 +29,7 @@ export interface StampPlacement {
   rect: NormalizedRect
   /** The rotation the page had when HR positioned this - see below. */
   pageRotation: PageRotation
-  /** Whose signature goes in this box. Defaults to the employee's. */
+  /** What goes in this box. Defaults to the employee's signature. */
   signerRole?: SignerRole
 }
 
@@ -43,12 +44,13 @@ export interface StampInput {
   /** 'application/pdf', 'image/png' or 'image/jpeg'. */
   sourceMimeType: string
   /**
-   * One image per signer role.
+   * One image per role.
    *
-   * A map rather than a single image because a document carries two marks: the
-   * employee's, and the authorising HR user's. Each is embedded at most once
-   * however many boxes it fills - a signature embedded per placement would put
-   * the same bytes in the file several times over.
+   * A map rather than a single image because a document carries more than one
+   * mark: the employee's signature, the authorising HR user's, and on the ESIC
+   * form the employee's photograph. Each is embedded at most once however many
+   * boxes it fills - an image embedded per placement would put the same bytes
+   * in the file several times over.
    */
   signatures: Partial<Record<SignerRole, SignatureImage>>
   placements: readonly StampPlacement[]
@@ -62,6 +64,44 @@ export interface DrawParams {
   height: number
   /** Counter-clockwise degrees, as pdf-lib measures them. */
   rotate: 0 | 90 | 180 | 270
+}
+
+/**
+ * The largest rect of the image's own shape that fits inside the box, centred.
+ *
+ * A signature is stretched to its box: it is a stroke on a transparent ground,
+ * and a little squash is invisible. A photograph is not. The employee's picture
+ * is a passport-shaped portrait and the ESIC form's box for it is wider than it
+ * is tall, so drawing the picture to the box would flatten the face. Instead
+ * the picture keeps its shape, is scaled to touch the box on two sides, and
+ * sits in the middle with blank margin on the other two.
+ *
+ * Works in the DISPLAYED page's proportions, which is the space the box was
+ * drawn in - so a box that looks square on a rotated page is treated as
+ * square, not as whatever its normalized numbers make it on the unrotated
+ * sheet. Pure, so the arithmetic is tested without a PDF.
+ */
+export function fitInside(
+  box: NormalizedRect,
+  image: { width: number; height: number },
+  pageWidth: number,
+  pageHeight: number,
+  rotation: PageRotation,
+): NormalizedRect {
+  const displayed = displayedPageSize(pageWidth, pageHeight, rotation)
+  const boxWidthPt = box.width * displayed.width
+  const boxHeightPt = box.height * displayed.height
+
+  const scale = Math.min(boxWidthPt / image.width, boxHeightPt / image.height)
+  const drawnWidthPt = image.width * scale
+  const drawnHeightPt = image.height * scale
+
+  return {
+    x: box.x + (boxWidthPt - drawnWidthPt) / 2 / displayed.width,
+    y: box.y + (boxHeightPt - drawnHeightPt) / 2 / displayed.height,
+    width: drawnWidthPt / displayed.width,
+    height: drawnHeightPt / displayed.height,
+  }
 }
 
 /**
@@ -196,7 +236,9 @@ export async function stampSignature(input: StampInput): Promise<Buffer> {
       throw new ConflictError(
         role === SIGNER_ROLES.AUTHORISER
           ? 'No authorising signature was supplied for this document.'
-          : 'No employee signature was supplied for this document.',
+          : role === SIGNER_ROLES.PHOTO
+            ? 'No photograph was supplied for this document.'
+            : 'No employee signature was supplied for this document.',
       )
     }
 
@@ -225,8 +267,14 @@ export async function stampSignature(input: StampInput): Promise<Buffer> {
       )
     }
 
-    const signature = await imageFor(placement.signerRole ?? SIGNER_ROLES.EMPLOYEE)
-    const draw = toDrawParams(placement.rect, width, height, placement.pageRotation)
+    const role = placement.signerRole ?? SIGNER_ROLES.EMPLOYEE
+    const signature = await imageFor(role)
+    // A photograph keeps its shape inside the box; a signature fills it.
+    const rect =
+      role === SIGNER_ROLES.PHOTO
+        ? fitInside(placement.rect, signature, width, height, placement.pageRotation)
+        : placement.rect
+    const draw = toDrawParams(rect, width, height, placement.pageRotation)
     page.drawImage(signature, {
       x: draw.x,
       y: draw.y,

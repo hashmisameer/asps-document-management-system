@@ -141,6 +141,7 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     employeeName: 'Ravi Kumar',
     documentTypeId: 1,
     documentName: 'PAN Card',
+    documentCode: 'PAN_CARD',
     isMandatory: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,
