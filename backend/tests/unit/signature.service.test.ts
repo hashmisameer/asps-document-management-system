@@ -22,6 +22,7 @@ const db = vi.hoisted(() => ({
   setProcessedFile: vi.fn(),
   setSignatureStatus: vi.fn(),
   findEmployee: vi.fn(),
+  findPhoto: vi.fn(),
   findActiveSignature: vi.fn(),
   replaceActiveSignature: vi.fn(),
   listPlacements: vi.fn(),
@@ -56,6 +57,7 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
 
 vi.mock('../../src/repositories/employee.repository.js', () => ({
   findById: db.findEmployee,
+  findPhoto: db.findPhoto,
   create: vi.fn(),
   update: vi.fn(),
   setActive: vi.fn(),
@@ -112,6 +114,7 @@ const documentRecord = {
   employeeName: 'Ravi Kumar',
   documentTypeId: 1,
   documentName: 'Offer Letter',
+  documentCode: 'OFFER_LETTER',
   isMandatory: true,
   requiresSignature: true,
   originalFileName: 'offer.pdf',
@@ -168,10 +171,20 @@ const placement = {
   confidence: null,
 }
 
+/** 1x1 PNG: real bytes, because the photograph is read by sharp for its orientation. */
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+)
+
+const esicForm = { ...documentRecord, documentName: 'ESIC Form', documentCode: 'ESIC_FORM' }
+const photoBox = { ...placement, signerRole: 'Photo' as const, y: 0.1, width: 0.15, height: 0.12 }
+
 beforeEach(() => {
   vi.clearAllMocks()
   db.insertAudit.mockResolvedValue(undefined)
   db.findDocument.mockResolvedValue(documentRecord)
+  db.findPhoto.mockResolvedValue(null)
   db.findStoredFile.mockResolvedValue(storedFile)
   db.findActiveSignature.mockResolvedValue(signatureRecord)
   db.readStoredFile.mockResolvedValue(Buffer.from('bytes'))
@@ -232,6 +245,84 @@ describe('savePlacements', () => {
     await expect(
       signatureService.savePlacements(5, { placements: [placement] }, hr, context),
     ).rejects.toMatchObject({ statusCode: 409 })
+  })
+
+  describe('the employee photograph', () => {
+    beforeEach(() => {
+      db.findDocument.mockResolvedValue(esicForm)
+      db.findPhoto.mockResolvedValue({ filePath: 'photos/42/photo.png', mimeType: 'image/png' })
+      db.readStoredFile.mockImplementation(async (path: string) =>
+        path === 'photos/42/photo.png' ? PNG_1X1 : Buffer.from('bytes'),
+      )
+    })
+
+    it('hands the photograph to the stamper under its own role', async () => {
+      await signatureService.savePlacements(5, { placements: [placement, photoBox] }, hr, context)
+
+      const [input] = db.stampSignature.mock.calls[0] ?? []
+      expect(input.signatures.Photo).toEqual({ data: PNG_1X1, mimeType: 'image/png' })
+      expect(input.placements.map((p: { signerRole: string }) => p.signerRole)).toEqual([
+        'Employee',
+        'Photo',
+      ])
+    })
+
+    it('does NOT mark the document signed when only a photograph was placed', async () => {
+      await signatureService.savePlacements(5, { placements: [photoBox] }, hr, context)
+
+      // The PDF is rebuilt and the box is kept - a photograph is a valid stamp.
+      expect(db.stampSignature).toHaveBeenCalled()
+      expect(db.replacePlacements).toHaveBeenCalled()
+      expect(db.markApplied).toHaveBeenCalledWith(5)
+      // But nothing was signed, so the status is exactly what it was: the
+      // checklist does not read 'Signature added', and skipping stays open.
+      expect(db.setProcessedFile).toHaveBeenCalledWith(
+        5,
+        'processed/42/signed.pdf',
+        SIGNATURE_STATUS.REVIEW_REQUIRED,
+      )
+      // And no signature image was asked for.
+      expect(db.findActiveSignature).not.toHaveBeenCalled()
+    })
+
+    it('marks it signed when a signature box is placed alongside the photograph', async () => {
+      await signatureService.savePlacements(5, { placements: [photoBox, placement] }, hr, context)
+
+      expect(db.setProcessedFile).toHaveBeenCalledWith(
+        5,
+        'processed/42/signed.pdf',
+        SIGNATURE_STATUS.ADDED,
+      )
+    })
+
+    it('refuses a photograph on any document but the ESIC form', async () => {
+      db.findDocument.mockResolvedValue(documentRecord)
+
+      await expect(
+        signatureService.savePlacements(5, { placements: [placement, photoBox] }, hr, context),
+      ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('ESIC') })
+
+      expect(db.stampSignature).not.toHaveBeenCalled()
+      expect(db.replacePlacements).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the employee has no photograph on file', async () => {
+      db.findPhoto.mockResolvedValue(null)
+
+      await expect(
+        signatureService.savePlacements(5, { placements: [photoBox] }, hr, context),
+      ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('photograph') })
+
+      expect(db.stampSignature).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the photograph is recorded but the file has gone', async () => {
+      db.storedFileExists.mockImplementation(async (path: string) => path !== 'photos/42/photo.png')
+
+      await expect(
+        signatureService.savePlacements(5, { placements: [photoBox] }, hr, context),
+      ).rejects.toMatchObject({ statusCode: 409 })
+    })
   })
 
   it('removes the signed copy when the placements are cleared', async () => {

@@ -86,6 +86,7 @@ function document(
     employeeName: 'BHAGWAN SINGH',
     documentTypeId: documentId,
     documentName: `Document ${documentId}`,
+    documentCode: `DOCUMENT_${documentId}`,
     isMandatory: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,

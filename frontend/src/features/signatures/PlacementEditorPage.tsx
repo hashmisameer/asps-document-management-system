@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Document, Page, pdfjs } from 'react-pdf'
 import {
   PERMISSIONS,
+  PHOTO_DOCUMENT_CODE,
   SIGNER_ROLES,
   SIGNER_ROLE_LABEL,
   normalizeRotation,
@@ -15,7 +16,7 @@ import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
 import { useAuth } from '../auth/useAuth.js'
 import { documentFileUrl, fetchDocument } from '../documents/api.js'
-import { employeeKeys } from '../employees/api.js'
+import { employeeKeys, fetchEmployee } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import {
   fetchMySignature,
@@ -109,6 +110,16 @@ export function PlacementEditorPage() {
   })
 
   const mySignature = useQuery({ queryKey: signatureKeys.mine, queryFn: fetchMySignature })
+
+  // The employee's record, for whether there is a photograph to place. Asked
+  // for only on the one form that has a box for it.
+  const takesPhoto = document.data?.documentCode === PHOTO_DOCUMENT_CODE
+  const employee = useQuery({
+    queryKey: employeeKeys.detail(employeeId ?? 0),
+    queryFn: () => fetchEmployee(employeeId as number),
+    enabled: takesPhoto && typeof employeeId === 'number',
+  })
+  const hasPhoto = employee.data?.hasPhoto ?? false
 
   // Loaded once into editable state. After that the server's copy is history:
   // re-seeding on every refetch would throw away work in progress.
@@ -217,6 +228,19 @@ export function PlacementEditorPage() {
                 <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
                   Add my box
                 </Button>
+                {/* The ESIC form only: it is the one that prints a box for the
+                    photograph. The server refuses it anywhere else, so hiding
+                    it here is a courtesy rather than the control. */}
+                {takesPhoto ? (
+                  <Button
+                    variant="secondary"
+                    disabled={!hasPhoto}
+                    title={hasPhoto ? undefined : 'This employee has no photograph on file'}
+                    onClick={() => addBox(SIGNER_ROLES.PHOTO)}
+                  >
+                    Add photo box
+                  </Button>
+                ) : null}
                 <Button
                   busy={save.isPending}
                   busyLabel="Saving..."
@@ -242,6 +266,14 @@ export function PlacementEditorPage() {
         <div className="mt-3">
           <Alert title="This employee has no signature on file">
             Capture it on their record first, or their box will have nothing to stamp.
+          </Alert>
+        </div>
+      ) : null}
+
+      {takesPhoto && employee.data && !hasPhoto ? (
+        <div className="mt-3">
+          <Alert title="This employee has no photograph on file">
+            Add one to their record first; the ESIC form has a box for it.
           </Alert>
         </div>
       ) : null}
@@ -424,6 +456,7 @@ function PlacementBox({
   }
 
   const isAuthoriser = placement.signerRole === SIGNER_ROLES.AUTHORISER
+  const isPhoto = placement.signerRole === SIGNER_ROLES.PHOTO
 
   return (
     <div
@@ -443,7 +476,9 @@ function PlacementBox({
       } ${
         isAuthoriser
           ? 'border-status-review bg-status-review/10 text-status-review'
-          : 'border-brand-600 bg-brand-600/10 text-brand-800'
+          : isPhoto
+            ? 'border-slate-500 bg-slate-500/10 text-slate-700'
+            : 'border-brand-600 bg-brand-600/10 text-brand-800'
       } ${selected ? 'ring-2 ring-offset-1 ring-brand-600' : ''}`}
     >
       <span className="pointer-events-none select-none px-1 text-center font-medium">

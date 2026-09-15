@@ -252,6 +252,8 @@ export interface EmployeeDocument {
   employeeName: string
   documentTypeId: number
   documentName: string
+  /** The type's code - what the application keys on; the name is for reading. */
+  documentCode: string
   isMandatory: boolean
   requiresSignature: boolean
   /**
@@ -341,7 +343,7 @@ export interface SignaturePlacement {
   method: PlacementMethod
   detectionMethod: DetectionMethod
   confidence: number | null
-  /** Whose signature belongs in this box - the employee's, or the authoriser's. */
+  /** What belongs in this box - the employee's signature, the authoriser's, or the employee's photo. */
   signerRole: SignerRole
   /** For an Authoriser box, the user whose signature was drawn into it. */
   signerUserId: number | null

@@ -1,10 +1,13 @@
 import { PDFDocument } from 'pdf-lib'
+import sharp from 'sharp'
 import {
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPES,
+  PHOTO_DOCUMENT_CODE,
   SIGNATURE_STATUS,
   SIGNER_ROLES,
   canTransitionSignature,
+  isSignatureRole,
   normalizeRotation,
   type AuthUser,
   type EmployeeDocument,
@@ -14,6 +17,7 @@ import {
   type SignerRole,
 } from '@asps-dms/shared'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
+import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeSignatureRepository from '../repositories/employeeSignature.repository.js'
 import * as signaturePlacementRepository from '../repositories/signaturePlacement.repository.js'
 import * as userSignatureRepository from '../repositories/userSignature.repository.js'
@@ -314,6 +318,21 @@ export async function savePlacements(
     )
   }
 
+  // The photograph goes on one form only. Decided here and not in the
+  // database: the screen hides the button elsewhere, and this is what makes
+  // hiding it enough.
+  if (roles.has(SIGNER_ROLES.PHOTO) && document.documentCode !== PHOTO_DOCUMENT_CODE) {
+    throw new ConflictError(
+      `A photograph can be placed on the ESIC form only, not on ${document.documentName}.`,
+    )
+  }
+  const photo = roles.has(SIGNER_ROLES.PHOTO) ? await readPhotoForStamp(document.employeeId) : null
+  if (roles.has(SIGNER_ROLES.PHOTO) && !photo) {
+    throw new ConflictError(
+      `${document.employeeName} has no photograph on file. Add one to their record before placing it.`,
+    )
+  }
+
   const location = await employeeDocumentRepository.findStoredFile(documentId)
   if (!location?.originalFilePath) {
     throw new ConflictError('This document has no stored file to sign.')
@@ -337,6 +356,9 @@ export async function savePlacements(
       data: authoriserImage,
       mimeType: authoriserSignature.mimeType,
     }
+  }
+  if (photo) {
+    signatures[SIGNER_ROLES.PHOTO] = photo
   }
 
   const stamped = await stampSignature({
@@ -385,10 +407,15 @@ export async function savePlacements(
       })),
       actor.userId,
     )
+    // Signed only if something in the set IS a signature. A photograph on its
+    // own rebuilds the PDF and is kept, but the status stays where it was: a
+    // document reading 'Signature added' over a picture would close the skip
+    // path and tell the checklist a lie.
+    const signed = Array.from(roles).some(isSignatureRole)
     await employeeDocumentRepository.setProcessedFile(
       documentId,
       stored.relativePath,
-      SIGNATURE_STATUS.ADDED,
+      signed ? SIGNATURE_STATUS.ADDED : document.signatureStatus,
     )
     await signaturePlacementRepository.markApplied(documentId)
   } catch (error) {
@@ -486,6 +513,30 @@ async function removePlacements(
   })
 
   return documentService.getById(document.documentId)
+}
+
+/**
+ * The employee's photograph, ready to be drawn.
+ *
+ * Read from the record's file, the way the printed form reads it, and turned
+ * the right way up: a phone writes its rotation into the EXIF header rather
+ * than into the pixels, and pdf-lib draws the pixels. Only re-encoded when the
+ * header says so, so an ordinary upright picture goes in byte for byte.
+ *
+ * Null when there is no photograph, or the file has gone: the caller refuses
+ * the placement and says so, which is better than a box with nothing in it.
+ */
+async function readPhotoForStamp(employeeId: number): Promise<SignatureImage | null> {
+  const photo = await employeeRepository.findPhoto(employeeId)
+  if (!photo) return null
+  if (!(await storage.storedFileExists(photo.filePath))) return null
+
+  const data = await storage.readStoredFile(photo.filePath)
+  const { orientation } = await sharp(data, { failOn: 'error' }).metadata()
+  if (!orientation || orientation === 1) return { data, mimeType: photo.mimeType }
+
+  const upright = await sharp(data, { failOn: 'error' }).rotate().jpeg({ quality: 90 }).toBuffer()
+  return { data: upright, mimeType: 'image/jpeg' }
 }
 
 /**
