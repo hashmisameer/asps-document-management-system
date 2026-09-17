@@ -2,6 +2,7 @@ import type {
   DocumentTypePlacement,
   DocumentTypeTemplateSummary,
   SaveTemplateInput,
+  TemplateVariant,
 } from '@asps-dms/shared'
 import { api } from '../../lib/api.js'
 
@@ -26,15 +27,21 @@ export async function fetchTemplate(documentTypeId: number): Promise<DocumentTyp
   return response.data.placements
 }
 
+export interface SavedTemplate {
+  placements: DocumentTypePlacement[]
+  /** The variant the save wrote. */
+  variant: TemplateVariant
+  /** True when a template for this variant existed and was replaced. */
+  replacedExisting: boolean
+}
+
+/** Saves ONE VARIANT of a type's template; the type's other variants are untouched. */
 export async function saveTemplate(
   documentTypeId: number,
   input: SaveTemplateInput,
-): Promise<DocumentTypePlacement[]> {
-  const response = await api.put<{ placements: DocumentTypePlacement[] }>(
-    `/document-types/${documentTypeId}/placements`,
-    input,
-  )
-  return response.data.placements
+): Promise<SavedTemplate> {
+  const response = await api.put<SavedTemplate>(`/document-types/${documentTypeId}/placements`, input)
+  return response.data
 }
 
 export const templateKeys = {

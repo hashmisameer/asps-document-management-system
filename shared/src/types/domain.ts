@@ -3,6 +3,7 @@ import type { DocumentStatus, Gender, SignatureStatus, SignerRole } from '../con
 import type { DeadlineState, DeadlineUnit } from '../constants/deadlines.js'
 import type { DocumentField, FieldCheckResult, TextSource } from '../constants/documentFields.js'
 import type { EmploymentStatus, ExitReason } from '../constants/employment.js'
+import type { TemplateVariant } from '../utils/templateVariant.js'
 
 /**
  * API-facing domain shapes.
@@ -435,20 +436,37 @@ export interface DocumentTypePlacement {
   width: number
   height: number
   pageRotation: number
-  /** The sample page, unrotated, in points. */
+  /** The page this box was drawn on, unrotated, in points. */
   pageWidthPt: number
   pageHeightPt: number
-  samplePageCount: number
+  /** Which form: the sample's page count and first-page size, in whole points. */
+  variant: TemplateVariant
   sampleDocumentId: number | null
   createdByName: string | null
   createdAt: string
 }
 
+/** One variant of a type's template at a glance. */
+export interface TemplateVariantSummary {
+  variant: TemplateVariant
+  pageRotation: number
+  boxes: number
+  /** How many boxes carry each role. */
+  roles: Partial<Record<SignerRole, number>>
+  /** How many distinct pages carry a box. */
+  pages: number
+  sampleDocumentId: number | null
+  /** The sample's employee, when the document still exists. */
+  sampleEmployeeCode: string | null
+  setByName: string | null
+  setAt: string | null
+}
+
 /**
- * A document type's template at a glance, for the list an administrator
+ * A document type's templates at a glance, for the list an administrator
  * chooses from.
  *
- *   'set'      boxes exist, and the rest of the fields say what they are
+ *   'set'      at least one variant has boxes; `variants` says which
  *   'unset'    nothing yet
  *   'scanned'  never: an identity card is a scan with no fixed layout
  */
@@ -457,19 +475,7 @@ export interface DocumentTypeTemplateSummary {
   documentName: string
   documentCode: string
   status: 'set' | 'unset' | 'scanned'
-  boxes: number
-  /** How many boxes carry each role. */
-  roles: Partial<Record<SignerRole, number>>
-  pages: number
-  pageWidthPt: number | null
-  pageHeightPt: number | null
-  pageRotation: number | null
-  samplePageCount: number | null
-  sampleDocumentId: number | null
-  /** The sample's employee, when the document still exists. */
-  sampleEmployeeCode: string | null
-  setByName: string | null
-  setAt: string | null
+  variants: TemplateVariantSummary[]
 }
 
 export type PlacementMethod = 'Automatic' | 'Manual' | 'Adjusted'

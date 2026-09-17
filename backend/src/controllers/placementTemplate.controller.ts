@@ -30,11 +30,11 @@ export const getForType: RequestHandler = async (req, res) => {
 export const save: RequestHandler = async (req, res) => {
   const documentTypeId = idParamSchema.parse(req.params.documentTypeId)
   const input = parseBody(req, saveTemplateSchema)
-  const placements = await placementTemplateService.save(
+  const saved = await placementTemplateService.save(
     documentTypeId,
     input,
     actorOf(req),
     requestContext(req),
   )
-  res.json({ placements })
+  res.json(saved)
 }

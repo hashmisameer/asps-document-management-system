@@ -1,8 +1,11 @@
 import {
   IDENTITY_CARD_DOCUMENT_CODES,
+  variantKey,
   type DocumentTypePlacement,
   type DocumentTypeTemplateSummary,
   type SignerRole,
+  type TemplateVariant,
+  type TemplateVariantSummary,
 } from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
 
@@ -12,6 +15,11 @@ import { createRequest, sql } from '../database/pool.js'
  * The template, as distinct from dbo.SignaturePlacements, which is the record
  * of what was actually stamped on each document. Nothing here reads or writes
  * that table, a document row, or a stored file.
+ *
+ * A type holds one template PER VARIANT - the sample's page count and
+ * first-page size - because one checklist entry can be two pieces of paper.
+ * Every row carries its variant, and a save replaces one variant's rows and
+ * leaves the others alone.
  */
 
 interface Row {
@@ -27,6 +35,8 @@ interface Row {
   PageWidthPt: number
   PageHeightPt: number
   SamplePageCount: number
+  SampleWidthPt: number
+  SampleHeightPt: number
   SampleDocumentId: number | null
   CreatedByName: string | null
   CreatedAt: Date
@@ -45,7 +55,11 @@ function toRecord(row: Row): DocumentTypePlacement {
     pageRotation: row.PageRotation,
     pageWidthPt: row.PageWidthPt,
     pageHeightPt: row.PageHeightPt,
-    samplePageCount: row.SamplePageCount,
+    variant: {
+      pageCount: row.SamplePageCount,
+      widthPt: row.SampleWidthPt,
+      heightPt: row.SampleHeightPt,
+    },
     sampleDocumentId: row.SampleDocumentId,
     createdByName: row.CreatedByName,
     createdAt: row.CreatedAt.toISOString(),
@@ -55,18 +69,48 @@ function toRecord(row: Row): DocumentTypePlacement {
 const SELECT = `
       SELECT tp.DocumentTypePlacementId, tp.DocumentTypeId, tp.SignerRole, tp.PageNumber,
              tp.X, tp.Y, tp.Width, tp.Height, tp.PageRotation,
-             tp.PageWidthPt, tp.PageHeightPt, tp.SamplePageCount, tp.SampleDocumentId,
+             tp.PageWidthPt, tp.PageHeightPt,
+             tp.SamplePageCount, tp.SampleWidthPt, tp.SampleHeightPt, tp.SampleDocumentId,
              u.FullName AS CreatedByName, tp.CreatedAt
       FROM   dbo.DocumentTypePlacements AS tp
       LEFT JOIN dbo.Users AS u ON u.UserId = tp.CreatedBy`
 
+/** Every box of every variant of a type, in page order within each variant. */
 export async function listForType(documentTypeId: number): Promise<DocumentTypePlacement[]> {
   const request = await createRequest()
   const result = await request.input('documentTypeId', sql.Int, documentTypeId).query<Row>(`
       ${SELECT}
       WHERE  tp.DocumentTypeId = @documentTypeId
-      ORDER BY tp.PageNumber, tp.DocumentTypePlacementId`)
+      ORDER BY tp.SamplePageCount, tp.SampleWidthPt, tp.SampleHeightPt,
+               tp.PageNumber, tp.DocumentTypePlacementId`)
   return result.recordset.map(toRecord)
+}
+
+function bindVariant(request: sql.Request, variant: TemplateVariant): sql.Request {
+  return request
+    .input('samplePageCount', sql.Int, variant.pageCount)
+    .input('sampleWidthPt', sql.Int, variant.widthPt)
+    .input('sampleHeightPt', sql.Int, variant.heightPt)
+}
+
+const VARIANT_PREDICATE =
+  'DocumentTypeId = @documentTypeId AND SamplePageCount = @samplePageCount' +
+  ' AND SampleWidthPt = @sampleWidthPt AND SampleHeightPt = @sampleHeightPt'
+
+/** Whether a type already has a template for this variant - what a save would replace. */
+export async function variantExists(
+  documentTypeId: number,
+  variant: TemplateVariant,
+): Promise<boolean> {
+  const request = bindVariant(await createRequest(), variant).input(
+    'documentTypeId',
+    sql.Int,
+    documentTypeId,
+  )
+  const result = await request.query<{ Found: number }>(
+    `SELECT TOP (1) 1 AS Found FROM dbo.DocumentTypePlacements WHERE ${VARIANT_PREDICATE}`,
+  )
+  return result.recordset.length > 0
 }
 
 export interface TemplateBox {
@@ -82,23 +126,24 @@ export interface TemplateBox {
 }
 
 /**
- * Replaces a type's template with exactly this set.
+ * Replaces ONE VARIANT of a type's template with exactly this set.
  *
  * Delete-then-insert in one transaction, as a document's placements are: a
- * template is one thing, and a failure cannot leave a type with half of one.
- * An empty set removes the template.
+ * template is one thing, and a failure cannot leave a variant with half of
+ * one. The other variants of the type are not touched. An empty set removes
+ * the variant.
  */
-export async function replaceForType(
+export async function replaceForVariant(
   documentTypeId: number,
+  variant: TemplateVariant,
   boxes: readonly TemplateBox[],
-  sample: { documentId: number | null; pageCount: number },
+  sampleDocumentId: number | null,
   createdBy: number,
 ): Promise<void> {
-  const request = await createRequest()
+  const request = bindVariant(await createRequest(), variant)
   request
     .input('documentTypeId', sql.Int, documentTypeId)
-    .input('sampleDocumentId', sql.Int, sample.documentId)
-    .input('samplePageCount', sql.Int, sample.pageCount)
+    .input('sampleDocumentId', sql.Int, sampleDocumentId)
     .input('createdBy', sql.Int, createdBy)
 
   const tuples = boxes.map((box, index) => {
@@ -114,7 +159,8 @@ export async function replaceForType(
       .input(`ph${index}`, sql.Float, box.pageHeightPt)
     return (
       `(@documentTypeId, @role${index}, @page${index}, @x${index}, @y${index}, @w${index}, @h${index}, ` +
-      `@rot${index}, @pw${index}, @ph${index}, @samplePageCount, @sampleDocumentId, @createdBy)`
+      `@rot${index}, @pw${index}, @ph${index}, @samplePageCount, @sampleWidthPt, @sampleHeightPt, ` +
+      `@sampleDocumentId, @createdBy)`
     )
   })
 
@@ -123,7 +169,8 @@ export async function replaceForType(
     tuples.length > 0
       ? `INSERT INTO dbo.DocumentTypePlacements
              (DocumentTypeId, SignerRole, PageNumber, X, Y, Width, Height, PageRotation,
-              PageWidthPt, PageHeightPt, SamplePageCount, SampleDocumentId, CreatedBy)
+              PageWidthPt, PageHeightPt, SamplePageCount, SampleWidthPt, SampleHeightPt,
+              SampleDocumentId, CreatedBy)
          VALUES ${tuples.join(', ')};`
       : ''
 
@@ -131,7 +178,7 @@ export async function replaceForType(
       SET XACT_ABORT ON;
       BEGIN TRANSACTION;
 
-      DELETE FROM dbo.DocumentTypePlacements WHERE DocumentTypeId = @documentTypeId;
+      DELETE FROM dbo.DocumentTypePlacements WHERE ${VARIANT_PREDICATE};
 
       ${VALUES_CLAUSE}
 
@@ -142,15 +189,15 @@ interface SummaryRow {
   DocumentTypeId: number
   DocumentName: string
   DocumentCode: string
-  Boxes: number
-  EmployeeBoxes: number
-  AuthoriserBoxes: number
-  PhotoBoxes: number
-  Pages: number
-  PageWidthPt: number | null
-  PageHeightPt: number | null
-  PageRotation: number | null
   SamplePageCount: number | null
+  SampleWidthPt: number | null
+  SampleHeightPt: number | null
+  Boxes: number | null
+  EmployeeBoxes: number | null
+  AuthoriserBoxes: number | null
+  PhotoBoxes: number | null
+  Pages: number | null
+  PageRotation: number | null
   SampleDocumentId: number | null
   SampleEmployeeCode: string | null
   SetByName: string | null
@@ -158,41 +205,33 @@ interface SummaryRow {
 }
 
 /**
- * Every active type with its template at a glance.
+ * Every active type with each of its variants at a glance.
  *
- * One row per type, template or not: the list is the whole checklist, and a
- * type with nothing set up is the one the administrator is looking for. The
- * sample's page size is read from the first box, which is the same for every
- * box of one template.
+ * One row per (type, variant), and one row for a type with none: the list is
+ * the whole checklist, and a type with nothing set up is the one the
+ * administrator is looking for. Folded into one summary per type here.
  */
 export async function summaries(): Promise<DocumentTypeTemplateSummary[]> {
   const request = await createRequest()
   const result = await request.query<SummaryRow>(`
       WITH agg AS (
-          SELECT tp.DocumentTypeId,
+          SELECT tp.DocumentTypeId, tp.SamplePageCount, tp.SampleWidthPt, tp.SampleHeightPt,
                  COUNT(*) AS Boxes,
                  SUM(CASE WHEN tp.SignerRole = 'Employee'   THEN 1 ELSE 0 END) AS EmployeeBoxes,
                  SUM(CASE WHEN tp.SignerRole = 'Authoriser' THEN 1 ELSE 0 END) AS AuthoriserBoxes,
                  SUM(CASE WHEN tp.SignerRole = 'Photo'      THEN 1 ELSE 0 END) AS PhotoBoxes,
                  COUNT(DISTINCT tp.PageNumber) AS Pages,
-                 MIN(tp.PageWidthPt)      AS PageWidthPt,
-                 MIN(tp.PageHeightPt)     AS PageHeightPt,
                  MIN(tp.PageRotation)     AS PageRotation,
-                 MIN(tp.SamplePageCount)  AS SamplePageCount,
                  MIN(tp.SampleDocumentId) AS SampleDocumentId,
                  MIN(tp.CreatedBy)        AS SetBy,
                  MAX(tp.CreatedAt)        AS SetAt
           FROM   dbo.DocumentTypePlacements AS tp
-          GROUP BY tp.DocumentTypeId
+          GROUP BY tp.DocumentTypeId, tp.SamplePageCount, tp.SampleWidthPt, tp.SampleHeightPt
       )
       SELECT dt.DocumentTypeId, dt.DocumentName, dt.DocumentCode,
-             ISNULL(agg.Boxes, 0)           AS Boxes,
-             ISNULL(agg.EmployeeBoxes, 0)   AS EmployeeBoxes,
-             ISNULL(agg.AuthoriserBoxes, 0) AS AuthoriserBoxes,
-             ISNULL(agg.PhotoBoxes, 0)      AS PhotoBoxes,
-             ISNULL(agg.Pages, 0)           AS Pages,
-             agg.PageWidthPt, agg.PageHeightPt, agg.PageRotation,
-             agg.SamplePageCount, agg.SampleDocumentId,
+             agg.SamplePageCount, agg.SampleWidthPt, agg.SampleHeightPt,
+             agg.Boxes, agg.EmployeeBoxes, agg.AuthoriserBoxes, agg.PhotoBoxes, agg.Pages,
+             agg.PageRotation, agg.SampleDocumentId,
              e.EmployeeCode AS SampleEmployeeCode,
              u.FullName     AS SetByName,
              agg.SetAt
@@ -202,29 +241,60 @@ export async function summaries(): Promise<DocumentTypeTemplateSummary[]> {
       LEFT JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
       LEFT JOIN dbo.Users AS u ON u.UserId = agg.SetBy
       WHERE  dt.IsActive = 1
-      ORDER BY dt.SortOrder`)
+      ORDER BY dt.SortOrder, agg.SamplePageCount, agg.SampleWidthPt, agg.SampleHeightPt`)
 
   const scanned = new Set<string>(IDENTITY_CARD_DOCUMENT_CODES)
+  const byType = new Map<number, DocumentTypeTemplateSummary>()
 
-  return result.recordset.map((row) => ({
-    documentTypeId: row.DocumentTypeId,
-    documentName: row.DocumentName,
-    documentCode: row.DocumentCode,
-    status: scanned.has(row.DocumentCode) ? 'scanned' : row.Boxes > 0 ? 'set' : 'unset',
-    boxes: row.Boxes,
-    roles: {
-      ...(row.EmployeeBoxes ? { Employee: row.EmployeeBoxes } : {}),
-      ...(row.AuthoriserBoxes ? { Authoriser: row.AuthoriserBoxes } : {}),
-      ...(row.PhotoBoxes ? { Photo: row.PhotoBoxes } : {}),
-    },
-    pages: row.Pages,
-    pageWidthPt: row.PageWidthPt,
-    pageHeightPt: row.PageHeightPt,
-    pageRotation: row.PageRotation,
-    samplePageCount: row.SamplePageCount,
-    sampleDocumentId: row.SampleDocumentId,
-    sampleEmployeeCode: row.SampleEmployeeCode,
-    setByName: row.SetByName,
-    setAt: row.SetAt ? row.SetAt.toISOString() : null,
-  }))
+  for (const row of result.recordset) {
+    let summary = byType.get(row.DocumentTypeId)
+    if (!summary) {
+      summary = {
+        documentTypeId: row.DocumentTypeId,
+        documentName: row.DocumentName,
+        documentCode: row.DocumentCode,
+        status: scanned.has(row.DocumentCode) ? 'scanned' : 'unset',
+        variants: [],
+      }
+      byType.set(row.DocumentTypeId, summary)
+    }
+    if (row.SamplePageCount === null || row.SampleWidthPt === null || row.SampleHeightPt === null) {
+      continue
+    }
+    const variant: TemplateVariantSummary = {
+      variant: {
+        pageCount: row.SamplePageCount,
+        widthPt: row.SampleWidthPt,
+        heightPt: row.SampleHeightPt,
+      },
+      pageRotation: row.PageRotation ?? 0,
+      boxes: row.Boxes ?? 0,
+      roles: {
+        ...(row.EmployeeBoxes ? { Employee: row.EmployeeBoxes } : {}),
+        ...(row.AuthoriserBoxes ? { Authoriser: row.AuthoriserBoxes } : {}),
+        ...(row.PhotoBoxes ? { Photo: row.PhotoBoxes } : {}),
+      },
+      pages: row.Pages ?? 0,
+      sampleDocumentId: row.SampleDocumentId,
+      sampleEmployeeCode: row.SampleEmployeeCode,
+      setByName: row.SetByName,
+      setAt: row.SetAt ? row.SetAt.toISOString() : null,
+    }
+    summary.variants.push(variant)
+    if (summary.status === 'unset') summary.status = 'set'
+  }
+
+  // A defensive de-duplication: the GROUP BY makes variants distinct already,
+  // and the key is what the screen and the stamper compare on.
+  for (const summary of byType.values()) {
+    const seen = new Set<string>()
+    summary.variants = summary.variants.filter((v) => {
+      const key = variantKey(v.variant)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  return [...byType.values()]
 }
