@@ -51,10 +51,9 @@
    Idempotent: matches on DocumentCode, so re-running will not duplicate rows
    and will not silently overwrite a value HR has since changed in Settings.
 
-   The two ID cards have NO deadline. They must be attached before an employee
-   can be created, so either the file was there when the record was made or the
-   record predates that rule - neither is a document running late. They are
-   still mandatory, and still counted as outstanding when missing.
+   Every document has a deadline since 0034 (2026-09-17): the two ID cards and
+   the two statutory forms had none and were chased by hand, and the office
+   asked for dates on them.
 
    DeadlineValue / DeadlineUnit are the DEFAULT deadline applied to new joiners
    for this document type. NULL means the document has no submission deadline.
@@ -72,26 +71,27 @@ USING (VALUES
     ('BIO_DATA',           N'Bio Data Form',      1, 1,  7, 'DAY',    20,
      N'EmployeeName,EmployeeCode,JoiningDate'),
 
-    -- The two identity cards and the two statutory forms carry NO deadline.
-    -- They are collected and chased by hand rather than by date: 0022 gave the
-    -- cards seven days, and the office decided against it on 2026-09-05.
-    ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  NULL, NULL,   30,
+    -- Seven days for the two identity cards, since 0034 (2026-09-17). They had
+    -- none: 0022 gave them a week, 0024 took it away, and the office asked for
+    -- it back so they are chased like the rest.
+    ('AADHAAR_CARD',       N'Aadhaar Card',       1, 0,  7, 'DAY',    30,
      N'EmployeeName'),
 
-    ('PAN_CARD',           N'PAN Card',           1, 0,  NULL, NULL,   40,
+    ('PAN_CARD',           N'PAN Card',           1, 0,  7, 'DAY',    40,
      N'EmployeeName'),
 
     -- Optional: filed with the government, not collected from the employee.
-    ('PF_FORM',            N'PF Form / Form 11',  0, 1, NULL, NULL,   50,
+    -- Dated all the same, so they are chased.
+    ('PF_FORM',            N'PF Form / Form 11',  0, 1, 12, 'DAY',    50,
      N'EmployeeName'),
 
-    ('ESIC_FORM',          N'ESIC Form',          0, 1, NULL, NULL,   60,
+    ('ESIC_FORM',          N'ESIC Form',          0, 1, 12, 'DAY',    60,
      N'EmployeeName'),
 
-    ('GRATUITY_FORM',      N'Payment of Gratuity',   1, 1,  7, 'DAY',    80,
+    ('GRATUITY_FORM',      N'Payment of Gratuity',   1, 1, 12, 'DAY',    80,
      N'EmployeeName'),
 
-    ('FORM_16',            N'Form No. 16',        1, 1,  7, 'DAY',    90,
+    ('FORM_16',            N'Form No. 16',        1, 1, 12, 'DAY',    90,
      N'EmployeeName'),
 
     -- Six months from joining, not days: confirmation follows the probation

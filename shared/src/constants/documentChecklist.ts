@@ -17,16 +17,21 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  * go overdue. It does NOT mean it must be in hand before the employee record can
  * be created; nothing is.
  *
- * A NULL DEADLINE means the document is collected but never falls due. Those
- * four are chased by hand: the identity cards because they usually arrive with
- * the person, the two statutory forms because they are filed with the government
- * rather than collected from the employee.
+ * EVERY DOCUMENT HAS A DEADLINE, since 2026-09-17. Four are due in a week,
+ * four in twelve days, and the confirmation letter six calendar months after
+ * joining. A null deadline is still allowed by the shape - a document that is
+ * collected but never falls due - and none of the nine uses it now. The
+ * identity cards and the two statutory forms had none, and were chased by
+ * hand; the office asked for dates on them so they are chased like the rest.
  *
  * CHANGING SOMETHING HERE DOES NOT MOVE ANYBODY'S EXISTING DEADLINE. A due date
  * is written onto the employee's row when they are created, from this list as it
  * stood that day, and it stays there. Shortening a deadline would otherwise make
  * a hundred people overdue between one deployment and the next, for a document
- * nobody had been late with the day before.
+ * nobody had been late with the day before. When the office does want existing
+ * rows moved, that is a migration - 0023 and 0034 are the two that have - and
+ * only rows with nothing attached are moved; a document that has arrived keeps
+ * the date that applied to it.
  */
 
 export interface ChecklistRule {
@@ -58,42 +63,44 @@ export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
     documentCode: 'AADHAAR_CARD',
     documentName: 'Aadhaar Card',
     isMandatory: true,
-    deadlineValue: null,
-    deadlineUnit: null,
+    deadlineValue: 7,
+    deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
     documentCode: 'PAN_CARD',
     documentName: 'PAN Card',
     isMandatory: true,
-    deadlineValue: null,
-    deadlineUnit: null,
+    deadlineValue: 7,
+    deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
+    /* Optional - filed with the government, not collected from the employee -
+       and dated all the same, so it is chased. */
     documentCode: 'PF_FORM',
     documentName: 'PF Form / Form 11',
     isMandatory: false,
-    deadlineValue: null,
-    deadlineUnit: null,
+    deadlineValue: 12,
+    deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
     documentCode: 'ESIC_FORM',
     documentName: 'ESIC Form',
     isMandatory: false,
-    deadlineValue: null,
-    deadlineUnit: null,
+    deadlineValue: 12,
+    deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
     documentCode: 'GRATUITY_FORM',
     documentName: 'Payment of Gratuity',
     isMandatory: true,
-    deadlineValue: 7,
+    deadlineValue: 12,
     deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
     documentCode: 'FORM_16',
     documentName: 'Form No. 16',
     isMandatory: true,
-    deadlineValue: 7,
+    deadlineValue: 12,
     deadlineUnit: DEADLINE_UNITS.DAY,
   },
   {
