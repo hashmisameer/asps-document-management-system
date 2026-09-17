@@ -7,7 +7,7 @@ import { Badge } from '../components/ui/Badge.js'
 import { Button } from '../components/ui/Button.js'
 import { Select } from '../components/ui/Select.js'
 import { ApiError } from '../lib/apiError.js'
-import { downloadCsv, toCsv } from '../lib/csv.js'
+import { downloadXlsx } from '../lib/xlsx.js'
 import { formatDate } from '../lib/format.js'
 import { fetchFacets, employeeKeys } from '../features/employees/api.js'
 import {
@@ -31,8 +31,10 @@ import {
  *   WHO is outstanding - a long table naming the employee and the documents
  *   still to come from them, read by whoever is doing the chasing.
  *
- * Both download as CSV, built from the rows on screen rather than fetched
- * again, so the file is exactly what was being looked at.
+ * Both download as .xlsx, built from the rows on screen rather than fetched
+ * again, so the file is exactly what was being looked at. Excel rather than
+ * CSV because an employee code is '00005696' and a CSV loses the zeros on
+ * opening; the cell type in an .xlsx keeps them.
  */
 
 /** Today, for the filename, so two exports on different days are distinguishable. */
@@ -82,51 +84,42 @@ export function ReportsPage() {
   const exits = useQuery({ queryKey: reportKeys.exits, queryFn: fetchExits })
 
   const exportExits = (rows: ExitReportRow[]) => {
-    downloadCsv(
-      `asps-dms-exits-${today()}.csv`,
-      toCsv(rows, [
-        { header: 'Employee ID', value: (r) => r.employeeCode },
-        { header: 'Name', value: (r) => r.employeeName },
-        { header: 'Department', value: (r) => r.department ?? '' },
-        { header: 'Designation', value: (r) => r.designation ?? '' },
-        { header: 'Joined', value: (r) => formatDate(r.joiningDate) },
-        { header: 'Resigned', value: (r) => formatDate(r.resignationDate) },
-        { header: 'Last working day', value: (r) => formatDate(r.lastWorkingDate) },
-        { header: 'Reason', value: (r) => EXIT_REASON_LABEL[r.exitReason] },
-        { header: 'Days worked', value: (r) => r.daysWorked },
-        { header: 'Status', value: (r) => (r.hasGone ? 'Left' : 'On notice') },
-      ]),
-    )
+    downloadXlsx(`asps-dms-exits-${today()}.xlsx`, 'Exits', rows, [
+      { header: 'Employee ID', value: (r) => r.employeeCode, width: 14 },
+      { header: 'Name', value: (r) => r.employeeName, width: 30 },
+      { header: 'Department', value: (r) => r.department ?? '', width: 18 },
+      { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
+      { header: 'Joined', value: (r) => formatDate(r.joiningDate), width: 12 },
+      { header: 'Resigned', value: (r) => formatDate(r.resignationDate), width: 12 },
+      { header: 'Last working day', value: (r) => formatDate(r.lastWorkingDate), width: 16 },
+      { header: 'Reason', value: (r) => EXIT_REASON_LABEL[r.exitReason], width: 18 },
+      { header: 'Days worked', value: (r) => r.daysWorked, kind: 'number' },
+      { header: 'Status', value: (r) => (r.hasGone ? 'Left' : 'On notice') },
+    ])
   }
 
   const exportByType = (rows: DocumentTypeReportRow[]) => {
-    downloadCsv(
-      `asps-dms-documents-${today()}.csv`,
-      toCsv(rows, [
-        { header: 'Document', value: (r) => r.documentName },
-        { header: 'Mandatory', value: (r) => (r.isMandatory ? 'Yes' : 'No') },
-        { header: 'Expected', value: (r) => r.expected },
-        { header: 'Received', value: (r) => r.received },
-        { header: 'Outstanding', value: (r) => r.outstanding },
-        { header: 'Overdue', value: (r) => r.overdue },
-      ]),
-    )
+    downloadXlsx(`asps-dms-documents-${today()}.xlsx`, 'By document', rows, [
+      { header: 'Document', value: (r) => r.documentName, width: 24 },
+      { header: 'Mandatory', value: (r) => (r.isMandatory ? 'Yes' : 'No') },
+      { header: 'Expected', value: (r) => r.expected, kind: 'number' },
+      { header: 'Received', value: (r) => r.received, kind: 'number' },
+      { header: 'Outstanding', value: (r) => r.outstanding, kind: 'number' },
+      { header: 'Overdue', value: (r) => r.overdue, kind: 'number' },
+    ])
   }
 
   const exportOutstanding = (rows: OutstandingReportRow[]) => {
-    downloadCsv(
-      `asps-dms-outstanding-${today()}.csv`,
-      toCsv(rows, [
-        { header: 'Employee ID', value: (r) => r.employeeCode },
-        { header: 'Name', value: (r) => r.employeeName },
-        { header: 'Department', value: (r) => r.department ?? '' },
-        { header: 'Designation', value: (r) => r.designation ?? '' },
-        { header: 'Joined', value: (r) => formatDate(r.joiningDate) },
-        { header: 'Outstanding', value: (r) => r.outstanding },
-        { header: 'Overdue', value: (r) => r.overdue },
-        { header: 'Documents still to come', value: (r) => r.documents },
-      ]),
-    )
+    downloadXlsx(`asps-dms-outstanding-${today()}.xlsx`, 'Outstanding', rows, [
+      { header: 'Employee ID', value: (r) => r.employeeCode, width: 14 },
+      { header: 'Name', value: (r) => r.employeeName, width: 30 },
+      { header: 'Department', value: (r) => r.department ?? '', width: 18 },
+      { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
+      { header: 'Joined', value: (r) => formatDate(r.joiningDate), width: 12 },
+      { header: 'Outstanding', value: (r) => r.outstanding, kind: 'number' },
+      { header: 'Overdue', value: (r) => r.overdue, kind: 'number' },
+      { header: 'Documents still to come', value: (r) => r.documents, width: 60 },
+    ])
   }
 
   const failure = (error: unknown) =>
@@ -148,7 +141,7 @@ export function ReportsPage() {
           <h2 className="text-sm font-semibold text-slate-900">By document</h2>
           {byType.data && byType.data.length > 0 ? (
             <Button variant="secondary" onClick={() => exportByType(byType.data)}>
-              Download CSV
+              Download Excel
             </Button>
           ) : null}
         </div>
@@ -236,7 +229,7 @@ export function ReportsPage() {
           </h2>
           {outstanding.data && outstanding.data.rows.length > 0 ? (
             <Button variant="secondary" onClick={() => exportOutstanding(outstanding.data.rows)}>
-              Download CSV
+              Download Excel
             </Button>
           ) : null}
         </div>
@@ -285,7 +278,7 @@ export function ReportsPage() {
         {outstanding.data?.truncated ? (
           <div className="mt-2">
             <Alert tone="info" title="Only the first 1000 employees are shown">
-              Narrow it by department, or download the CSV of what is here.
+              Narrow it by department, or download what is here to Excel.
             </Alert>
           </div>
         ) : null}
@@ -356,7 +349,7 @@ export function ReportsPage() {
           <h2 className="text-sm font-semibold text-slate-900">Exits</h2>
           {exits.data && exits.data.exits.length > 0 ? (
             <Button variant="secondary" onClick={() => exportExits(exits.data.exits)}>
-              Export CSV
+              Export to Excel
             </Button>
           ) : null}
         </div>

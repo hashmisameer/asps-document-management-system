@@ -16,6 +16,7 @@ export * from './utils/dateOnly.js'
 export * from './utils/deadline.js'
 export * from './utils/coordinates.js'
 export * from './utils/fieldMatch.js'
+export * from './utils/xlsxWrite.js'
 
 // Validation schemas
 export * from './schemas/common.js'
