@@ -6,7 +6,7 @@ import { Badge } from '../components/ui/Badge.js'
 import { Button } from '../components/ui/Button.js'
 import { Select } from '../components/ui/Select.js'
 import { ApiError } from '../lib/apiError.js'
-import { downloadCsv, toCsv } from '../lib/csv.js'
+import { downloadXlsx } from '../lib/xlsx.js'
 import { saveBlob } from '../lib/download.js'
 import { formatDate } from '../lib/format.js'
 import { employeeKeys, fetchFacets } from '../features/employees/api.js'
@@ -30,7 +30,7 @@ import {
  *
  * Paged rather than loaded whole. There are 568 employees; a screen that shows
  * twenty-five of them has no business asking for all of them. The two exports
- * are the exception: the PDF and the CSV both ask the server for every row the
+ * are the exception: the PDF and the Excel export both ask the server for every row the
  * filters match, because a file that quietly held one page of them was
  * forwarded as if it were the whole list.
  */
@@ -104,37 +104,41 @@ export function DocumentEmployeesPage() {
    * what somebody needs in order to go and ask for the document.
    */
   const exportRows = (rows: DocumentEmployeeRow[]) => {
-    downloadCsv(
-      // Reduced to what a file name can hold: 'PF FORM/FORM 11' is a document,
+    const documentName = type?.documentName ?? 'document'
+    downloadXlsx(
+      // Reduced to what a file name can hold: 'PF Form / Form 11' is a document,
       // not a folder, and a slash in a download name is whatever the browser
       // decides to make of it.
-      `asps-dms-${(type?.documentName ?? 'document')
+      `asps-dms-${documentName
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')}-${new Date().toISOString().slice(0, 10)}.csv`,
-      toCsv(rows, [
-        { header: 'Employee ID', value: (r) => r.employeeCode },
-        { header: 'Name', value: (r) => r.employeeName },
-        { header: 'Department', value: (r) => r.department ?? '' },
-        { header: 'Designation', value: (r) => r.designation ?? '' },
+        .replace(/^-+|-+$/g, '')}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      documentName,
+      rows,
+      [
+        { header: 'Employee ID', value: (r) => r.employeeCode, width: 14 },
+        { header: 'Name', value: (r) => r.employeeName, width: 30 },
+        { header: 'Department', value: (r) => r.department ?? '', width: 18 },
+        { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
         { header: 'Status', value: (r) => (tracksOverdue ? r.state : r.state === 'Received' ? 'Received' : 'Pending') },
-        { header: 'Due', value: (r) => (r.dueDate ? formatDate(r.dueDate) : '') },
+        { header: 'Due', value: (r) => (r.dueDate ? formatDate(r.dueDate) : ''), width: 12 },
         {
           header: 'Days overdue',
-          value: (r) => (tracksOverdue && r.daysOverdue !== null && r.daysOverdue > 0 ? r.daysOverdue : ''),
+          value: (r) => (tracksOverdue && r.daysOverdue !== null && r.daysOverdue > 0 ? r.daysOverdue : null),
+          kind: 'number',
         },
-      ]),
+      ],
     )
   }
 
-  const exportCsv = useMutation({
+  const exportXlsx = useMutation({
     mutationFn: () => fetchAllEmployeesForDocumentType(documentTypeId, filters),
     onSuccess: exportRows,
   })
 
   const error = list.error instanceof ApiError ? list.error : null
   const printError = print.error instanceof ApiError ? print.error : null
-  const exportError = exportCsv.error instanceof ApiError ? exportCsv.error : null
+  const exportError = exportXlsx.error instanceof ApiError ? exportXlsx.error : null
   const total = list.data?.total ?? 0
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -181,11 +185,11 @@ export function DocumentEmployeesPage() {
             </Button>
             <Button
               variant="secondary"
-              busy={exportCsv.isPending}
+              busy={exportXlsx.isPending}
               busyLabel="Preparing..."
-              onClick={() => exportCsv.mutate()}
+              onClick={() => exportXlsx.mutate()}
             >
-              Export CSV
+              Export to Excel
             </Button>
           </div>
         ) : null}

@@ -19,7 +19,7 @@ import { Select } from '../../components/ui/Select.js'
 import { TextField } from '../../components/ui/TextField.js'
 import { useAuth } from '../auth/useAuth.js'
 import { ApiError } from '../../lib/apiError.js'
-import { downloadCsv, toCsv } from '../../lib/csv.js'
+import { downloadXlsx } from '../../lib/xlsx.js'
 import { saveBlob } from '../../lib/download.js'
 import { formatDate } from '../../lib/format.js'
 import { useDebounced } from '../../lib/useDebounced.js'
@@ -109,7 +109,7 @@ export function EmployeeListPage() {
    * change, because at that point the rows on screen are a different set of
    * people and a hidden selection is one somebody prints by accident.
    *
-   * THE SELECTION IS WHAT COMES OUT. Export CSV exports it - every id in the
+   * THE SELECTION IS WHAT COMES OUT. Export to Excel exports it - every id in the
    * set, whichever page it was ticked on, and nothing that is not in it - with
    * no cap. Print selected prints it up to MAX_FORMS_PER_PRINT and refuses
    * above that, on screen, before anything is sent: a print of everybody would
@@ -191,31 +191,35 @@ export function EmployeeListPage() {
    * gets emailed to a department head - outside every control this system
    * has - so it holds only what is on the screen it was exported from.
    */
-  const exportCsv = useMutation({
+  const exportXlsx = useMutation({
     mutationFn: async () => {
       const all = await listAllEmployees(allParams)
       return all.filter((row) => selected.has(row.employeeId))
     },
     onSuccess: (chosen) => {
-      downloadCsv(
-        `asps-dms-employees-${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(chosen, [
-          { header: 'Employee ID', value: (r) => r.employeeCode },
-          { header: 'Name', value: (r) => r.employeeName },
-          { header: 'Joined', value: (r) => formatDate(r.joiningDate) },
-          { header: 'Department', value: (r) => r.department ?? '' },
-          { header: 'Designation', value: (r) => r.designation ?? '' },
-          { header: 'Documents pending', value: (r) => r.counts.pending },
-          { header: 'Documents total', value: (r) => r.counts.total },
-          { header: 'Overdue', value: (r) => r.counts.overdue },
-          { header: 'Documents to sign', value: (r) => r.counts.signatureReviewRequired },
+      // Text unless said otherwise: the code is '00005696' and must stay so.
+      // Only the counts are numbers.
+      downloadXlsx(
+        `asps-dms-employees-${new Date().toISOString().slice(0, 10)}.xlsx`,
+        'Employees',
+        chosen,
+        [
+          { header: 'Employee ID', value: (r) => r.employeeCode, width: 14 },
+          { header: 'Name', value: (r) => r.employeeName, width: 30 },
+          { header: 'Joined', value: (r) => formatDate(r.joiningDate), width: 12 },
+          { header: 'Department', value: (r) => r.department ?? '', width: 18 },
+          { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
+          { header: 'Documents pending', value: (r) => r.counts.pending, kind: 'number' },
+          { header: 'Documents total', value: (r) => r.counts.total, kind: 'number' },
+          { header: 'Overdue', value: (r) => r.counts.overdue, kind: 'number' },
+          { header: 'Documents to sign', value: (r) => r.counts.signatureReviewRequired, kind: 'number' },
           { header: 'Employee signature', value: (r) => (r.hasSignature ? 'Signed' : 'Not signed') },
           { header: 'Archived', value: (r) => (r.isActive ? '' : 'Yes') },
-        ]),
+        ],
       )
     },
   })
-  const exportError = exportCsv.error instanceof ApiError ? exportCsv.error : null
+  const exportError = exportXlsx.error instanceof ApiError ? exportXlsx.error : null
   const selectAllError = selectAll.error instanceof ApiError ? selectAll.error : null
 
   /**
@@ -299,12 +303,12 @@ export function EmployeeListPage() {
           </Button>
           <Button
             variant="secondary"
-            busy={exportCsv.isPending}
+            busy={exportXlsx.isPending}
             busyLabel="Preparing..."
             disabled={selected.size === 0}
-            onClick={() => exportCsv.mutate()}
+            onClick={() => exportXlsx.mutate()}
           >
-            {selected.size > 0 ? `Export CSV (${selected.size})` : 'Export CSV'}
+            {selected.size > 0 ? `Export to Excel (${selected.size})` : 'Export to Excel'}
           </Button>
           {can(PERMISSIONS.EMPLOYEE_CREATE) ? (
             <Link
