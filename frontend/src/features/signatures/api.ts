@@ -1,4 +1,10 @@
-import type { EmployeeDocument, SavePlacementsInput, SignaturePlacement } from '@asps-dms/shared'
+import type {
+  BoxOccupancy,
+  CheckPlacementsInput,
+  EmployeeDocument,
+  SavePlacementsInput,
+  SignaturePlacement,
+} from '@asps-dms/shared'
 import { api } from '../../lib/api.js'
 
 /**
@@ -126,6 +132,25 @@ export async function savePlacements(
     input,
   )
   return response.data.document
+}
+
+/**
+ * Is anything already in these boxes?
+ *
+ * Asked before saving, with the same boxes, so a signature is never painted
+ * over one that is already there without somebody choosing to. The server
+ * asks itself the same question when it saves; this call is what lets the
+ * person see the answer first.
+ */
+export async function checkPlacements(
+  documentId: number,
+  input: CheckPlacementsInput,
+): Promise<BoxOccupancy[]> {
+  const response = await api.post<{ occupancy: BoxOccupancy[] }>(
+    `/documents/${documentId}/placements/check`,
+    input,
+  )
+  return response.data.occupancy
 }
 
 export async function skipSignature(

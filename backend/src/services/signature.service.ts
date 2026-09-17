@@ -1,15 +1,19 @@
 import { PDFDocument } from 'pdf-lib'
 import sharp from 'sharp'
 import {
+  API_ERROR_CODES,
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPES,
   PHOTO_DOCUMENT_CODE,
   SIGNATURE_STATUS,
   SIGNER_ROLES,
+  SIGNER_ROLE_LABEL,
   canTransitionSignature,
   isSignatureRole,
   normalizeRotation,
   type AuthUser,
+  type BoxOccupancy,
+  type CheckPlacementsInput,
   type EmployeeDocument,
   type SavePlacementsInput,
   type SignaturePlacement,
@@ -24,6 +28,7 @@ import * as userSignatureRepository from '../repositories/userSignature.reposito
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js'
 import * as audit from './audit.service.js'
 import type { RequestContext } from './auth.service.js'
+import { assessBoxes, type BoxAssessment } from './boxOccupancy.service.js'
 import * as documentService from './document.service.js'
 import * as employeeService from './employee.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
@@ -260,6 +265,63 @@ export async function listPlacements(documentId: number): Promise<SignaturePlace
   return signaturePlacementRepository.listForDocument(documentId)
 }
 
+function toOccupancy(assessment: BoxAssessment, index: number, role: SignerRole): BoxOccupancy {
+  const occupancy: BoxOccupancy = {
+    index,
+    signerRole: role,
+    pageNumber: assessment.pageNumber,
+    verdict: assessment.verdict,
+    decidedBy: assessment.decidedBy,
+    pageKind: assessment.pageKind,
+    overlap: assessment.overlap,
+    reason: assessment.reason,
+  }
+  if (assessment.ink) occupancy.ink = assessment.ink
+  return occupancy
+}
+
+/**
+ * Is anything already in these boxes?
+ *
+ * Asked by the editor before 'Save and stamp', and by savePlacements before it
+ * stamps, so the answer HR sees on screen is the answer the server acts on.
+ * Reads the original file - never the signed copy, which would have our own
+ * stamps in it - and writes nothing.
+ */
+export async function checkPlacements(
+  documentId: number,
+  input: CheckPlacementsInput,
+): Promise<BoxOccupancy[]> {
+  const document = await documentService.getById(documentId)
+  if (document.originalFileName === null) {
+    throw new ConflictError('There is no file on this document to check.')
+  }
+  const location = await employeeDocumentRepository.findStoredFile(documentId)
+  if (!location?.originalFilePath) {
+    throw new ConflictError('This document has no stored file to check.')
+  }
+
+  const source = await storage.readStoredFile(location.originalFilePath)
+  const assessments = await assessBoxes(
+    source,
+    location.mimeType ?? 'application/pdf',
+    input.placements.map((placement, index) => ({
+      label: String(index),
+      signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
+      pageNumber: placement.pageNumber,
+      rect: {
+        x: placement.x,
+        y: placement.y,
+        width: placement.width,
+        height: placement.height,
+      },
+    })),
+  )
+  return assessments.map((assessment, index) =>
+    toOccupancy(assessment, index, input.placements[index]?.signerRole ?? SIGNER_ROLES.EMPLOYEE),
+  )
+}
+
 /**
  * Saves the complete set of placements and regenerates the signed document.
  *
@@ -336,6 +398,23 @@ export async function savePlacements(
   const location = await employeeDocumentRepository.findStoredFile(documentId)
   if (!location?.originalFilePath) {
     throw new ConflictError('This document has no stored file to sign.')
+  }
+
+  // Nothing is painted over something already there. The editor asked this
+  // question a moment ago and showed the answer; it is asked again here so the
+  // rule holds for anyone calling the API directly. An occupied or uncertain
+  // box is refused unless HR, having seen the numbers, said to go ahead - and
+  // then which boxes, and what was measured, goes into the audit trail.
+  const occupancy = await checkPlacements(documentId, { placements: input.placements })
+  const notEmpty = occupancy.filter((box) => box.verdict !== 'empty')
+  if (notEmpty.length > 0 && !input.acknowledgeOccupied) {
+    throw new ConflictError(
+      notEmpty.length === 1
+        ? `The ${SIGNER_ROLE_LABEL[notEmpty[0]!.signerRole].toLowerCase()} box on page ${notEmpty[0]!.pageNumber} already has something in it (${notEmpty[0]!.reason}).`
+        : `${notEmpty.length} of the boxes already have something in them.`,
+      API_ERROR_CODES.CONFLICT,
+      { details: { occupancy: notEmpty } },
+    )
   }
 
   const [source, employeeImage, authoriserImage] = await Promise.all([
@@ -438,6 +517,18 @@ export async function savePlacements(
       placements: input.placements.length,
       pages: pageCount,
       signers: Array.from(roles),
+      // Boxes that already had something in them and were stamped anyway,
+      // with what was measured: the trail can answer 'why is there a
+      // signature on top of a signature' with 'HR saw 6.1% ink and said so'.
+      acknowledgedOccupied: notEmpty.map((box) => ({
+        index: box.index,
+        signerRole: box.signerRole,
+        page: box.pageNumber,
+        verdict: box.verdict,
+        decidedBy: box.decidedBy,
+        coverage: round(box.overlap.coverage),
+        inkPercent: box.ink ? Math.round(box.ink.percent * 100) / 100 : null,
+      })),
       // The positions themselves, so the audit trail can answer where a
       // signature was put, not merely that one was.
       rects: input.placements.map((placement) => ({

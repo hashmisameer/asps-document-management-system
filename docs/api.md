@@ -249,6 +249,7 @@ Status changes go through a state machine. One it does not allow is **409
 | GET | `/employees/:employeeId/signature/image` | `signature:read` | Admin, HR, Viewer |
 | GET | `/documents/:documentId/placements` | `signature:read` | Admin, HR, Viewer |
 | PUT | `/documents/:documentId/placements` | `signature:place` | Admin, HR |
+| POST | `/documents/:documentId/placements/check` | `signature:place` | Admin, HR |
 | POST | `/documents/:documentId/skip-signature` | `signature:skip` | Admin, HR |
 
 Both signature uploads are `multipart/form-data` with the image in a field named
@@ -303,6 +304,49 @@ original. There is no partial update; an empty array removes the signature.
   cannot name someone else, so nobody can sign a document off in a colleague's
   name.
 - Both signers must have a signature on file, or there is nothing to stamp.
+
+#### Is the box already taken?
+
+Nothing is stamped over something already there. Before the signed copy is
+built, every box is checked against the **original** file: on a digital page,
+an image covering enough of the box means it is occupied; on a scanned page
+(or an image upload) the box's ink is measured against the page's own
+background. The thresholds are the `STAMP_*` settings in
+[`deployment.md`](deployment.md).
+
+`POST .../placements/check` asks the question without saving. It takes the
+same `placements` array as the `PUT` and answers box by box, in request order:
+
+```jsonc
+// 200
+{
+  "occupancy": [
+    {
+      "index": 0, "signerRole": "Employee", "pageNumber": 1,
+      "verdict": "empty",            // empty | occupied | uncertain
+      "decidedBy": "none",           // image | ink | none
+      "pageKind": "digital",         // digital | scanned
+      "overlap": { "images": 0, "coverage": 0 },
+      "reason": "no image on the box"
+    },
+    {
+      "index": 1, "signerRole": "Authoriser", "pageNumber": 1,
+      "verdict": "occupied",
+      "decidedBy": "ink",
+      "pageKind": "scanned",
+      "overlap": { "images": 0, "coverage": 0 },
+      "ink": { "percent": 6.1, "background": 231, "cutoff": 191 },
+      "reason": "ink covers 6.1% of the box"
+    }
+  ]
+}
+```
+
+The `PUT` runs the same check itself. If any box is `occupied` or `uncertain`
+it answers **409 `CONFLICT`** with the boxes in question under
+`error.details.occupancy`, and nothing is stamped. Sending the `PUT` again with
+`"acknowledgeOccupied": true` stamps anyway; the audit entry then lists which
+boxes were acknowledged and what was measured in each.
 
 ```jsonc
 // POST /documents/:documentId/skip-signature  - reason is optional

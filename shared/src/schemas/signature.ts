@@ -65,9 +65,31 @@ export type PlacementInput = z.infer<typeof placementSchema>
  */
 export const savePlacementsSchema = z.object({
   placements: z.array(placementSchema).max(50),
+  /**
+   * Stamp even where a box already has something in it.
+   *
+   * Before the signed copy is built, every box is checked for an image or ink
+   * already there, and an occupied box is refused - a signature painted over a
+   * signature is the one mistake this whole path exists to prevent. HR can
+   * decide otherwise, having seen the numbers on screen; this says they did,
+   * and the audit entry records which boxes and what was measured.
+   */
+  acknowledgeOccupied: z.boolean().default(false),
 })
 
 export type SavePlacementsInput = z.infer<typeof savePlacementsSchema>
+
+/**
+ * The same boxes, asked about rather than saved: is anything already in them?
+ *
+ * What the editor sends before 'Save and stamp', so a warning arrives before
+ * the work of positioning is spent. Reads the document; writes nothing.
+ */
+export const checkPlacementsSchema = z.object({
+  placements: z.array(placementSchema).max(50),
+})
+
+export type CheckPlacementsInput = z.infer<typeof checkPlacementsSchema>
 
 /**
  * One box of a document type's template, as the editor sends it.

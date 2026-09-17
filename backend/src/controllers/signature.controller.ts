@@ -1,6 +1,7 @@
 import type { Request, RequestHandler } from 'express'
 import { z } from 'zod'
 import {
+  checkPlacementsSchema,
   idParamSchema,
   savePlacementsSchema,
   skipSignatureSchema,
@@ -109,6 +110,16 @@ export const downloadEmployeeSignature: RequestHandler = async (req, res) => {
 export const listPlacements: RequestHandler = async (req, res) => {
   const { documentId } = parseParams(req, documentParamsSchema)
   res.json({ placements: await signatureService.listPlacements(documentId) })
+}
+
+/**
+ * Is anything already in these boxes? Asked before saving, so the warning
+ * comes before the stamp. A POST because it sends a body; it changes nothing.
+ */
+export const checkPlacements: RequestHandler = async (req, res) => {
+  const { documentId } = parseParams(req, documentParamsSchema)
+  const input = parseBody(req, checkPlacementsSchema)
+  res.json({ occupancy: await signatureService.checkPlacements(documentId, input) })
 }
 
 /**

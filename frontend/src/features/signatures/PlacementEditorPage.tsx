@@ -9,7 +9,9 @@ import {
   SIGNER_ROLE_LABEL,
   normalizeRotation,
   toRenderedRect,
+  type BoxOccupancy,
   type PageRotation,
+  type PlacementInput,
   type SignerRole,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
@@ -19,12 +21,14 @@ import { documentFileUrl, fetchDocument } from '../documents/api.js'
 import { employeeKeys, fetchEmployee } from '../employees/api.js'
 import { ApiError } from '../../lib/apiError.js'
 import {
+  checkPlacements,
   fetchMySignature,
   fetchPlacements,
   fetchSignature,
   savePlacements,
   signatureKeys,
 } from './api.js'
+import { describeOccupancy, notEmpty, occupancyTitle } from './occupancyText.js'
 import {
   moveRect,
   newPlacement,
@@ -82,6 +86,9 @@ export function PlacementEditorPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  // Boxes the server found something in, awaiting a decision. Null when there
+  // is no warning on screen; the save goes ahead only once this is answered.
+  const [occupied, setOccupied] = useState<BoxOccupancy[] | null>(null)
   // Whether the boxes are on screen.
   //
   // Once a document is stamped, the signature is part of the page: drawing the
@@ -144,31 +151,50 @@ export function PlacementEditorPage() {
     (next: DraftPlacement[]) => {
       setDrafts(next)
       setSaved(false)
+      // A moved box is a different question; the old answer no longer applies.
+      setOccupied(null)
     },
     [setDrafts],
   )
 
+  const toInputs = (): PlacementInput[] =>
+    placements.map((placement) => ({
+      pageNumber: placement.pageNumber,
+      x: placement.rect.x,
+      y: placement.rect.y,
+      width: placement.rect.width,
+      height: placement.rect.height,
+      pageRotation: placement.pageRotation,
+      // Everything drawn here was put there by a person. Detection is
+      // advisory and does not run in this editor, so claiming otherwise
+      // would misreport how the signature came to be where it is.
+      method: 'Manual',
+      detectionMethod: 'Manual',
+      signerRole: placement.signerRole,
+      confidence: null,
+    }))
+
+  // Saving is two steps. First the server is asked whether anything is already
+  // in the boxes; if it is, the answer is shown and nothing is stamped until
+  // the person says so. Only then is the set saved, carrying that decision, so
+  // the server (which asks the same question again) stamps and records it.
   const save = useMutation({
-    mutationFn: () =>
-      savePlacements(documentId, {
-        placements: placements.map((placement) => ({
-          pageNumber: placement.pageNumber,
-          x: placement.rect.x,
-          y: placement.rect.y,
-          width: placement.rect.width,
-          height: placement.rect.height,
-          pageRotation: placement.pageRotation,
-          // Everything drawn here was put there by a person. Detection is
-          // advisory and does not run in this editor, so claiming otherwise
-          // would misreport how the signature came to be where it is.
-          method: 'Manual',
-          detectionMethod: 'Manual',
-          signerRole: placement.signerRole,
-          confidence: null,
-        })),
-      }),
-    onSuccess: async () => {
+    mutationFn: async ({ acknowledgeOccupied }: { acknowledgeOccupied: boolean }) => {
+      const inputs = toInputs()
+      if (!acknowledgeOccupied && inputs.length > 0) {
+        const found = notEmpty(await checkPlacements(documentId, { placements: inputs }))
+        if (found.length > 0) return { occupied: found }
+      }
+      await savePlacements(documentId, { placements: inputs, acknowledgeOccupied })
+      return { occupied: null }
+    },
+    onSuccess: async (result) => {
       setFailure(null)
+      if (result.occupied) {
+        setOccupied(result.occupied)
+        return
+      }
+      setOccupied(null)
       setSaved(true)
       setEditing(false)
       await queryClient.invalidateQueries({ queryKey: signatureKeys.placements(documentId) })
@@ -176,6 +202,7 @@ export function PlacementEditorPage() {
     },
     onError: (error: unknown) => {
       setSaved(false)
+      setOccupied(null)
       setFailure(error instanceof ApiError ? error.message : 'Those placements could not be saved.')
     },
   })
@@ -244,8 +271,8 @@ export function PlacementEditorPage() {
                 <Button
                   busy={save.isPending}
                   busyLabel="Saving..."
-                  disabled={save.isPending}
-                  onClick={() => save.mutate()}
+                  disabled={save.isPending || occupied !== null}
+                  onClick={() => save.mutate({ acknowledgeOccupied: false })}
                 >
                   Save and stamp
                 </Button>
@@ -292,6 +319,44 @@ export function PlacementEditorPage() {
       {failure ? (
         <div className="mt-3">
           <Alert title="Those placements were not saved">{failure}</Alert>
+        </div>
+      ) : null}
+
+      {/* Something is already where a stamp would go. The numbers are the
+          server's own measurements, so the choice to go ahead is made on what
+          was found and is recorded against the person who made it. */}
+      {occupied ? (
+        <div className="mt-3">
+          <Alert tone="info" title={occupancyTitle(occupied)}>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {occupied.map((box) => {
+                const line = describeOccupancy(box)
+                return (
+                  <li key={box.index}>
+                    <span className="font-medium">{line.where}</span>: {line.verdict} -{' '}
+                    {line.because}.
+                  </li>
+                )
+              })}
+            </ul>
+            <p className="mt-2">
+              Stamping anyway puts the signature on top of whatever is there. Move the box, or go
+              ahead if you have looked and it is right.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button variant="secondary" disabled={save.isPending} onClick={() => setOccupied(null)}>
+                Go back
+              </Button>
+              <Button
+                busy={save.isPending}
+                busyLabel="Stamping..."
+                disabled={save.isPending}
+                onClick={() => save.mutate({ acknowledgeOccupied: true })}
+              >
+                Stamp anyway
+              </Button>
+            </div>
+          </Alert>
         </div>
       ) : null}
 
