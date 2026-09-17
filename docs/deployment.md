@@ -312,6 +312,13 @@ variable, never its value.
 
 ### Optional, sensible defaults
 
+`STAMP_FULL_PAGE_MIN` (0.5), `STAMP_OVERLAP_MIN` (0.25), `STAMP_INK_EMPTY_MAX`
+(0.015), `STAMP_INK_OCCUPIED_MIN` (0.035), `STAMP_INK_MARGIN` (40) - whether a
+box already has a signature in it before one is stamped there. An image on the
+box decides a digital form; on a scan the box's ink is measured against the
+page's own background. `npm run stamp-check` prints the measurements for real
+documents so these can be tuned; every decision is also logged with its numbers.
+
 `DB_PORT` (1433), `DB_INSTANCE` (named instance - set this **or** `DB_PORT`,
 never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),
 `DB_CONNECTION_TIMEOUT_MS` (15000), `DB_REQUEST_TIMEOUT_MS` (30000),
