@@ -413,6 +413,65 @@ export interface SignaturePlacement {
   updatedAt: string
 }
 
+/* -------------------------------------------------------------------------- */
+/* Placement templates: where the boxes go on every document of a type         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One box of a document type's template.
+ *
+ * The same normalised rect a document's own placement uses, drawn on one
+ * sample document of the type. The sample's page size, rotation and page count
+ * travel with it: a document that does not match them is not one this box was
+ * drawn for.
+ */
+export interface DocumentTypePlacement {
+  documentTypePlacementId: number
+  documentTypeId: number
+  signerRole: SignerRole
+  pageNumber: number
+  x: number
+  y: number
+  width: number
+  height: number
+  pageRotation: number
+  /** The sample page, unrotated, in points. */
+  pageWidthPt: number
+  pageHeightPt: number
+  samplePageCount: number
+  sampleDocumentId: number | null
+  createdByName: string | null
+  createdAt: string
+}
+
+/**
+ * A document type's template at a glance, for the list an administrator
+ * chooses from.
+ *
+ *   'set'      boxes exist, and the rest of the fields say what they are
+ *   'unset'    nothing yet
+ *   'scanned'  never: an identity card is a scan with no fixed layout
+ */
+export interface DocumentTypeTemplateSummary {
+  documentTypeId: number
+  documentName: string
+  documentCode: string
+  status: 'set' | 'unset' | 'scanned'
+  boxes: number
+  /** How many boxes carry each role. */
+  roles: Partial<Record<SignerRole, number>>
+  pages: number
+  pageWidthPt: number | null
+  pageHeightPt: number | null
+  pageRotation: number | null
+  samplePageCount: number | null
+  sampleDocumentId: number | null
+  /** The sample's employee, when the document still exists. */
+  sampleEmployeeCode: string | null
+  setByName: string | null
+  setAt: string | null
+}
+
 export type PlacementMethod = 'Automatic' | 'Manual' | 'Adjusted'
 export type DetectionMethod = 'OCR' | 'CV' | 'Combined' | 'Manual'
 

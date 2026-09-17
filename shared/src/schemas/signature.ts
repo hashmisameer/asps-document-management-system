@@ -10,37 +10,46 @@ import { MIN_PLACEMENT_SIZE } from '../utils/coordinates.js'
  * re-validates these bounds before writing; a placement that would fall off the
  * page is rejected rather than silently clamped.
  */
-export const placementSchema = z
-  .object({
-    pageNumber: z.number().int().min(1),
-    x: z.number().min(0).max(1),
-    y: z.number().min(0).max(1),
-    width: z.number().min(MIN_PLACEMENT_SIZE).max(1),
-    height: z.number().min(MIN_PLACEMENT_SIZE).max(1),
-    pageRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).default(0),
+/** The box itself: where on which page. Shared by a document's placement and a type's template. */
+const boxSchema = z.object({
+  pageNumber: z.number().int().min(1),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().min(MIN_PLACEMENT_SIZE).max(1),
+  height: z.number().min(MIN_PLACEMENT_SIZE).max(1),
+  pageRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).default(0),
+  signerRole: z
+    .enum([SIGNER_ROLES.EMPLOYEE, SIGNER_ROLES.AUTHORISER, SIGNER_ROLES.PHOTO])
+    .default(SIGNER_ROLES.EMPLOYEE),
+})
+
+/** A box that would run off the page is refused, never clamped. */
+function withinPage<T extends z.ZodTypeAny>(schema: T) {
+  return schema
+    .refine((v: { x: number; width: number }) => v.x + v.width <= 1.0001, {
+      message: 'Placement extends beyond the right edge of the page',
+      path: ['width'],
+    })
+    .refine((v: { y: number; height: number }) => v.y + v.height <= 1.0001, {
+      message: 'Placement extends beyond the bottom edge of the page',
+      path: ['height'],
+    })
+}
+
+export const placementSchema = withinPage(
+  boxSchema.extend({
     method: z.enum(['Automatic', 'Manual', 'Adjusted']),
     detectionMethod: z.enum(['OCR', 'CV', 'Combined', 'Manual']),
-    /**
-     * Whose signature goes in this box.
-     *
-     * Defaults to the employee, which is what a placement meant before there
-     * was a second signer. The client never names WHICH authoriser: an
-     * 'Authoriser' box is always stamped with the signature of the user saving
-     * it, so nobody can sign a document off in a colleague's name.
+    /*
+     * signerRole, from the box: whose signature goes in it. Defaults to the
+     * employee, which is what a placement meant before there was a second
+     * signer. The client never names WHICH authoriser: an 'Authoriser' box is
+     * always stamped with the signature of the user saving it, so nobody can
+     * sign a document off in a colleague's name.
      */
-    signerRole: z
-      .enum([SIGNER_ROLES.EMPLOYEE, SIGNER_ROLES.AUTHORISER, SIGNER_ROLES.PHOTO])
-      .default(SIGNER_ROLES.EMPLOYEE),
     confidence: z.number().min(0).max(1).nullable().default(null),
-  })
-  .refine((v) => v.x + v.width <= 1.0001, {
-    message: 'Placement extends beyond the right edge of the page',
-    path: ['width'],
-  })
-  .refine((v) => v.y + v.height <= 1.0001, {
-    message: 'Placement extends beyond the bottom edge of the page',
-    path: ['height'],
-  })
+  }),
+)
 
 export type PlacementInput = z.infer<typeof placementSchema>
 
@@ -59,6 +68,38 @@ export const savePlacementsSchema = z.object({
 })
 
 export type SavePlacementsInput = z.infer<typeof savePlacementsSchema>
+
+/**
+ * One box of a document type's template, as the editor sends it.
+ *
+ * The document placement's shape plus the sample page it was drawn on. Method
+ * and detection are not part of it: a template is always drawn by hand.
+ */
+export const templatePlacementSchema = withinPage(
+  boxSchema.extend({
+    pageWidthPt: z.number().positive(),
+    pageHeightPt: z.number().positive(),
+  }),
+)
+
+/**
+ * Full replacement of a document type's template.
+ *
+ * The complete set, like a document's placements: a template is one thing,
+ * not a list of things to patch. An empty array removes it.
+ */
+export const saveTemplateSchema = z
+  .object({
+    sampleDocumentId: z.number().int().positive().nullable().default(null),
+    samplePageCount: z.number().int().min(1),
+    placements: z.array(templatePlacementSchema).max(50),
+  })
+  .refine((v) => v.placements.every((p) => p.pageNumber <= v.samplePageCount), {
+    message: 'A box is on a page the sample document does not have',
+    path: ['placements'],
+  })
+
+export type SaveTemplateInput = z.infer<typeof saveTemplateSchema>
 
 export const skipSignatureSchema = z.object({
   reason: z.string().trim().max(500).optional(),

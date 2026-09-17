@@ -54,6 +54,13 @@ export const PERMISSIONS = {
   AUDIT_READ: 'audit:read',
   USER_MANAGE: 'user:manage',
   SETTINGS_MANAGE: 'settings:manage',
+  /**
+   * Where the signatures and the photograph go on each document type.
+   *
+   * Set once, and wrong for every employee if it is wrong once - so an
+   * administrator's, and not part of SETTINGS_MANAGE, which HR holds.
+   */
+  TEMPLATE_MANAGE: 'template:manage',
 } as const
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -104,6 +111,7 @@ const VIEWER_PERMISSIONS: readonly Permission[] = [
 const ADMIN_PERMISSIONS: readonly Permission[] = [
   ...HR_PERMISSIONS,
   PERMISSIONS.USER_MANAGE,
+  PERMISSIONS.TEMPLATE_MANAGE,
 ]
 
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {

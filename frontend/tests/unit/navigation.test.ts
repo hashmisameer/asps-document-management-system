@@ -16,12 +16,14 @@ describe('navigation', () => {
     expect(labels(ROLES.VIEWER)).toEqual(['Dashboard', 'Employees', 'Reports'])
   })
 
-  it('offers no Settings, to anybody', () => {
+  it('offers Settings to the administrator, and to nobody else', () => {
     // The checklist is decided in code - see documentChecklist.ts - and the
-    // email goes to the addresses in .env. There is nothing left to configure
-    // on a screen, and a screen that can change the checklist is one somebody
-    // changes by accident.
-    for (const role of [ROLES.HR, ROLES.VIEWER, ROLES.ADMIN]) {
+    // email goes to the addresses in .env; neither is on a screen. What IS on
+    // a screen is where the signatures and the photograph go on each document
+    // type: set once, wrong for everybody if wrong once, and so an
+    // administrator's. HR signs documents all day and never sees it.
+    expect(labels(ROLES.ADMIN)).toContain('Settings')
+    for (const role of [ROLES.HR, ROLES.VIEWER]) {
       expect(labels(role)).not.toContain('Settings')
     }
   })
