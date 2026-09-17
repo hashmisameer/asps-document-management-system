@@ -137,6 +137,19 @@ export async function create(
     },
   })
 
+  // The photograph and signature MMC already holds, if it holds them. After
+  // the commit and the audit, so the employee exists whatever happens here;
+  // awaited, so the record that comes back already shows them; and never able
+  // to throw - a missing file, an unmounted drive or a file MMC has open must
+  // not cost a creation that has already succeeded. The form and the import
+  // both come through here, so one hook covers both.
+  //
+  // Imported at the call rather than at the top: that module reaches
+  // signature.service, which reaches back here, and a static cycle is a thing
+  // to avoid even where the runtime would tolerate it.
+  const mmc = await import('./mmcImages.service.js')
+  await mmc.attachQuietly(created, actor, context)
+
   return getById(created.employeeId)
 }
 

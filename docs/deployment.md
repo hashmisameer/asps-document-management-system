@@ -148,6 +148,46 @@ Every imported employee gets the full ten-document checklist with deadlines
 from their joining date, because the import goes through the same service the
 form does.
 
+### Photographs and signatures from MMC
+
+MMC keeps a photograph and a signature per employee on the server, named by
+the eight-digit code:
+
+```
+G:\MMC SOFTWARE\Debug\Image\00005696.jpg
+G:\MMC SOFTWARE\Debug\Signature\00005696.jpg
+```
+
+Set `MMC_PHOTO_DIR` and `MMC_SIGNATURE_DIR` in `backend/.env` to those folders
+and two things happen. Every employee created from then on - on the form or by
+import - gets whatever MMC holds for their code attached at once. And this
+attaches them to the employees already there:
+
+```
+npm run attach-mmc-images -- --dry-run     # what WOULD happen, per employee, with totals
+npm run attach-mmc-images                  # do it
+npm run attach-mmc-images -- --code 00005696
+npm run attach-mmc-images -- --limit 20 --as rakesh
+```
+
+- **The MMC folders are read and never written.** Nothing is renamed, moved,
+  deleted or re-encoded there. Every conversion happens to the copy on its way
+  into the DMS store: a progressive JPEG is made baseline (pdf-lib cannot embed
+  one), a photograph over the 2 MB limit is shrunk to fit, and a signature's
+  white paper is made transparent and stored as a PNG so it does not paint a
+  white box over the form it is stamped on.
+- **What was uploaded by hand is left alone.** An employee who already has a
+  photograph or a signature is skipped for that image - not replaced, not
+  re-encoded. `--replace` overrides that on the command line only; creating an
+  employee never replaces anything.
+- A code that is not eight digits has no MMC file and is reported as such. A
+  file MMC has open, or a drive that is not mounted, is reported and skipped,
+  never an error that stops the run or fails a creation; run the command again
+  later and it picks those up.
+- Attachments are recorded in the audit trail against the user named by `--as`
+  (default: the first administrator) with `source: MMC`, and on the form or
+  import against whoever created the employee.
+
 ---
 
 ## 5. Users

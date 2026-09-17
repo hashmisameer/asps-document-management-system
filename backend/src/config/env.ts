@@ -18,6 +18,13 @@ const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 dotenv.config({ path: path.join(backendRoot, '.env') })
 
+/** A directory named in full. A relative one would move with the working directory. */
+const absoluteDirectory = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => path.isAbsolute(value), { message: 'must be an absolute path' })
+
 const booleanish = z
   .enum(['true', 'false', '1', '0'])
   .transform((v) => v === 'true' || v === '1')
@@ -128,6 +135,20 @@ const envSchema = z
      * shared more widely than the team is.
      */
     REGISTRATION_SECRET: z.string().min(8).optional(),
+
+    /**
+     * Where the MMC application keeps employee photographs and signatures,
+     * named by the eight-digit employee code: 00005696.jpg.
+     *
+     * Both optional, and unset means the feature is off: nothing is looked
+     * for, nothing is logged. Set one without the other and only that image
+     * is attached. Absolute paths, because the process's working directory is
+     * not something an office server keeps steady. The folders are ANOTHER
+     * APPLICATION'S and are only ever opened for reading - see
+     * services/mmcImages.service.ts, which is the one module that touches them.
+     */
+    MMC_PHOTO_DIR: absoluteDirectory.optional(),
+    MMC_SIGNATURE_DIR: absoluteDirectory.optional(),
     REPORT_RECIPIENTS: z
       .string()
       .default('')
