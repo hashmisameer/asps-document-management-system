@@ -46,12 +46,30 @@ export interface ParsedRow {
   /** The line in the file, counting the header as line 1. */
   line: number
   values: Record<string, string>
+  /**
+   * The cells as they were in the file, untouched, in file order.
+   *
+   * What the rejected-rows download is built from: a person corrects what
+   * they typed, not what the importer made of it.
+   */
+  cells: string[]
 }
 
 export interface RowPlan {
   line: number
   employeeCode: string
   employeeName: string
+  /** The cells as they were in the file. See ParsedRow.cells. */
+  cells: string[]
+  /**
+   * The code as it arrived, when the importer restored its leading zeros.
+   *
+   * Every code in this company is eight digits, and Excel drops the zeros
+   * from a cell it decides is a number. '5696' is not a different employee
+   * from '00005696'; it is the same one with the zeros missing, and they are
+   * put back. Shown in the preview, because a person should see it happen.
+   */
+  paddedFrom?: string
   /** Present when the row can be created. */
   input?: CreateEmployeeInput
   /** Why the row cannot be created. Empty when it can. */
@@ -190,10 +208,45 @@ export function readRows(source: string | string[][]): {
     header.forEach((name, column) => {
       values[name] = (cells[column] ?? '').trim()
     })
-    rows.push({ line: i + 1, values })
+    rows.push({ line: i + 1, values, cells: cells.map((cell) => cell.trim()) })
   }
 
   return { rows, missingColumns: [] }
+}
+
+/** The three columns the import screen reads, in the order it reads them. */
+export const POSITIONAL_COLUMNS = ['employee_code', 'full_name', 'joining_date'] as const
+
+/**
+ * The table read BY POSITION: column one is the code, two the name, three the
+ * joining date, and the rest are ignored.
+ *
+ * The header row may say anything - 'Employee ID', 'Emp No', 'Worker Name',
+ * 'DOJ' - and is not used for mapping; it is returned so the screen can show
+ * what it read, which is how a file with no header row is noticed. A file
+ * from the office's own system, with its nine named columns, goes through
+ * readRows above instead; that is the CLI's path and it is unchanged.
+ */
+export function readRowsByPosition(table: readonly (readonly string[])[]): {
+  header: string[]
+  rows: ParsedRow[]
+} {
+  const header = (table[0] ?? []).slice(0, POSITIONAL_COLUMNS.length).map((cell) => cell.trim())
+
+  const rows: ParsedRow[] = []
+  for (let i = 1; i < table.length; i += 1) {
+    const cells = (table[i] ?? []).slice(0, POSITIONAL_COLUMNS.length).map((cell) => cell.trim())
+    while (cells.length < POSITIONAL_COLUMNS.length) cells.push('')
+    if (isBlank(cells)) continue
+
+    const values: Record<string, string> = {}
+    POSITIONAL_COLUMNS.forEach((name, column) => {
+      values[name] = cells[column] ?? ''
+    })
+    rows.push({ line: i + 1, values, cells })
+  }
+
+  return { header, rows }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -281,6 +334,38 @@ export function looksTruncated(employeeCode: string): boolean {
   return /^\d+$/.test(employeeCode) && employeeCode.length < 8
 }
 
+/** How long a code is: eight digits, with the zeros. */
+export const EMPLOYEE_CODE_DIGITS = 8
+
+/**
+ * The code as the company writes it, or why it cannot be.
+ *
+ * Digits only: every code this company issues is eight digits, and a code
+ * with letters in it is either the wrong column or a different system's
+ * number, and is refused rather than guessed at. Fewer than eight digits is
+ * Excel having dropped the zeros, and they are put back.
+ */
+export function normaliseEmployeeCode(
+  raw: string,
+): { code: string; paddedFrom?: string } | { error: string } {
+  const text = raw.trim()
+  if (text === '') return { error: 'employee_code is empty' }
+  if (!/^\d+$/.test(text)) {
+    return {
+      error: `employee_code '${text}' is not a number - every code is ${EMPLOYEE_CODE_DIGITS} digits`,
+    }
+  }
+  if (text.length > EMPLOYEE_CODE_DIGITS) {
+    return {
+      error: `employee_code '${text}' is longer than ${EMPLOYEE_CODE_DIGITS} digits`,
+    }
+  }
+  if (text.length < EMPLOYEE_CODE_DIGITS) {
+    return { code: text.padStart(EMPLOYEE_CODE_DIGITS, '0'), paddedFrom: text }
+  }
+  return { code: text }
+}
+
 /* -------------------------------------------------------------------------- */
 /* The plan                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -294,10 +379,20 @@ export function looksTruncated(employeeCode: string): boolean {
 export function planRow(row: ParsedRow, format: DateFormat): RowPlan {
   const value = (column: string): string => row.values[column] ?? ''
 
-  const employeeCode = value('employee_code').toUpperCase()
+  const normalised = normaliseEmployeeCode(value('employee_code'))
+  const employeeCode = 'code' in normalised ? normalised.code : value('employee_code').trim()
   const employeeName = value('full_name')
 
-  const plan: RowPlan = { line: row.line, employeeCode, employeeName, errors: [], warnings: [] }
+  const plan: RowPlan = {
+    line: row.line,
+    employeeCode,
+    employeeName,
+    cells: row.cells,
+    errors: [],
+    warnings: [],
+  }
+  if ('error' in normalised) plan.errors.push(normalised.error)
+  else if (normalised.paddedFrom !== undefined) plan.paddedFrom = normalised.paddedFrom
 
   const joiningDate = parseImportDate(value('joining_date'), format)
   if (value('joining_date') === '') {
@@ -317,12 +412,6 @@ export function planRow(row: ParsedRow, format: DateFormat): RowPlan {
   if (status !== '' && status !== 'ACTIVE') {
     plan.errors.push(
       `employment_status is '${status}'. Import the active employees, then record the exits on their records.`,
-    )
-  }
-
-  if (looksTruncated(employeeCode)) {
-    plan.warnings.push(
-      `employee_code '${employeeCode}' is shorter than the usual eight digits - check the spreadsheet has not dropped its leading zeros`,
     )
   }
 

@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   IMPORT_COLUMNS,
   looksTruncated,
+  normaliseEmployeeCode,
   parseCsv,
   parseImportDate,
   planImport,
   planRow,
   readRows,
+  readRowsByPosition,
 } from '../../src/services/employeeImport.service.js'
 
 /**
@@ -136,14 +138,39 @@ describe('judging one row', () => {
     expect(rowFor('00000068,A,4/11/2022,,,,,ACTIVE,TRUE').input?.employeeCode).toBe('00000068')
   })
 
-  it('warns when the spreadsheet looks to have eaten those zeros', () => {
+  it('restores the zeros the spreadsheet ate, and says so', () => {
+    // Excel decides '00000068' is the number 68 and writes 68. It is not a
+    // different employee; it is the same one with the zeros missing.
     const plan = rowFor('68,A,4/11/2022,,,,,ACTIVE,TRUE')
 
     expect(plan.errors).toEqual([])
-    expect(plan.warnings.join(' ')).toContain('leading zeros')
+    expect(plan.employeeCode).toBe('00000068')
+    expect(plan.input?.employeeCode).toBe('00000068')
+    expect(plan.paddedFrom).toBe('68')
+    // A full code is left alone and not reported as padded.
+    expect(rowFor('00000068,A,4/11/2022,,,,,ACTIVE,TRUE').paddedFrom).toBeUndefined()
     expect(looksTruncated('68')).toBe(true)
     expect(looksTruncated('00000068')).toBe(false)
     expect(looksTruncated('ASPS/9656')).toBe(false)
+  })
+
+  it('refuses a code that is not a number rather than guessing at it', () => {
+    // Every code this company issues is eight digits. Letters mean the wrong
+    // column, or another system's number - either way not something to pad.
+    const plan = rowFor('ASPS/9656,A,4/11/2022,,,,,ACTIVE,TRUE')
+
+    expect(plan.errors.join(' ')).toContain('not a number')
+    expect(plan.input).toBeUndefined()
+    expect(plan.paddedFrom).toBeUndefined()
+  })
+
+  it('normalises a code the way the company writes one', () => {
+    expect(normaliseEmployeeCode('5696')).toEqual({ code: '00005696', paddedFrom: '5696' })
+    expect(normaliseEmployeeCode(' 5696 ')).toEqual({ code: '00005696', paddedFrom: '5696' })
+    expect(normaliseEmployeeCode('00005696')).toEqual({ code: '00005696' })
+    expect(normaliseEmployeeCode('')).toEqual({ error: 'employee_code is empty' })
+    expect(normaliseEmployeeCode('EMP001')).toMatchObject({ error: expect.stringContaining('not a number') })
+    expect(normaliseEmployeeCode('123456789')).toMatchObject({ error: expect.stringContaining('longer than') })
   })
 
   it('imports the employee and drops a mobile number it cannot use', () => {
@@ -266,5 +293,50 @@ describe('planning the whole file', () => {
     expect(result.create.length + result.skip.length + result.fail.length).toBe(
       result.rows.length,
     )
+  })
+})
+
+describe('reading a sheet by position', () => {
+  // What the import screen reads: code, name, joining date, in that order,
+  // under whatever heading the person typed.
+  const table = [
+    ['Emp No', 'Worker Name', 'DOJ', 'Dept (ignored)'],
+    ['5696', 'Ravi Kumar Gaur', '07/09/2026', 'Cutting'],
+    ['', '', '', ''],
+    ['00000068', 'MD RAJJAK ALAM', '11/04/2022'],
+  ]
+
+  it('maps the first three columns by position and ignores the rest', () => {
+    const { header, rows } = readRowsByPosition(table)
+
+    expect(header).toEqual(['Emp No', 'Worker Name', 'DOJ'])
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual({
+      line: 2,
+      values: { employee_code: '5696', full_name: 'Ravi Kumar Gaur', joining_date: '07/09/2026' },
+      cells: ['5696', 'Ravi Kumar Gaur', '07/09/2026'],
+    })
+    // A short row is padded to three cells, not dropped.
+    expect(rows[1]?.cells).toEqual(['00000068', 'MD RAJJAK ALAM', '11/04/2022'])
+  })
+
+  it('skips a blank row and keeps the file line numbers honest', () => {
+    const { rows } = readRowsByPosition(table)
+    expect(rows.map((row) => row.line)).toEqual([2, 4])
+  })
+
+  it('feeds the plan exactly as the named reader does', () => {
+    const { rows } = readRowsByPosition(table)
+    const plan = planImport(rows, new Set(['00000068']), { format: 'dmy' })
+
+    expect(plan.create.map((row) => row.employeeCode)).toEqual(['00005696'])
+    expect(plan.create[0]?.paddedFrom).toBe('5696')
+    expect(plan.create[0]?.input?.joiningDate).toBe('2026-09-07')
+    expect(plan.skip.map((row) => row.duplicate)).toEqual(['in the database'])
+  })
+
+  it('reads an empty table as a header and nothing else', () => {
+    expect(readRowsByPosition([])).toEqual({ header: [], rows: [] })
+    expect(readRowsByPosition([['a', 'b', 'c']])).toEqual({ header: ['a', 'b', 'c'], rows: [] })
   })
 })

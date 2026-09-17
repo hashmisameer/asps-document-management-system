@@ -128,6 +128,66 @@ export interface EmployeeProfile extends Employee {
   signatureUpdatedAt: string | null
 }
 
+/* -------------------------------------------------------------------------- */
+/* Importing employees from a spreadsheet                                      */
+/* -------------------------------------------------------------------------- */
+
+/** How a slashed date in the file is read. Excel's own date cells bypass this. */
+export type ImportDateFormat = 'dmy' | 'mdy'
+
+/**
+ * One row of the file, judged.
+ *
+ *   create  valid, and will be created on confirm
+ *   skip    already in the database, or earlier in the same file - does nothing
+ *   fail    cannot be created; `errors` says why
+ */
+export interface EmployeeImportRow {
+  /** The line in the file, counting the header as line 1. */
+  line: number
+  /** The cells exactly as they were in the file, for the rejected-rows download. */
+  cells: string[]
+  employeeCode: string
+  employeeName: string
+  outcome: 'create' | 'skip' | 'fail'
+  errors: string[]
+  warnings: string[]
+  /** The code as it arrived, when its leading zeros were restored. */
+  paddedFrom?: string
+  duplicate?: 'in the database' | 'earlier in this file'
+}
+
+/** The preview: what the file holds and what confirming it would do. Nothing is written. */
+export interface EmployeeImportPreview {
+  /** The first row of the file, as read - so a file with no header is obvious. */
+  header: string[]
+  /** The first data row, as read. */
+  firstRow: string[]
+  dateFormat: ImportDateFormat
+  /** The first joining date, as typed and as understood, so the format can be checked. */
+  firstDate: { text: string; iso: string | null } | null
+  totals: { read: number; create: number; skip: number; fail: number; padded: number }
+  rows: EmployeeImportRow[]
+}
+
+/** One row the database refused after the preview said it was fine. */
+export interface EmployeeImportRefusal {
+  line: number
+  cells: string[]
+  employeeCode: string
+  reason: string
+}
+
+/** What confirming did. */
+export interface EmployeeImportResult {
+  created: number
+  skipped: number
+  /** Rows the preview had already marked as failing. */
+  failed: EmployeeImportRow[]
+  /** Rows that were valid and the database still refused - a code taken in the meantime. */
+  refused: EmployeeImportRefusal[]
+}
+
 export interface DocumentType {
   documentTypeId: number
   documentName: string

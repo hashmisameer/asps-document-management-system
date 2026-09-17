@@ -38,30 +38,43 @@ const single = upload.single('file')
  * has no reason to know multer exists, and so the message names the field the
  * form actually has to send.
  */
-export const uploadSingleDocument: RequestHandler = (req, res, next) => {
-  single(req, res, (error: unknown) => {
-    if (!error) {
-      next()
-      return
-    }
-
-    if (error instanceof multer.MulterError) {
-      if (error.code === 'LIMIT_FILE_SIZE') {
-        next(
-          new PayloadTooLargeError(
-            `That file is larger than the ${env.MAX_UPLOAD_MB} MB limit.`,
-          ),
-        )
+function acceptSingleFile(what: string): RequestHandler {
+  return (req, res, next) => {
+    single(req, res, (error: unknown) => {
+      if (!error) {
+        next()
         return
       }
-      if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-        next(new BadRequestError("Send the document in a form field named 'file'."))
+
+      if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          next(
+            new PayloadTooLargeError(
+              `That file is larger than the ${env.MAX_UPLOAD_MB} MB limit.`,
+            ),
+          )
+          return
+        }
+        if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+          next(new BadRequestError(`Send the ${what} in a form field named 'file'.`))
+          return
+        }
+        next(new BadRequestError('That upload could not be read.', { cause: error }))
         return
       }
-      next(new BadRequestError('That upload could not be read.', { cause: error }))
-      return
-    }
 
-    next(error)
-  })
+      next(error)
+    })
+  }
 }
+
+export const uploadSingleDocument: RequestHandler = acceptSingleFile('document')
+
+/**
+ * The same multipart handling for a spreadsheet of employees to import.
+ *
+ * The same limits, deliberately: a thirty-row .xlsx is a few kilobytes, and a
+ * ceiling that would fit a scanned form fits any spreadsheet HR will send.
+ * Whether the file IS a spreadsheet is decided where it is read.
+ */
+export const uploadSingleSpreadsheet: RequestHandler = acceptSingleFile('spreadsheet')

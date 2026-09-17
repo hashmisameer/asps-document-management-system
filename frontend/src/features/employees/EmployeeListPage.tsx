@@ -310,13 +310,23 @@ export function EmployeeListPage() {
           >
             {selected.size > 0 ? `Export to Excel (${selected.size})` : 'Export to Excel'}
           </Button>
+          {/* Both, side by side: one at a time, or thirty from a spreadsheet.
+              The same permission, because importing is creating. */}
           {can(PERMISSIONS.EMPLOYEE_CREATE) ? (
-            <Link
-              to="/employees/new"
-              className="inline-flex items-center rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800"
-            >
-              Add employee
-            </Link>
+            <>
+              <Link
+                to="/employees/import"
+                className="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Import
+              </Link>
+              <Link
+                to="/employees/new"
+                className="inline-flex items-center rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800"
+              >
+                Add employee
+              </Link>
+            </>
           ) : null}
         </div>
       </div>

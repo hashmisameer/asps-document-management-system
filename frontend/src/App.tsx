@@ -8,6 +8,7 @@ import { RegisterPage } from './features/auth/RegisterPage.js'
 import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
+import { ImportEmployeesPage } from './features/employees/ImportEmployeesPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
 import { ReportsPage } from './pages/ReportsPage.js'
 import { DocumentEmployeesPage } from './pages/DocumentEmployeesPage.js'
@@ -63,6 +64,14 @@ export default function App() {
           element={
             <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_CREATE}>
               <EmployeeFormPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="employees/import"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.EMPLOYEE_CREATE}>
+              <ImportEmployeesPage />
             </ProtectedRoute>
           }
         />
