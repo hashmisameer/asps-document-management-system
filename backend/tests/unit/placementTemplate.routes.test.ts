@@ -17,7 +17,8 @@ const db = vi.hoisted(() => ({
   touchSession: vi.fn(),
   findDocumentType: vi.fn(),
   listForType: vi.fn(),
-  replaceForType: vi.fn(),
+  replaceForVariant: vi.fn(),
+  variantExists: vi.fn(),
   summaries: vi.fn(),
   replacePlacements: vi.fn(),
   setProcessedFile: vi.fn(),
@@ -45,7 +46,8 @@ vi.mock('../../src/repositories/documentType.repository.js', () => ({
 
 vi.mock('../../src/repositories/documentTypePlacement.repository.js', () => ({
   listForType: db.listForType,
-  replaceForType: db.replaceForType,
+  replaceForVariant: db.replaceForVariant,
+  variantExists: db.variantExists,
   summaries: db.summaries,
 }))
 
@@ -111,7 +113,15 @@ const BOX = {
   pageHeightPt: 841.89,
 }
 
-const body = (placements: object[]) => ({ sampleDocumentId: 96, samplePageCount: 1, placements })
+/** A one-page A4 form, as the editor would describe its sample. */
+const body = (placements: object[]) => ({
+  sampleDocumentId: 96,
+  samplePageCount: 1,
+  sampleWidthPt: 595,
+  sampleHeightPt: 842,
+  placements,
+})
+const FORM_11 = { pageCount: 1, widthPt: 595, heightPt: 842 }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -119,7 +129,8 @@ beforeEach(() => {
   db.insertAudit.mockResolvedValue(undefined)
   db.findDocumentType.mockResolvedValue(type('ESIC_FORM', 'ESIC Form'))
   db.listForType.mockResolvedValue([])
-  db.replaceForType.mockResolvedValue(undefined)
+  db.replaceForVariant.mockResolvedValue(undefined)
+  db.variantExists.mockResolvedValue(false)
   db.summaries.mockResolvedValue([])
 })
 
@@ -144,7 +155,7 @@ describe('who may touch a template', () => {
       .set('Cookie', hr)
       .send(body([{ ...BOX, signerRole: 'Employee' }]))
     expect(saved.status).toBe(403)
-    expect(db.replaceForType).not.toHaveBeenCalled()
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('reads /document-types/placements as a route, not as a type id', async () => {
@@ -170,15 +181,63 @@ describe('saving a template', () => {
       )
 
     expect(response.status).toBe(200)
-    expect(db.replaceForType).toHaveBeenCalledWith(
+    expect(db.replaceForVariant).toHaveBeenCalledWith(
       6,
+      FORM_11,
       expect.arrayContaining([
         expect.objectContaining({ signerRole: 'Employee', pageWidthPt: 595.28 }),
         expect.objectContaining({ signerRole: 'Photo' }),
       ]),
-      { documentId: 96, pageCount: 1 },
+      96,
       9,
     )
+    expect(response.body).toMatchObject({ variant: FORM_11, replacedExisting: false })
+  })
+
+  it('says when a save replaces an existing template for the same form', async () => {
+    db.variantExists.mockResolvedValue(true)
+
+    const response = await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send(body([{ ...BOX, signerRole: 'Employee' }]))
+
+    expect(response.status).toBe(200)
+    expect(response.body.replacedExisting).toBe(true)
+    expect(db.variantExists).toHaveBeenCalledWith(6, FORM_11)
+    // The audit trail names the form, in words, and says it was a replacement.
+    const audit = db.insertAudit.mock.calls
+      .map((call: unknown[]) => call[0] as { action: string; metadataJson?: string })
+      .find((entry) => entry.action === 'TEMPLATE_SAVED')
+    expect(audit?.metadataJson).toContain('"variant":"1-page form (A4 portrait)"')
+    expect(audit?.metadataJson).toContain('"replacedExisting":true')
+  })
+
+  it('saves the two-page form under its own variant, leaving the one-page one to itself', async () => {
+    const response = await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send({
+        ...body([
+          { ...BOX, signerRole: 'Employee', pageNumber: 1 },
+          { ...BOX, signerRole: 'Authoriser', pageNumber: 2 },
+        ]),
+        samplePageCount: 2,
+      })
+
+    expect(response.status).toBe(200)
+    expect(db.replaceForVariant.mock.calls[0]?.[1]).toEqual({ pageCount: 2, widthPt: 595, heightPt: 842 })
+  })
+
+  it('refuses a save whose first-page boxes are not on the page the variant names', async () => {
+    // The editor says 'A4' and sends boxes drawn on Letter: two samples, or a bug.
+    const response = await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send(body([{ ...BOX, signerRole: 'Employee', pageWidthPt: 612, pageHeightPt: 792 }]))
+
+    expect(response.status).toBe(400)
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('never writes a document placement, a processed file, or a document row', async () => {
@@ -203,7 +262,7 @@ describe('saving a template', () => {
     expect(response.body.error.message).toBe(
       'A photograph can be placed on the ESIC form only, not on Payment of Gratuity.',
     )
-    expect(db.replaceForType).not.toHaveBeenCalled()
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('refuses a template for a scanned identity card', async () => {
@@ -216,7 +275,7 @@ describe('saving a template', () => {
 
     expect(response.status).toBe(409)
     expect(response.body.error.message).toContain('scanned card')
-    expect(db.replaceForType).not.toHaveBeenCalled()
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('refuses boxes drawn on pages of different sizes - two samples, not one', async () => {
@@ -231,7 +290,7 @@ describe('saving a template', () => {
       )
 
     expect(response.status).toBe(400)
-    expect(db.replaceForType).not.toHaveBeenCalled()
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('refuses a box on a page the sample does not have', async () => {
@@ -241,7 +300,7 @@ describe('saving a template', () => {
       .send({ ...body([{ ...BOX, signerRole: 'Employee', pageNumber: 3 }]), samplePageCount: 2 })
 
     expect(response.status).toBe(400)
-    expect(db.replaceForType).not.toHaveBeenCalled()
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
   })
 
   it('answers 404 for a type that does not exist, and 409 for a retired one', async () => {
@@ -273,6 +332,6 @@ describe('saving a template', () => {
       .send(body([]))
 
     expect(response.status).toBe(200)
-    expect(db.replaceForType).toHaveBeenCalledWith(6, [], { documentId: 96, pageCount: 1 }, 9)
+    expect(db.replaceForVariant).toHaveBeenCalledWith(6, FORM_11, [], 96, 9)
   })
 })

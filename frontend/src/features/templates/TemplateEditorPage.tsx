@@ -6,8 +6,12 @@ import {
   PHOTO_DOCUMENT_CODE,
   SIGNER_ROLES,
   normalizeRotation,
+  toVariant,
+  variantKey,
+  variantLabel,
   type PageRotation,
   type SignerRole,
+  type TemplateVariant,
 } from '@asps-dms/shared'
 import { Alert } from '../../components/ui/Alert.js'
 import { Button } from '../../components/ui/Button.js'
@@ -29,9 +33,13 @@ import { fetchTemplate, saveTemplate, templateKeys } from './api.js'
  * type. What is saved goes against the TYPE. The sample is only looked at:
  * its own placements are not read, and nothing about it is written.
  *
- * The sample's page size, rotation and page count are saved with the boxes,
- * because the coordinates are fractions of that page and a document that does
- * not match it is not one the boxes were drawn for.
+ * ONE TEMPLATE PER VARIANT. A type can be two pieces of paper - the PF form
+ * is two pages, Form 11 is one - and the variant is what the sample PDF is:
+ * its page count and its first page's size. The editor works out the variant
+ * from the sample, loads that variant's boxes, and saves to that variant.
+ * Unsaved boxes are kept PER VARIANT for the session, so switching the sample
+ * from the two-page form to the one-page form and back loses nothing and
+ * carries nothing over - which is the mistake that made this necessary.
  */
 
 /** The page as pdf.js reports it, in points and unrotated. */
@@ -49,19 +57,22 @@ export function TemplateEditorPage() {
 
   const [pageNumber, setPageNumber] = useState(1)
   const [pageCount, setPageCount] = useState(0)
-  const [samplePage, setSamplePage] = useState<SamplePage | null>(null)
+  /** The first page of the current sample - what the variant is keyed on. */
+  const [firstPage, setFirstPage] = useState<SamplePage | null>(null)
+  /** The page on screen, for drawing. */
+  const [currentPage, setCurrentPage] = useState<SamplePage | null>(null)
   const [rendered, setRendered] = useState<RenderedSize | null>(null)
-  const [drafts, setDrafts] = useState<DraftPlacement[] | null>(null)
+  /** Unsaved boxes, per variant, for the session. */
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, DraftPlacement[]>>(() => new Map())
   const [selected, setSelected] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [savedVariant, setSavedVariant] = useState<string | null>(null)
 
   const types = useQuery({ queryKey: documentTypeKeys.all, queryFn: () => listDocumentTypes() })
   const type = types.data?.find((t) => t.documentTypeId === documentTypeId)
 
   // The documents this template could be drawn on: received ones of the
-  // type, by employee code. Ten is plenty; the point is one real page, not a
-  // choice.
+  // type. Ten is plenty; the point is one real page of each form, not a choice.
   const sampleParams = { documentTypeId, state: 'received' as const, pageSize: 10 }
   const samples = useQuery({
     queryKey: documentListKeys.list(sampleParams),
@@ -79,31 +90,50 @@ export function TemplateEditorPage() {
     enabled: Number.isFinite(documentTypeId),
   })
 
-  // Loaded once into editable state, from the TEMPLATE - never from whatever
-  // happened to be stamped on the sample.
+  // Which form the sample is, once pdf.js has told us how many pages it has
+  // and how big the first one is.
+  const variant: TemplateVariant | null =
+    firstPage && pageCount > 0 ? toVariant(pageCount, firstPage.widthPt, firstPage.heightPt) : null
+  const key = variant ? variantKey(variant) : null
+
+  /** The variants already saved for this type, by key. */
+  const savedVariants = useMemo(() => {
+    const keys = new Set<string>()
+    for (const box of existing.data ?? []) keys.add(variantKey(box.variant))
+    return keys
+  }, [existing.data])
+
+  // The boxes on screen: this variant's unsaved drafts if there are any, else
+  // this variant's saved boxes, else nothing. Never another variant's.
   const placements: DraftPlacement[] = useMemo(() => {
-    if (drafts !== null) return drafts
-    if (!existing.data) return []
-    return existing.data.map((box) => ({
-      key: `saved-${box.documentTypePlacementId}`,
-      pageNumber: box.pageNumber,
-      pageRotation: normalizeRotation(box.pageRotation),
-      signerRole: box.signerRole,
-      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
-    }))
-  }, [drafts, existing.data])
+    if (!key) return []
+    const draft = drafts.get(key)
+    if (draft) return draft
+    return (existing.data ?? [])
+      .filter((box) => variantKey(box.variant) === key)
+      .map((box) => ({
+        key: `saved-${box.documentTypePlacementId}`,
+        pageNumber: box.pageNumber,
+        pageRotation: normalizeRotation(box.pageRotation),
+        signerRole: box.signerRole,
+        rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      }))
+  }, [key, drafts, existing.data])
 
   const update = (next: DraftPlacement[]) => {
-    setDrafts(next)
-    setSaved(false)
+    if (!key) return
+    setDrafts((current) => new Map(current).set(key, next))
+    setSavedVariant(null)
   }
 
   const save = useMutation({
     mutationFn: () => {
-      if (!samplePage) throw new Error('The sample page has not loaded yet.')
+      if (!variant || !firstPage) throw new Error('The sample has not loaded yet.')
       return saveTemplate(documentTypeId, {
         sampleDocumentId: sampleId,
-        samplePageCount: pageCount,
+        samplePageCount: variant.pageCount,
+        sampleWidthPt: variant.widthPt,
+        sampleHeightPt: variant.heightPt,
         placements: placements.map((box) => ({
           pageNumber: box.pageNumber,
           x: box.rect.x,
@@ -112,19 +142,28 @@ export function TemplateEditorPage() {
           height: box.rect.height,
           pageRotation: box.pageRotation,
           signerRole: box.signerRole,
-          pageWidthPt: samplePage.widthPt,
-          pageHeightPt: samplePage.heightPt,
+          // Every box in one save is on one sample, so the first page's size
+          // is every page's size for the forms this office prints.
+          pageWidthPt: firstPage.widthPt,
+          pageHeightPt: firstPage.heightPt,
         })),
       })
     },
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       setFailure(null)
-      setSaved(true)
-      setDrafts(null)
+      setSavedVariant(variantLabel(saved.variant))
+      // This variant's drafts are now its saved boxes; the others stay.
+      if (key) {
+        setDrafts((current) => {
+          const next = new Map(current)
+          next.delete(key)
+          return next
+        })
+      }
       await queryClient.invalidateQueries({ queryKey: templateKeys.all })
     },
     onError: (error: unknown) => {
-      setSaved(false)
+      setSavedVariant(null)
       setFailure(error instanceof ApiError ? error.message : 'The template could not be saved.')
     },
   })
@@ -132,21 +171,34 @@ export function TemplateEditorPage() {
   const takesPhoto = type?.documentCode === PHOTO_DOCUMENT_CODE
 
   const addBox = (signerRole: SignerRole) => {
-    if (!samplePage) return
-    const box = newPlacement(placements, pageNumber, samplePage.rotation, signerRole)
+    if (!currentPage || !key) return
+    const box = newPlacement(placements, pageNumber, currentPage.rotation, signerRole)
     update([...placements, box])
     setSelected(box.key)
   }
 
-  const removeBox = (key: string) => {
-    update(placements.filter((box) => box.key !== key))
-    if (selected === key) setSelected(null)
+  const removeBox = (boxKey: string) => {
+    update(placements.filter((box) => box.key !== boxKey))
+    if (selected === boxKey) setSelected(null)
+  }
+
+  const chooseSample = (documentId: string) => {
+    setSearch({ sample: documentId })
+    setPageNumber(1)
+    setPageCount(0)
+    setFirstPage(null)
+    setCurrentPage(null)
+    setRendered(null)
+    setSelected(null)
+    setSavedVariant(null)
   }
 
   const onPage = placements.filter((box) => box.pageNumber === pageNumber)
   const error = [types.error, samples.error, existing.error].find((e) => e instanceof ApiError) as
     | ApiError
     | undefined
+  const willReplace = key !== null && savedVariants.has(key)
+  const hasDraft = key !== null && drafts.has(key)
 
   return (
     <main>
@@ -158,35 +210,53 @@ export function TemplateEditorPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
             Template for {type?.documentName ?? 'document'}
+            {variant ? <span className="ml-2 text-base font-normal text-slate-600">- {variantLabel(variant)}</span> : null}
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Drag each box to where it goes on the form. Saved against the type; nothing already
-            uploaded is changed.
+            Drag each box to where it goes on the form. Saved against the type, for this form;
+            nothing already uploaded is changed.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" disabled={!samplePage} onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}>
+          <Button variant="secondary" disabled={!currentPage} onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}>
             Add employee box
           </Button>
-          <Button variant="secondary" disabled={!samplePage} onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
+          <Button variant="secondary" disabled={!currentPage} onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
             Add HR box
           </Button>
           {takesPhoto ? (
-            <Button variant="secondary" disabled={!samplePage} onClick={() => addBox(SIGNER_ROLES.PHOTO)}>
+            <Button variant="secondary" disabled={!currentPage} onClick={() => addBox(SIGNER_ROLES.PHOTO)}>
               Add photo box
             </Button>
           ) : null}
           <Button
             busy={save.isPending}
             busyLabel="Saving..."
-            disabled={save.isPending || !samplePage}
+            disabled={save.isPending || !variant}
             onClick={() => save.mutate()}
           >
-            {placements.length > 0 ? 'Save template' : 'Save (removes the template)'}
+            {variant
+              ? placements.length > 0
+                ? `Save ${variant.pageCount}-page form template`
+                : `Save (removes the ${variant.pageCount}-page form template)`
+              : 'Save template'}
           </Button>
         </div>
       </div>
+
+      {/* Said before the save, not after: a save that replaces an existing
+          template for the same form is the one way two different forms with
+          the same page count and size can be confused. */}
+      {willReplace && hasDraft ? (
+        <div className="mt-3">
+          <Alert tone="info" title={`This replaces the existing ${variant ? variantLabel(variant) : ''} template`}>
+            A template for a {variant?.pageCount}-page form of this size is already saved. Saving
+            writes these boxes over it. If this is a different form that happens to be the same
+            size, the two cannot be told apart by their pages.
+          </Alert>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mt-3">
@@ -202,10 +272,11 @@ export function TemplateEditorPage() {
         </div>
       ) : null}
 
-      {saved ? (
+      {savedVariant ? (
         <div className="mt-3">
-          <Alert tone="info" title="Template saved">
-            Every {type?.documentName ?? 'document'} uploaded from now on will use these boxes.
+          <Alert tone="info" title={`Template saved for the ${savedVariant}`}>
+            Every {type?.documentName ?? 'document'} uploaded from now on that is a {savedVariant}{' '}
+            will use these boxes. Other forms of this type are not affected.
           </Alert>
         </div>
       ) : null}
@@ -228,11 +299,7 @@ export function TemplateEditorPage() {
               value: String(item.documentId),
               label: `${item.employeeCode} - ${item.employeeName}`,
             }))}
-            onChange={(event) => {
-              setSearch({ sample: event.target.value })
-              setPageNumber(1)
-              setSamplePage(null)
-            }}
+            onChange={(event) => chooseSample(event.target.value)}
           />
         </div>
 
@@ -253,11 +320,12 @@ export function TemplateEditorPage() {
           </Button>
         </div>
 
-        {samplePage ? (
+        {variant ? (
           <span className="text-xs text-slate-500">
-            {Math.round(samplePage.widthPt)} x {Math.round(samplePage.heightPt)} pt
-            {samplePage.rotation ? `, rotated ${samplePage.rotation}` : ''}
-            {samplePage.rotation ? ' - unusual; check this is the right sample' : ''}
+            {variantLabel(variant)}
+            {savedVariants.has(key ?? '') ? ' - template saved' : ' - no template yet'}
+            {hasDraft ? ' - unsaved changes' : ''}
+            {firstPage?.rotation ? ` - rotated ${firstPage.rotation}; check this is the right sample` : ''}
           </span>
         ) : null}
       </section>
@@ -266,6 +334,7 @@ export function TemplateEditorPage() {
         <div className="mt-3 inline-block rounded-card border border-slate-200 bg-white p-3 shadow-sm">
           <div className="relative inline-block">
             <Document
+              key={sampleId}
               file={documentFileUrl.preview(sampleId)}
               onLoadSuccess={(pdf) => setPageCount(pdf.numPages)}
               loading={<p className="p-8 text-sm text-slate-500">Loading document...</p>}
@@ -286,17 +355,19 @@ export function TemplateEditorPage() {
                   // page shown on its side is turned back for the record.
                   const rotation = normalizeRotation(page.rotate)
                   const sideways = rotation === 90 || rotation === 270
-                  setSamplePage({
+                  const size: SamplePage = {
                     rotation,
                     widthPt: sideways ? page.originalHeight : page.originalWidth,
                     heightPt: sideways ? page.originalWidth : page.originalHeight,
-                  })
+                  }
+                  setCurrentPage(size)
+                  if (page.pageNumber === 1) setFirstPage(size)
                   setRendered({ width: page.width, height: page.height })
                 }}
               />
             </Document>
 
-            {rendered
+            {rendered && key
               ? onPage.map((box) => (
                   <PlacementBox
                     key={box.key}

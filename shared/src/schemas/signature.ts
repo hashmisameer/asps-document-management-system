@@ -91,7 +91,10 @@ export const templatePlacementSchema = withinPage(
 export const saveTemplateSchema = z
   .object({
     sampleDocumentId: z.number().int().positive().nullable().default(null),
+    /** The variant this save is for: the sample's page count and first-page size, whole points. */
     samplePageCount: z.number().int().min(1),
+    sampleWidthPt: z.number().int().positive(),
+    sampleHeightPt: z.number().int().positive(),
     placements: z.array(templatePlacementSchema).max(50),
   })
   .refine((v) => v.placements.every((p) => p.pageNumber <= v.samplePageCount), {
