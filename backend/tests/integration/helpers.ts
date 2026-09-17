@@ -36,6 +36,7 @@ export async function resetData(): Promise<void> {
   const req = await createRequest()
   await req.query(`
     SET QUOTED_IDENTIFIER ON;
+    DELETE FROM dbo.DocumentTypePlacements;
     DELETE FROM dbo.SignaturePlacements;
     DELETE FROM dbo.EmployeeSignatures;
     DELETE FROM dbo.UserSignatures;

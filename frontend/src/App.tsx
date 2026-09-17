@@ -9,6 +9,8 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.js'
 import { EmployeeFormPage } from './features/employees/EmployeeFormPage.js'
 import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ImportEmployeesPage } from './features/employees/ImportEmployeesPage.js'
+import { TemplateEditorPage } from './features/templates/TemplateEditorPage.js'
+import { TemplatesPage } from './features/templates/TemplatesPage.js'
 import { ComingSoonPage } from './pages/ComingSoonPage.js'
 import { ReportsPage } from './pages/ReportsPage.js'
 import { DocumentEmployeesPage } from './pages/DocumentEmployeesPage.js'
@@ -143,6 +145,24 @@ export default function App() {
           element={
             <ProtectedRoute permission={PERMISSIONS.USER_MANAGE}>
               <ComingSoonPage title="Users" milestone="Milestone 2" />
+            </ProtectedRoute>
+          }
+        />
+        {/* Where the boxes go on each document type. An administrator's, and
+            the first thing under Settings. */}
+        <Route
+          path="settings/placements"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.TEMPLATE_MANAGE}>
+              <TemplatesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="settings/placements/:documentTypeId"
+          element={
+            <ProtectedRoute permission={PERMISSIONS.TEMPLATE_MANAGE}>
+              <TemplateEditorPage />
             </ProtectedRoute>
           }
         />

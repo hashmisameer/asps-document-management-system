@@ -60,6 +60,8 @@ export const AUDIT_ACTIONS = {
   /** An administrator resetting someone else's password, not a self-service change. */
   USER_PASSWORD_RESET: 'USER_PASSWORD_RESET',
   USER_DEACTIVATED: 'USER_DEACTIVATED',
+  /** Where the boxes go on every document of a type, set by an administrator. */
+  TEMPLATE_SAVED: 'TEMPLATE_SAVED',
   USER_REACTIVATED: 'USER_REACTIVATED',
   /** An HR or Admin user enrolling or re-drawing their own authorising signature. */
   USER_SIGNATURE_SAVED: 'USER_SIGNATURE_SAVED',

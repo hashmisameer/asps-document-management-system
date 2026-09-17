@@ -28,6 +28,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/employees', label: 'Employees', permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready' },
   { to: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_READ, status: 'ready' },
   { to: '/users', label: 'Users', permission: PERMISSIONS.USER_MANAGE, status: 'planned' },
+  {
+    to: '/settings/placements',
+    label: 'Settings',
+    permission: PERMISSIONS.TEMPLATE_MANAGE,
+    status: 'ready',
+  },
 ]
 
 export function visibleNavItems(role: Role | null): NavItem[] {

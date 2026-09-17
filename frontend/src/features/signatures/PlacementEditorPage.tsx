@@ -63,7 +63,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString()
 
 /** The rendered page box, in CSS pixels. Null until pdf.js has laid a page out. */
-interface RenderedSize {
+export interface RenderedSize {
   width: number
   height: number
 }
@@ -406,7 +406,11 @@ export function PlacementEditorPage() {
  * box, so a drag that outruns the cursor does not simply stop when it leaves
  * the element.
  */
-function PlacementBox({
+/**
+ * One draggable box on the page. Exported so the template editor draws the
+ * same box, with the same drag and the same resize, over a sample document.
+ */
+export function PlacementBox({
   placement,
   rendered,
   selected,
