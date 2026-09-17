@@ -130,16 +130,35 @@ describe('the document list', () => {
     expect(optional).toEqual(['PF_FORM', 'ESIC_FORM'])
   })
 
-  it('gives a deadline only to the documents that are chased by date', () => {
+  it('gives every document a deadline, as the office decided on 2026-09-17', () => {
+    // The cards and the two statutory forms had none and were chased by hand;
+    // 0034 gave them dates so they are chased like the rest.
     const withoutDeadline = types
       .filter((type) => type.deadlineValue === null)
       .map((type) => type.documentCode)
+    expect(withoutDeadline).toEqual([])
 
-    expect(withoutDeadline).toEqual(['AADHAAR_CARD', 'PAN_CARD', 'PF_FORM', 'ESIC_FORM'])
+    const days = (code: string) => `${byCode(code).deadlineValue} ${byCode(code).deadlineUnit}`
+    for (const code of ['APPOINTMENT_LETTER', 'BIO_DATA', 'AADHAAR_CARD', 'PAN_CARD']) {
+      expect(days(code), code).toBe('7 DAY')
+    }
+    for (const code of ['PF_FORM', 'ESIC_FORM', 'GRATUITY_FORM', 'FORM_16']) {
+      expect(days(code), code).toBe('12 DAY')
+    }
+    expect(days('CONFIRMATION_LETTER')).toBe('6 MONTH')
+
     // Both halves or neither: a value with no unit is not a deadline.
     for (const type of types) {
       expect(type.deadlineValue === null).toBe(type.deadlineUnit === null)
     }
+  })
+
+  it('leaves PF and ESIC optional: a date is not the same as a duty', () => {
+    // They are filed with the government, not collected from the employee.
+    // 0034 gave them a deadline and did not touch the flag.
+    expect(byCode('PF_FORM').isMandatory).toBe(false)
+    expect(byCode('ESIC_FORM').isMandatory).toBe(false)
+    expect(byCode('PF_FORM').deadlineValue).toBe(12)
   })
 
   it('knows the two identity cards by their code', () => {
@@ -161,14 +180,13 @@ describe('the dates a new employee is given', () => {
   )
 
   it('fills every one of them in from the joining date', () => {
-    // Nobody types these. Seven days for the four collected on the way in.
-    for (const code of [
-      'APPOINTMENT_LETTER',
-      'BIO_DATA',
-      'GRATUITY_FORM',
-      'FORM_16',
-    ]) {
+    // Nobody types these. A week for the four brought on the way in, twelve
+    // days for the four forms.
+    for (const code of ['APPOINTMENT_LETTER', 'BIO_DATA', 'AADHAAR_CARD', 'PAN_CARD']) {
       expect(dueDates.get(code), code).toBe('2026-09-08')
+    }
+    for (const code of ['PF_FORM', 'ESIC_FORM', 'GRATUITY_FORM', 'FORM_16']) {
+      expect(dueDates.get(code), code).toBe('2026-09-13')
     }
   })
 
@@ -184,10 +202,10 @@ describe('the dates a new employee is given', () => {
     expect(computeDueDate('2027-08-31', 6, 'MONTH')).toBe('2028-02-29')
   })
 
-  it('leaves the four without a deadline with no date at all', () => {
-    for (const code of ['AADHAAR_CARD', 'PAN_CARD', 'PF_FORM', 'ESIC_FORM']) {
-      expect(dueDates.get(code), code).toBeNull()
-    }
+  it('gives no date to a document with no deadline, should one ever be added', () => {
+    // None of the nine is like that now, but the shape allows it and the
+    // creation path has to keep answering it correctly.
+    expect(computeDueDate(JOINED, null, null)).toBeNull()
   })
 })
 
@@ -198,15 +216,23 @@ describe('what the checklist says about each row', () => {
       deadlineUnit: byCode(code).deadlineUnit,
     })
 
-  it("says 'No deadline' for the cards and the statutory forms, for ever", () => {
-    for (const code of ['AADHAAR_CARD', 'PAN_CARD', 'PF_FORM', 'ESIC_FORM']) {
-      // Ten years after joining, still not late: these are chased by hand.
-      const deadline = deadlineFor(code, '2036-09-01', null)
+  it("says 'No deadline' for a row with no date, and never calls it overdue", () => {
+    // A row created before 0034 and since marked 'not required', or a type
+    // without a deadline if one is ever added: ten years on, still not late.
+    const deadline = deriveDeadline(null, DOCUMENT_STATUS.PENDING, {
+      today: '2036-09-01',
+      deadlineUnit: null,
+    })
 
-      expect(deadline.label, code).toBe('No deadline')
-      expect(deadline.state, code).toBe(DEADLINE_STATE.NOT_APPLICABLE)
-      expect(deadline.state, code).not.toBe(DEADLINE_STATE.OVERDUE)
-    }
+    expect(deadline.label).toBe('No deadline')
+    expect(deadline.state).toBe(DEADLINE_STATE.NOT_APPLICABLE)
+    expect(deadline.state).not.toBe(DEADLINE_STATE.OVERDUE)
+  })
+
+  it('counts the cards and the statutory forms in days now, like the rest', () => {
+    expect(deadlineFor('AADHAAR_CARD', '2026-09-01', '2026-09-08').label).toBe('Due in 7 days')
+    expect(deadlineFor('PF_FORM', '2026-09-20', '2026-09-13').label).toBe('Overdue by 7 days')
+    expect(deadlineFor('ESIC_FORM', '2026-09-13', '2026-09-13').label).toBe('Due today')
   })
 
   it('counts the confirmation letter in months', () => {
@@ -234,7 +260,7 @@ describe('what the checklist says about each row', () => {
   })
 
   it('counts every other document in days', () => {
-    expect(deadlineFor('GRATUITY_FORM', '2026-09-01', '2026-09-08').label).toBe('Due in 7 days')
+    expect(deadlineFor('GRATUITY_FORM', '2026-09-01', '2026-09-13').label).toBe('Due in 12 days')
     expect(deadlineFor('FORM_16', '2026-09-20', '2026-09-08').label).toBe('Overdue by 12 days')
     expect(deadlineFor('BIO_DATA', '2026-09-08', '2026-09-08').label).toBe('Due today')
   })
