@@ -2,11 +2,14 @@ import type {
   CreateEmployeeInput,
   DocumentType,
   EmployeeDocument,
+  EmployeeImportPreview,
+  EmployeeImportResult,
   EmployeeListAllQuery,
   EmployeeListItem,
   EmployeeListQuery,
   Employee,
   EmployeeProfile,
+  ImportDateFormat,
   MarkEmployeeLeftInput,
   Paginated,
   UpdateEmployeeInput,
@@ -47,6 +50,47 @@ export async function listEmployees(
 export async function listAllEmployees(params: EmployeeListAllParams): Promise<EmployeeListItem[]> {
   const response = await api.get<{ items: EmployeeListItem[] }>('/employees/all', { params })
   return response.data.items
+}
+
+/**
+ * Importing a spreadsheet of employees: a preview that writes nothing, then a
+ * commit that creates what the preview said it would.
+ *
+ * The file goes with both calls. Nothing is kept on the server between them,
+ * so the commit is planned against the database as it is at that moment -
+ * which is what makes importing the same file twice create nothing.
+ *
+ * The Content-Type is left to the browser, which has to write the multipart
+ * boundary into it.
+ */
+/** Thirty employees is thirty checklists, each its own transaction; give the server room. */
+const IMPORT_TIMEOUT_MS = 120_000
+
+export async function previewEmployeeImport(
+  file: File,
+  dateFormat: ImportDateFormat,
+): Promise<EmployeeImportPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('dateFormat', dateFormat)
+  const response = await api.post<{ preview: EmployeeImportPreview }>(
+    '/employees/import/preview',
+    form,
+  )
+  return response.data.preview
+}
+
+export async function commitEmployeeImport(
+  file: File,
+  dateFormat: ImportDateFormat,
+): Promise<EmployeeImportResult> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('dateFormat', dateFormat)
+  const response = await api.post<{ result: EmployeeImportResult }>('/employees/import', form, {
+    timeout: IMPORT_TIMEOUT_MS,
+  })
+  return response.data.result
 }
 
 export async function fetchFacets(): Promise<EmployeeFacets> {

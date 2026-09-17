@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { PERMISSIONS } from '@asps-dms/shared'
 import * as employeeController from '../controllers/employee.controller.js'
+import * as employeeImportController from '../controllers/employeeImport.controller.js'
 import * as signatureController from '../controllers/signature.controller.js'
 import { requirePermission } from '../middleware/requireAuth.js'
-import { uploadSingleDocument } from '../middleware/upload.js'
+import { uploadSingleDocument, uploadSingleSpreadsheet } from '../middleware/upload.js'
 
 /**
  * /api/employees
@@ -53,6 +54,28 @@ employeeRouter.post(
   '/print',
   requirePermission(PERMISSIONS.EMPLOYEE_READ),
   employeeController.printForms,
+)
+
+/**
+ * Importing a spreadsheet of employees.
+ *
+ * Two literal paths, declared before '/:employeeId' like the others. The same
+ * EMPLOYEE_CREATE the Add Employee form needs: importing is creating, thirty at
+ * a time. The preview writes nothing; the commit creates the rows the preview
+ * said it would, one at a time, in the name of whoever pressed the button.
+ */
+employeeRouter.post(
+  '/import/preview',
+  requirePermission(PERMISSIONS.EMPLOYEE_CREATE),
+  uploadSingleSpreadsheet,
+  employeeImportController.preview,
+)
+
+employeeRouter.post(
+  '/import',
+  requirePermission(PERMISSIONS.EMPLOYEE_CREATE),
+  uploadSingleSpreadsheet,
+  employeeImportController.commit,
 )
 
 employeeRouter.post('/', requirePermission(PERMISSIONS.EMPLOYEE_CREATE), employeeController.create)
