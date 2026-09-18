@@ -56,6 +56,7 @@ vi.mock('../../src/services/storage.service.js', () => ({
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
 
 const mmc = await import('../../src/services/mmcImages.service.js')
+const { preparePhoto } = await import('../../src/services/imagePrep.service.js')
 
 const hr: AuthUser = {
   userId: 3,
@@ -157,7 +158,7 @@ describe('the path into an MMC folder', () => {
 describe('a photograph on its way into the store', () => {
   it('goes in byte for byte when nothing is wrong with it', async () => {
     const source = await fs.readFile(path.join(photoDir, '00005696.jpg'))
-    const prepared = await mmc.prepareMmcPhoto(source)
+    const prepared = await preparePhoto(source)
 
     expect(prepared.converted).toBe(false)
     expect(prepared.progressive).toBe(false)
@@ -166,7 +167,7 @@ describe('a photograph on its way into the store', () => {
 
   it('is re-encoded as baseline when it was progressive, which pdf-lib cannot embed', async () => {
     const source = await fs.readFile(path.join(photoDir, '00005697.jpg'))
-    const prepared = await mmc.prepareMmcPhoto(source)
+    const prepared = await preparePhoto(source)
 
     expect(prepared.progressive).toBe(true)
     expect(prepared.converted).toBe(true)
@@ -180,7 +181,7 @@ describe('a photograph on its way into the store', () => {
     const source = await fs.readFile(path.join(photoDir, '00005698.jpg'))
     expect(source.byteLength).toBeGreaterThan(MAX_SIGNATURE_SIZE_BYTES)
 
-    const prepared = await mmc.prepareMmcPhoto(source)
+    const prepared = await preparePhoto(source)
     const meta = await sharp(prepared.buffer).metadata()
 
     expect(prepared.converted).toBe(true)

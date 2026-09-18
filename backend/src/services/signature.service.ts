@@ -1,5 +1,4 @@
 import { PDFDocument } from 'pdf-lib'
-import sharp from 'sharp'
 import {
   API_ERROR_CODES,
   AUDIT_ACTIONS,
@@ -32,6 +31,7 @@ import { assessBoxes, type BoxAssessment } from './boxOccupancy.service.js'
 import * as documentService from './document.service.js'
 import * as employeeService from './employee.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
+import { prepareForPdf } from './imagePrep.service.js'
 import { stampSignature, type SignatureImage } from './signatureStamp.service.js'
 import * as storage from './storage.service.js'
 
@@ -102,8 +102,12 @@ export async function uploadSignature(
   const existing = await employeeSignatureRepository.findActiveByEmployee(employeeId)
 
   const inspected = await inspectSignatureUpload(file)
-  const measured = await measureSignature(file.buffer, inspected.mimeType)
-  const stored = await storage.storeSignature(employeeId, file.buffer, inspected.extension)
+  // A JPEG is made baseline before it is measured or stored: a progressive
+  // one would fail the measurement below, and the browser never sends one,
+  // so this is for the API caller who does.
+  const image = (await prepareForPdf(file.buffer, inspected.mimeType)).buffer
+  const measured = await measureSignature(image, inspected.mimeType)
+  const stored = await storage.storeSignature(employeeId, image, inspected.extension)
 
   try {
     await employeeSignatureRepository.replaceActive({
@@ -187,8 +191,9 @@ export async function saveUserSignature(
   const existing = await userSignatureRepository.findActiveByUser(actor.userId)
 
   const inspected = await inspectSignatureUpload(file)
-  const measured = await measureSignature(file.buffer, inspected.mimeType)
-  const stored = await storage.storeUserSignature(actor.userId, file.buffer, inspected.extension)
+  const image = (await prepareForPdf(file.buffer, inspected.mimeType)).buffer
+  const measured = await measureSignature(image, inspected.mimeType)
+  const stored = await storage.storeUserSignature(actor.userId, image, inspected.extension)
 
   try {
     await userSignatureRepository.replaceActive({
@@ -609,10 +614,12 @@ async function removePlacements(
 /**
  * The employee's photograph, ready to be drawn.
  *
- * Read from the record's file, the way the printed form reads it, and turned
- * the right way up: a phone writes its rotation into the EXIF header rather
- * than into the pixels, and pdf-lib draws the pixels. Only re-encoded when the
- * header says so, so an ordinary upright picture goes in byte for byte.
+ * Read from the record's file, the way the printed form reads it, and put
+ * through the same preparation an upload gets: made baseline if it is a
+ * progressive JPEG, turned the right way up if its EXIF header says so. An
+ * ordinary upright picture goes in byte for byte. Doing it here as well as
+ * at upload is what makes a photograph stored before uploads were prepared
+ * stamp correctly without anyone re-uploading it.
  *
  * Null when there is no photograph, or the file has gone: the caller refuses
  * the placement and says so, which is better than a box with nothing in it.
@@ -623,11 +630,8 @@ async function readPhotoForStamp(employeeId: number): Promise<SignatureImage | n
   if (!(await storage.storedFileExists(photo.filePath))) return null
 
   const data = await storage.readStoredFile(photo.filePath)
-  const { orientation } = await sharp(data, { failOn: 'error' }).metadata()
-  if (!orientation || orientation === 1) return { data, mimeType: photo.mimeType }
-
-  const upright = await sharp(data, { failOn: 'error' }).rotate().jpeg({ quality: 90 }).toBuffer()
-  return { data: upright, mimeType: 'image/jpeg' }
+  const prepared = await prepareForPdf(data, photo.mimeType)
+  return { data: prepared.buffer, mimeType: photo.mimeType }
 }
 
 /**

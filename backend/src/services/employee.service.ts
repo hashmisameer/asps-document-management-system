@@ -33,6 +33,7 @@ import { logger } from '../utils/logger.js'
 import * as audit from './audit.service.js'
 import * as storage from './storage.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
+import { prepareForPdf } from './imagePrep.service.js'
 import type { RequestContext } from './auth.service.js'
 
 /**
@@ -410,7 +411,12 @@ export async function uploadPhoto(
   await getById(employeeId)
 
   const inspected = await inspectSignatureUpload(file)
-  const stored = await storage.storePhoto(employeeId, file.buffer, inspected.extension)
+  // A progressive JPEG is stored baseline, a rotated one upright, so the file
+  // in the store is one pdf-lib can embed. Found out here, at upload, rather
+  // than months later on the ESIC form, where the failure looks like the
+  // document's.
+  const prepared = await prepareForPdf(file.buffer, inspected.mimeType)
+  const stored = await storage.storePhoto(employeeId, prepared.buffer, inspected.extension)
 
   await employeeRepository.setPhoto(employeeId, {
     filePath: stored.relativePath,
@@ -427,7 +433,13 @@ export async function uploadPhoto(
     // The file name is not recorded: it is chosen by whoever uploaded it and
     // can carry a person's name, which the audit trail keeps for longer than
     // the record does.
-    metadata: { change: 'photo', sizeBytes: stored.sizeBytes, mimeType: inspected.mimeType },
+    metadata: {
+      change: 'photo',
+      sizeBytes: stored.sizeBytes,
+      mimeType: inspected.mimeType,
+      // True when the stored bytes are not the uploaded bytes.
+      reencoded: prepared.converted,
+    },
   })
 
   return getById(employeeId)
