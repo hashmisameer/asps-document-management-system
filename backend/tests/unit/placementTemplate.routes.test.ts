@@ -209,7 +209,7 @@ describe('saving a template', () => {
     const audit = db.insertAudit.mock.calls
       .map((call: unknown[]) => call[0] as { action: string; metadataJson?: string })
       .find((entry) => entry.action === 'TEMPLATE_SAVED')
-    expect(audit?.metadataJson).toContain('"variant":"1-page form (A4 portrait)"')
+    expect(audit?.metadataJson).toContain('"variant":"A4 portrait, 1 page"')
     expect(audit?.metadataJson).toContain('"replacedExisting":true')
   })
 

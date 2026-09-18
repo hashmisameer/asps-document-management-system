@@ -212,7 +212,7 @@ describe('report mode', () => {
         documentId: 5,
         mode: 'Report',
         outcome: STAMP_OUTCOMES.STAMPED,
-        variantKey: '1p-595x842',
+        variantKey: '1p-portrait-1.42',
         stampedCount: 2,
         skippedCount: 0,
         decidedBy: 7,

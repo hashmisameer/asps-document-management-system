@@ -430,6 +430,38 @@ export interface StampCheckCandidate {
   originalFilePath: string
 }
 
+/** A stored file of one type, for measuring: no employee. */
+export interface StoredFileOfType {
+  documentId: number
+  mimeType: string | null
+  originalFilePath: string
+  updatedAt: Date
+}
+
+/** Every active document of a type with a file on it, for measuring its shape. */
+export async function listStoredFilesOfType(documentTypeId: number): Promise<StoredFileOfType[]> {
+  const request = await createRequest()
+  const result = await request.input('documentTypeId', sql.Int, documentTypeId).query<{
+    DocumentId: number
+    MimeType: string | null
+    OriginalFilePath: string
+    UpdatedAt: Date
+  }>(`
+      SELECT d.DocumentId, d.MimeType, d.OriginalFilePath, d.UpdatedAt
+      FROM   dbo.EmployeeDocuments AS d
+      WHERE  d.DocumentTypeId = @documentTypeId
+        AND  d.IsActive = 1
+        AND  d.OriginalFilePath IS NOT NULL
+      ORDER BY d.DocumentId`)
+
+  return result.recordset.map((row) => ({
+    documentId: row.DocumentId,
+    mimeType: row.MimeType,
+    originalFilePath: row.OriginalFilePath,
+    updatedAt: row.UpdatedAt,
+  }))
+}
+
 /** A document waiting for stamping on upload that never came: the backlog. */
 export interface SignatureBacklogRow {
   documentId: number

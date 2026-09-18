@@ -56,7 +56,9 @@ describe('placement templates, in the database', () => {
       .post('/api/employees')
       .send({ employeeCode: 'TMPL0001', employeeName: 'Sample Person', joiningDate: '2026-04-01' })
     expect(created.status).toBe(201)
-    const checklist = await agent.get(`/api/employees/${created.body.employee.employeeId}/documents`)
+    const checklist = await agent.get(
+      `/api/employees/${created.body.employee.employeeId}/documents`,
+    )
     esicDocumentId = checklist.body.documents.find(
       (d: { documentCode: string }) => d.documentCode === 'ESIC_FORM',
     ).documentId
@@ -145,14 +147,55 @@ describe('placement templates, in the database', () => {
     const rows = await documentTypePlacementRepository.listForType(pfTypeId)
     expect(rows.filter((r) => r.variant.pageCount === 1)).toHaveLength(1)
     const after = rows.filter((r) => r.variant.pageCount === 2)
-    expect(after.map((r) => r.documentTypePlacementId)).toEqual(before.map((r) => r.documentTypePlacementId))
+    expect(after.map((r) => r.documentTypePlacementId)).toEqual(
+      before.map((r) => r.documentTypePlacementId),
+    )
+  })
+
+  it('replaces by SHAPE: a save on a 596x841 sample takes over the 595x842 template', async () => {
+    // The template saved on 595x842 above. A re-export of the same form, a
+    // point off each way, is the same shape - and a save on it must replace
+    // that template, not sit beside it and make the form ambiguous.
+    const resaved = { pageCount: 1, widthPt: 596, heightPt: 841 }
+    expect(await documentTypePlacementRepository.variantExists(pfTypeId, resaved)).toBe(true)
+
+    await documentTypePlacementRepository.replaceForVariant(
+      pfTypeId,
+      resaved,
+      [
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, y: 0.6, pageWidthPt: 596, pageHeightPt: 841 },
+        {
+          ...BOX,
+          signerRole: SIGNER_ROLES.AUTHORISER,
+          y: 0.8,
+          pageWidthPt: 596,
+          pageHeightPt: 841,
+        },
+      ],
+      null,
+      adminUserId,
+    )
+
+    const rows = await documentTypePlacementRepository.listForType(pfTypeId)
+    const onePage = rows.filter((r) => r.variant.pageCount === 1)
+    // Exactly the new set, keyed on the new sample; the old key is gone.
+    expect(onePage).toHaveLength(2)
+    expect(onePage.every((r) => r.variant.widthPt === 596 && r.variant.heightPt === 841)).toBe(true)
+    // The two-page form is a different shape and untouched.
+    expect(rows.filter((r) => r.variant.pageCount === 2)).toHaveLength(3)
+
+    // A Letter-shaped sample is NOT this shape, so a save on it sits beside.
+    const letter = { pageCount: 1, widthPt: 612, heightPt: 792 }
+    expect(await documentTypePlacementRepository.variantExists(pfTypeId, letter)).toBe(false)
   })
 
   it('never writes a document placement or touches a document row', async () => {
     const placementsBefore = await countRows('SignaturePlacements')
     const documentsBefore = await countRows('EmployeeDocuments')
     const request = await createRequest()
-    const stamp = await request.query<{ U: Date }>('SELECT MAX(UpdatedAt) AS U FROM dbo.EmployeeDocuments')
+    const stamp = await request.query<{ U: Date }>(
+      'SELECT MAX(UpdatedAt) AS U FROM dbo.EmployeeDocuments',
+    )
 
     await documentTypePlacementRepository.replaceForVariant(
       esicTypeId,
@@ -164,15 +207,21 @@ describe('placement templates, in the database', () => {
 
     expect(await countRows('SignaturePlacements')).toBe(placementsBefore)
     expect(await countRows('EmployeeDocuments')).toBe(documentsBefore)
-    const after = await (await createRequest()).query<{ U: Date }>(
-      'SELECT MAX(UpdatedAt) AS U FROM dbo.EmployeeDocuments',
-    )
+    const after = await (
+      await createRequest()
+    ).query<{ U: Date }>('SELECT MAX(UpdatedAt) AS U FROM dbo.EmployeeDocuments')
     expect(after.recordset[0]?.U?.getTime()).toBe(stamp.recordset[0]?.U?.getTime())
     expect(await signaturePlacementRepository.listForDocument(esicDocumentId)).toEqual([])
   })
 
   it('removes one variant when given nothing, and the other stays', async () => {
-    await documentTypePlacementRepository.replaceForVariant(pfTypeId, FORM_11, [], null, adminUserId)
+    await documentTypePlacementRepository.replaceForVariant(
+      pfTypeId,
+      FORM_11,
+      [],
+      null,
+      adminUserId,
+    )
     const rows = await documentTypePlacementRepository.listForType(pfTypeId)
     expect(rows.every((r) => r.variant.pageCount === 2)).toBe(true)
     expect(rows).toHaveLength(3)

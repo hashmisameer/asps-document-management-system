@@ -531,6 +531,38 @@ export interface DocumentTypeTemplateSummary {
   variants: TemplateVariantSummary[]
 }
 
+/**
+ * One shape of page among a type's stored documents: how many are that
+ * shape, and which template, if any, covers them.
+ *
+ * What the template editor shows beside the sample - 'A4 portrait, 1 page:
+ * 118 of 121 documents' - and what warns when a sample is a shape only a few
+ * documents have. Measured from the files themselves.
+ */
+export interface DocumentShapeGroup {
+  variant: TemplateVariant
+  label: string
+  /** Stored PDFs of the type that are this shape. */
+  documents: number
+  /** Of the type's stored PDFs that could be measured. 0-100. */
+  percent: number
+  /** The exact sizes seen, most common first: '595x842 (112)'. */
+  sizes: string[]
+  /** A template is saved for this shape. */
+  hasTemplate: boolean
+  /** The document ids in this group - so a sample list can say which are covered. */
+  documentIds: number[]
+}
+
+export interface DocumentTypeShapes {
+  documentTypeId: number
+  /** Stored PDFs of the type, measured. */
+  measured: number
+  /** Stored files that could not be measured: not PDFs, or unreadable. */
+  unmeasured: number
+  groups: DocumentShapeGroup[]
+}
+
 export type PlacementMethod = 'Automatic' | 'Manual' | 'Adjusted'
 /** 'Template': placed by the application from the document type's template, unasked. */
 export type DetectionMethod = 'OCR' | 'CV' | 'Combined' | 'Manual' | 'Template'

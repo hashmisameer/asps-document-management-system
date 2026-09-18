@@ -252,8 +252,23 @@ and each box. Read the reasons: "the person who uploaded it has no signature
 on file" means an HR user has not added theirs under *My signature*; "the box
 already has something in it" on a form nobody has signed means a `STAMP_*`
 threshold wants looking at (section above); "no template for this form" means
-a template is missing or the form is a variant the template does not have.
+a template is missing or the form is a shape the template does not cover.
 When the decisions read right, set `AUTO_STAMP=stamp` and restart.
+
+**How many templates a type needs.** A template covers a SHAPE - page count,
+which way up, proportions to one per cent - not an exact size, so the twenty
+sizes a generated form comes out at are one template if they are all
+A4-shaped. Before drawing any:
+
+```
+npm run stamp-check -- --shapes                 # every type
+npm run stamp-check -- --shapes --type PF_FORM  # one type
+```
+
+prints each type's shapes with how many documents are each, the sizes seen,
+and whether a template is saved for it - and how many templates would cover
+everything. The template editor shows the same for the sample on screen, and
+warns when the sample is a shape only a few documents have.
 
 **The backlog.** Every document uploaded before this existed is still marked
 "Detecting" - nothing ever moved it on. Once, after migrating:
