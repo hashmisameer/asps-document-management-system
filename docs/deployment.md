@@ -353,7 +353,7 @@ never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),
 `COOKIE_SAME_SITE` (`lax`), `MAX_UPLOAD_MB` (25),
 `IDENTITY_CHECK_ENABLED` (true), `IDENTITY_CHECK_MAX_PAGES` (5),
 `IDENTITY_CHECK_TIMEOUT_MS` (90000), `OCR_LANGUAGES` (`eng+hin`),
-`OCR_PRIMARY_LANGUAGES` (`eng`), `REPORT_INCLUDE_NOT_YET_DUE` (false),
+`OCR_PRIMARY_LANGUAGES` (`eng`),
 `SMTP_PORT` (25), `SMTP_SECURE` (false), `SMTP_USER`, `SMTP_PASSWORD`
 (both optional - an internal relay usually needs neither), `LOG_LEVEL` (`info`),
 `REGISTRATION_SECRET` (a shared code for the registration form; the five-account

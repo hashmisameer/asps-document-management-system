@@ -204,15 +204,6 @@ const envSchema = z
       .string()
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'REPORT_SEND_TIME must be HH:MM, such as 09:00')
       .default('09:00'),
-    /**
-     * Whether a document that is not due yet is worth an email.
-     *
-     * Off by default. Every new employee starts with ten undated-but-future
-     * documents, and listing all of them from day one turns the digest into a
-     * copy of the checklist that nobody reads. A reminder starts when the
-     * document's own date arrives, and repeats until the file is uploaded.
-     */
-    REPORT_INCLUDE_NOT_YET_DUE: booleanish.default('false'),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(25),
     SMTP_SECURE: booleanish.default('false'),

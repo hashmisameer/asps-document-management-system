@@ -1,5 +1,5 @@
 import nodemailer, { type Transporter } from 'nodemailer'
-import { AUDIT_ACTIONS, AUDIT_ENTITY_TYPES } from '@asps-dms/shared'
+import { AUDIT_ACTIONS, AUDIT_ENTITY_TYPES, XLSX_MIME_TYPE } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import { ConflictError } from '../utils/errors.js'
@@ -8,13 +8,13 @@ import { buildDigest, type Digest } from './reminderDigest.service.js'
 import * as audit from './audit.service.js'
 
 /**
- * Sending the pending-documents digest.
+ * Sending the overdue-documents digest.
  *
- * One email to every address in REPORT_RECIPIENTS, listing the employees who
- * still owe documents and naming those documents. It repeats on every run until
- * the file is uploaded, because the digest is built from the current state each
- * time - nothing records that a reminder was sent, so nothing can fall out of
- * step with the checklist.
+ * One email to every address in REPORT_RECIPIENTS, saying how many employees
+ * have how many overdue documents, with the list attached as a spreadsheet.
+ * It repeats on every run until the files are uploaded, because the digest is
+ * built from the current state each time - nothing records that a reminder
+ * was sent, so nothing can fall out of step with the checklist.
  *
  * Two ways in, deliberately. A scheduled run on the server does the daily work,
  * and an authenticated endpoint sends one now, which is what somebody actually
@@ -23,7 +23,7 @@ import * as audit from './audit.service.js'
 
 export interface ReminderResult {
   sent: boolean
-  /** Absent when nothing was outstanding. */
+  /** Absent when nothing was overdue. */
   digest: Digest | null
   recipients: string[]
   /** True when the digest was built and rendered but not actually sent. */
@@ -64,7 +64,7 @@ function getTransport(): Transporter {
  * exercised before the company's mail server details are known - and how anyone
  * can see what would go out before it goes out.
  *
- * Nothing is sent when nothing is outstanding. A daily email saying all is well
+ * Nothing is sent when nothing is overdue. A daily email saying all is well
  * teaches people to delete it unread, taking the one that mattered with it.
  */
 export async function sendPendingDocumentReminders(
@@ -78,10 +78,10 @@ export async function sendPendingDocumentReminders(
   const recipients = env.REPORT_RECIPIENTS
 
   const rows = await reminderRepository.findPendingDocuments()
-  const digest = buildDigest(rows, { includeNotYetDue: env.REPORT_INCLUDE_NOT_YET_DUE })
+  const digest = buildDigest(rows)
 
   if (!digest) {
-    logger.info({ pendingRows: rows.length }, 'No pending documents; no reminder sent')
+    logger.info({ pendingRows: rows.length }, 'No overdue documents; no reminder sent')
     return { sent: false, digest: null, recipients, dryRun }
   }
 
@@ -108,16 +108,26 @@ export async function sendPendingDocumentReminders(
     subject: digest.subject,
     text: digest.text,
     html: digest.html,
+    // The list itself. A Buffer rather than the Uint8Array the writer
+    // returns: nodemailer treats a Buffer as bytes and anything else as
+    // something to be stringified.
+    attachments: [
+      {
+        filename: digest.attachment.fileName,
+        content: Buffer.from(digest.attachment.bytes),
+        contentType: XLSX_MIME_TYPE,
+      },
+    ],
   })
 
   logger.info(
     {
       recipientCount: recipients.length,
       employees: digest.employeeCount,
-      documents: digest.documentCount,
       overdue: digest.overdueCount,
+      attachment: digest.attachment.fileName,
     },
-    'Pending-document reminder sent',
+    'Overdue-document reminder sent',
   )
 
   // Recorded because it left the building. Addresses are counted rather than
@@ -131,8 +141,8 @@ export async function sendPendingDocumentReminders(
     metadata: {
       recipientCount: recipients.length,
       employees: digest.employeeCount,
-      documents: digest.documentCount,
       overdue: digest.overdueCount,
+      attachment: digest.attachment.fileName,
       trigger: options.actor ? 'Manual' : 'Scheduled',
     },
   })

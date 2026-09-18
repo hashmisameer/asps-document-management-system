@@ -388,52 +388,31 @@ boxes were acknowledged and what was measured in each.
 
 ## Reminders
 
-| Method | URL | Permission | Roles |
-|---|---|---|---|
-| POST | `/reminders/send` | `reminder:send` | Admin, HR |
+There is no reminder endpoint. The daily email is sent by the API itself at
+`REPORT_SEND_TIME` to everyone in `REPORT_RECIPIENTS`, and by hand with the
+command below. (`POST /reminders/send` existed briefly and was removed on
+2026-09-04.)
 
-One email to everyone in `REMINDER_RECIPIENTS`, listing the employees who still
-owe documents and naming those documents. It goes out again on every run until
-the file is uploaded.
+The email is short: how many employees have how many **overdue** documents,
+and that the list is attached. The attachment is an `.xlsx`, named
+`asps-dms-overdue-documents-YYYY-MM-DD.xlsx`, with **one row per overdue
+document**:
 
-`?dryRun=true` builds and renders the digest and sends nothing, returning the
-text body as `preview`. Use it to see exactly what would go out - to real
-colleagues - before it does. A dry run works even when sending is switched off.
+| Column | Cell | Example |
+|---|---|---|
+| `employee_id` | text, so `00005696` keeps its zeros | `00005696` |
+| `employee_name` | text | `Ravi Kumar` |
+| `documents_pending` | text | `Appointment Letter` |
+| `overdue_dates` | text, `DD/MM/YYYY` like the rest of the app | `11/09/2026` |
+| `days of overdue` | number, so Excel sorts it | `7` |
 
-```bash
-# See what would be sent
-curl -b jar.txt -X POST 'http://127.0.0.1:4000/api/reminders/send?dryRun=true'
-
-# Actually send it
-curl -b jar.txt -X POST http://127.0.0.1:4000/api/reminders/send
-```
-
-```jsonc
-// Response
-{
-  "reminder": {
-    "sent": false,
-    "dryRun": true,
-    "recipientCount": 2,
-    "employeeCount": 5,
-    "documentCount": 44,
-    "overdueCount": 44,
-    "subject": "ASPS-DMS: 5 employees with pending documents (44 overdue)",
-    "preview": "5 employees have documents that have not been uploaded. ..."
-  }
-}
-```
-
-Two 409s are expected rather than faults: `REMINDER_ENABLED` is not set, or
-`REMINDER_RECIPIENTS` is empty. Nothing is sent when nothing is outstanding -
-`sent` is false and the counts are zero.
-
-The scheduled run is the same code as a command, meant for Windows Task
-Scheduler:
+Only overdue documents are in it - not due today, not due this week, not
+without a deadline. On a day with nothing overdue no email is sent at all. It
+goes out again every day until the files are uploaded.
 
 ```bash
 npm run send-reminders                 # send
-npm run send-reminders -- --dry-run    # print it, send nothing
+npm run send-reminders -- --dry-run    # print the email and the first 20 rows of the sheet; send nothing
 ```
 
 ---
