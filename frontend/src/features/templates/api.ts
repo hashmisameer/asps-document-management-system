@@ -1,5 +1,6 @@
 import type {
   DocumentTypePlacement,
+  DocumentTypeShapes,
   DocumentTypeTemplateSummary,
   SaveTemplateInput,
   TemplateVariant,
@@ -40,12 +41,30 @@ export async function saveTemplate(
   documentTypeId: number,
   input: SaveTemplateInput,
 ): Promise<SavedTemplate> {
-  const response = await api.put<SavedTemplate>(`/document-types/${documentTypeId}/placements`, input)
+  const response = await api.put<SavedTemplate>(
+    `/document-types/${documentTypeId}/placements`,
+    input,
+  )
   return response.data
+}
+
+/**
+ * The shapes of the type's stored documents, measured from the files.
+ *
+ * Slow the first time for a type with hundreds of documents - the server
+ * opens each PDF once and then remembers - so it is asked for once per
+ * editor visit and never blocks the page.
+ */
+export async function fetchShapes(documentTypeId: number): Promise<DocumentTypeShapes> {
+  const response = await api.get<{ shapes: DocumentTypeShapes }>(
+    `/document-types/${documentTypeId}/shapes`,
+  )
+  return response.data.shapes
 }
 
 export const templateKeys = {
   all: ['templates'] as const,
   summaries: ['templates', 'summaries'] as const,
   forType: (documentTypeId: number) => ['templates', documentTypeId] as const,
+  shapes: (documentTypeId: number) => ['templates', documentTypeId, 'shapes'] as const,
 }

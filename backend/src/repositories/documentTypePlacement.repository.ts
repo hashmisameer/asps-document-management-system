@@ -1,5 +1,6 @@
 import {
   IDENTITY_CARD_DOCUMENT_CODES,
+  sameVariant,
   variantKey,
   type DocumentTypePlacement,
   type DocumentTypeTemplateSummary,
@@ -93,24 +94,41 @@ function bindVariant(request: sql.Request, variant: TemplateVariant): sql.Reques
     .input('sampleHeightPt', sql.Int, variant.heightPt)
 }
 
-const VARIANT_PREDICATE =
-  'DocumentTypeId = @documentTypeId AND SamplePageCount = @samplePageCount' +
-  ' AND SampleWidthPt = @sampleWidthPt AND SampleHeightPt = @sampleHeightPt'
+/**
+ * The saved variants of a type that are the same SHAPE as this one.
+ *
+ * Matched in code, not in SQL: a shape is a proportion within a tolerance,
+ * and the rows only record the sample's exact size. Templates saved when the
+ * key was the exact size are read the same way, so a template drawn on
+ * 595x842 covers every A4-shaped page without being touched.
+ *
+ * Usually one or none. More than one means two templates saved under the old
+ * exact-size key have become one shape - a save replaces them all, which is
+ * the right thing: they were always one form.
+ */
+async function sameShapeVariants(
+  documentTypeId: number,
+  variant: TemplateVariant,
+): Promise<TemplateVariant[]> {
+  const rows = await listForType(documentTypeId)
+  const seen = new Map<string, TemplateVariant>()
+  for (const row of rows) {
+    if (sameVariant(row.variant, variant)) {
+      seen.set(
+        `${row.variant.pageCount}-${row.variant.widthPt}-${row.variant.heightPt}`,
+        row.variant,
+      )
+    }
+  }
+  return Array.from(seen.values())
+}
 
-/** Whether a type already has a template for this variant - what a save would replace. */
+/** Whether a type already has a template for this shape - what a save would replace. */
 export async function variantExists(
   documentTypeId: number,
   variant: TemplateVariant,
 ): Promise<boolean> {
-  const request = bindVariant(await createRequest(), variant).input(
-    'documentTypeId',
-    sql.Int,
-    documentTypeId,
-  )
-  const result = await request.query<{ Found: number }>(
-    `SELECT TOP (1) 1 AS Found FROM dbo.DocumentTypePlacements WHERE ${VARIANT_PREDICATE}`,
-  )
-  return result.recordset.length > 0
+  return (await sameShapeVariants(documentTypeId, variant)).length > 0
 }
 
 export interface TemplateBox {
@@ -126,12 +144,13 @@ export interface TemplateBox {
 }
 
 /**
- * Replaces ONE VARIANT of a type's template with exactly this set.
+ * Replaces ONE SHAPE of a type's template with exactly this set.
  *
  * Delete-then-insert in one transaction, as a document's placements are: a
- * template is one thing, and a failure cannot leave a variant with half of
- * one. The other variants of the type are not touched. An empty set removes
- * the variant.
+ * template is one thing, and a failure cannot leave a shape with half of one.
+ * Every saved variant of the same shape goes - found in code, deleted by its
+ * exact sample key - and the other shapes of the type are not touched. An
+ * empty set removes the shape.
  */
 export async function replaceForVariant(
   documentTypeId: number,
@@ -140,11 +159,28 @@ export async function replaceForVariant(
   sampleDocumentId: number | null,
   createdBy: number,
 ): Promise<void> {
+  const replaced = await sameShapeVariants(documentTypeId, variant)
+
   const request = bindVariant(await createRequest(), variant)
   request
     .input('documentTypeId', sql.Int, documentTypeId)
     .input('sampleDocumentId', sql.Int, sampleDocumentId)
     .input('createdBy', sql.Int, createdBy)
+
+  // The saved variants this shape replaces, each by its own exact key. Names
+  // only in the SQL; every value is bound.
+  const deletePredicates = replaced.map((old, index) => {
+    request
+      .input(`oldPages${index}`, sql.Int, old.pageCount)
+      .input(`oldW${index}`, sql.Int, old.widthPt)
+      .input(`oldH${index}`, sql.Int, old.heightPt)
+    return `(SamplePageCount = @oldPages${index} AND SampleWidthPt = @oldW${index} AND SampleHeightPt = @oldH${index})`
+  })
+  const DELETE_CLAUSE =
+    deletePredicates.length > 0
+      ? `DELETE FROM dbo.DocumentTypePlacements
+         WHERE DocumentTypeId = @documentTypeId AND (${deletePredicates.join(' OR ')});`
+      : ''
 
   const tuples = boxes.map((box, index) => {
     request
@@ -178,7 +214,7 @@ export async function replaceForVariant(
       SET XACT_ABORT ON;
       BEGIN TRANSACTION;
 
-      DELETE FROM dbo.DocumentTypePlacements WHERE ${VARIANT_PREDICATE};
+      ${DELETE_CLAUSE}
 
       ${VALUES_CLAUSE}
 

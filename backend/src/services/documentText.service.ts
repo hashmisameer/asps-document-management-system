@@ -99,6 +99,15 @@ async function getOcrWorker(
     ...(env.TESSERACT_CORE_PATH ? { corePath: env.TESSERACT_CORE_PATH } : {}),
     ...(env.TESSERACT_CACHE_PATH ? { cachePath: env.TESSERACT_CACHE_PATH } : {}),
     logger: () => undefined,
+    // WITHOUT THIS, A FAILED READ TAKES THE SERVER DOWN. When a job is
+    // rejected inside the worker - an image Leptonica cannot decode, say -
+    // tesseract.js rejects the job's promise AND, if no handler is given,
+    // throws the error again from inside its message listener, where nothing
+    // can catch it. server.ts treats an uncaught exception as fatal. With a
+    // handler the rejection is the whole story, and recognise() deals with it.
+    errorHandler: (error: unknown) => {
+      logger.error({ err: error }, 'The OCR worker reported an error')
+    },
   })
 
   // A page rendered or upscaled here carries no DPI of its own that Tesseract
@@ -106,7 +115,9 @@ async function getOcrWorker(
   // reads small print that it otherwise skips: on the office's PAN card the
   // name line comes back only when this is set.
   await worker.setParameters({
-    tessedit_pageseg_mode: layout as unknown as Parameters<typeof worker.setParameters>[0]['tessedit_pageseg_mode'],
+    tessedit_pageseg_mode: layout as unknown as Parameters<
+      typeof worker.setParameters
+    >[0]['tessedit_pageseg_mode'],
     user_defined_dpi: '300',
   })
 
@@ -239,7 +250,10 @@ async function embeddedScan(
       .png()
       .toBuffer()
   } catch (error) {
-    logger.warn({ err: error }, 'Could not take the image out of the PDF; rendering the page instead')
+    logger.warn(
+      { err: error },
+      'Could not take the image out of the PDF; rendering the page instead',
+    )
     return null
   }
 }
@@ -279,11 +293,7 @@ async function readPdf(
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)
       const content = await page.getTextContent()
-      layers.push(
-        content.items
-          .map((item) => ('str' in item ? item.str : ''))
-          .join(' '),
-      )
+      layers.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '))
     }
 
     const text = layers.join('\n')
@@ -314,8 +324,10 @@ async function readPdf(
       const image = scan ?? (await renderPage(page))
       // Scale variants only mean something on a real photograph; a rendered
       // page is already drawn at a chosen size.
+      // The scan is a PNG this module made from the PDF's own pixels, so if
+      // preparing it fails it can safely be read as it is.
       const result = scan
-        ? await recognise(await prepareForOcr(scan, scale), languages, layout)
+        ? await recognise((await prepareForOcr(scan, scale)) ?? scan, languages, layout)
         : await recognise(image, languages, layout)
 
       recognised.push(result.text)
@@ -401,12 +413,37 @@ const OCR_SCALES = [1, 2, 3] as const
  * If any of it fails the original buffer is used: preparation that cannot run
  * must not turn a readable document into an unreadable one.
  */
-async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer> {
+/**
+ * How an uploaded image is opened for preparation.
+ *
+ * RANDOM ACCESS, NOT SEQUENTIAL. sharp opens an image for one forward pass by
+ * default, and the preparation below is not one: normalise() reads the whole
+ * image for its histogram and then reads it again, sharpen() reads lines out
+ * of order, and libvips spreads the work across threads that are scheduled
+ * unevenly on a busy machine. The JPEG and PNG loaders tolerate that; the TIFF
+ * loader does not, and fails with 'tiff2vips: out of order read' about one
+ * time in five under load - measured at 21% with five processes running, and
+ * 0% with this option. A scanner writes TIFF. failOn: 'none' is as before: a
+ * slightly damaged file is read as far as it goes rather than refused.
+ */
+const OPEN_FOR_OCR = { failOn: 'none', sequentialRead: false } as const
+
+/**
+ * What Tesseract can be handed as it arrived, if preparation fails.
+ *
+ * Leptonica inside tesseract.js decodes PNG, JPEG, BMP and WebP. It does NOT
+ * decode TIFF - 'Error attempting to read image' - and handing it one is how
+ * the fallback below used to turn 'could not prepare this scan' into a
+ * rejected job. A format not on this list is reported as unreadable instead.
+ */
+const TESSERACT_READS = new Set(['image/png', 'image/jpeg', 'image/bmp', 'image/webp'])
+
+async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer | null> {
   try {
-    const metadata = await sharp(buffer, { failOn: 'none' }).metadata()
+    const metadata = await sharp(buffer, OPEN_FOR_OCR).metadata()
     const width = metadata.width ?? 0
 
-    let pipeline = sharp(buffer, { failOn: 'none' }).rotate()
+    let pipeline = sharp(buffer, OPEN_FOR_OCR).rotate()
 
     if (scale === 1) {
       // Left at the size it arrived. Not a no-op worth skipping: enlarging a
@@ -416,9 +453,10 @@ async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer> {
       const height = metadata.height ?? 0
       // Capped on total pixels, not width, so a large scan tripled is refused
       // for being enormous rather than quietly read at the wrong size.
-      const wanted = height > 0 && width * scale * (height * scale) > MAX_OCR_PIXELS
-        ? Math.floor(width * Math.sqrt(MAX_OCR_PIXELS / (width * height)))
-        : Math.round(width * scale)
+      const wanted =
+        height > 0 && width * scale * (height * scale) > MAX_OCR_PIXELS
+          ? Math.floor(width * Math.sqrt(MAX_OCR_PIXELS / (width * height)))
+          : Math.round(width * scale)
       pipeline = pipeline.resize({ width: wanted })
     } else if (width > 0 && width < MIN_OCR_WIDTH) {
       pipeline = pipeline.resize({ width: Math.min(MIN_OCR_WIDTH, MAX_OCR_WIDTH) })
@@ -428,8 +466,8 @@ async function prepareForOcr(buffer: Buffer, scale?: number): Promise<Buffer> {
 
     return await pipeline.greyscale().normalise().sharpen().png().toBuffer()
   } catch (error) {
-    logger.warn({ err: error }, 'Could not prepare the image for OCR; reading it as it arrived')
-    return buffer
+    logger.warn({ err: error }, 'Could not prepare the image for OCR')
+    return null
   }
 }
 
@@ -463,20 +501,21 @@ const MIN_PHOTOCOPY_SIDE = 1500
  * The shorter side is brought up to 1500px because Tesseract needs pixels per
  * character, not pixels per page.
  */
-async function prepareForPhotocopy(buffer: Buffer): Promise<Buffer> {
+async function prepareForPhotocopy(buffer: Buffer): Promise<Buffer | null> {
   try {
-    const metadata = await sharp(buffer, { failOn: 'none' }).metadata()
+    const metadata = await sharp(buffer, OPEN_FOR_OCR).metadata()
     const width = metadata.width ?? 0
     const height = metadata.height ?? 0
 
-    let pipeline = sharp(buffer, { failOn: 'none' }).rotate()
+    let pipeline = sharp(buffer, OPEN_FOR_OCR).rotate()
 
     const shortest = Math.min(width, height)
     if (shortest > 0 && shortest < MIN_PHOTOCOPY_SIDE) {
       const factor = MIN_PHOTOCOPY_SIDE / shortest
-      const capped = width * factor * (height * factor) > MAX_OCR_PIXELS
-        ? Math.sqrt(MAX_OCR_PIXELS / (width * height))
-        : factor
+      const capped =
+        width * factor * (height * factor) > MAX_OCR_PIXELS
+          ? Math.sqrt(MAX_OCR_PIXELS / (width * height))
+          : factor
       pipeline = pipeline.resize({ width: Math.round(width * capped) })
     }
 
@@ -488,8 +527,8 @@ async function prepareForPhotocopy(buffer: Buffer): Promise<Buffer> {
       .png()
       .toBuffer()
   } catch (error) {
-    logger.warn({ err: error }, 'Could not prepare the photocopy for OCR; reading it as it arrived')
-    return buffer
+    logger.warn({ err: error }, 'Could not prepare the photocopy for OCR')
+    return null
   }
 }
 
@@ -513,6 +552,7 @@ async function prepareForPhotocopy(buffer: Buffer): Promise<Buffer> {
  */
 async function readImage(
   buffer: Buffer,
+  mimeType: string,
   languages: string,
   layout: PageLayout,
   scale?: number,
@@ -521,7 +561,23 @@ async function readImage(
   const prepared = photocopy
     ? await prepareForPhotocopy(buffer)
     : await prepareForOcr(buffer, scale)
-  const { text, confidence } = await recognise(prepared, languages, layout)
+
+  // Preparation that cannot run must not turn a readable document into an
+  // unreadable one - so a JPEG or PNG is read as it arrived. But a format
+  // Tesseract cannot decode is not read at all: that is a document that
+  // could not be read, which is an answer the check handles, rather than a
+  // rejected job.
+  let image = prepared
+  if (image === null) {
+    if (!TESSERACT_READS.has(mimeType)) {
+      logger.warn({ mimeType }, 'The image could not be prepared and cannot be read as it arrived')
+      return { text: '', source: TEXT_SOURCES.NONE, pagesRead: 0, confidence: 0 }
+    }
+    logger.warn({ mimeType }, 'Reading the image as it arrived')
+    image = buffer
+  }
+
+  const { text, confidence } = await recognise(image, languages, layout)
 
   return {
     text,
@@ -590,8 +646,11 @@ export async function extractText(
     enoughSoFar?: (text: string) => boolean,
     photocopy = false,
   ): Promise<ExtractedText> => {
-    if (mimeType === 'application/pdf') return readPdf(buffer, languages, layout, scale, enoughSoFar)
-    if (isImageType(mimeType)) return readImage(buffer, languages, layout, scale, photocopy)
+    if (mimeType === 'application/pdf')
+      return readPdf(buffer, languages, layout, scale, enoughSoFar)
+    if (isImageType(mimeType)) {
+      return readImage(buffer, mimeType, languages, layout, scale, photocopy)
+    }
     return unread
   }
 
@@ -685,8 +744,7 @@ export async function extractText(
           ),
         )
 
-    const settled = (text: string): boolean =>
-      isEnough ? isEnough(text) : text.trim().length > 0
+    const settled = (text: string): boolean => (isEnough ? isEnough(text) : text.trim().length > 0)
 
     for (const [index, pass] of passes.entries()) {
       // Do not START a pass that cannot finish. A single SINGLE_BLOCK reading of

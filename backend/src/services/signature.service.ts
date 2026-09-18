@@ -10,10 +10,13 @@ import {
   canTransitionSignature,
   isSignatureRole,
   normalizeRotation,
+  type AuditAction,
   type AuthUser,
   type BoxOccupancy,
   type CheckPlacementsInput,
+  type DetectionMethod,
   type EmployeeDocument,
+  type PlacementMethod,
   type SavePlacementsInput,
   type SignaturePlacement,
   type SignatureStatus,
@@ -78,7 +81,8 @@ async function measureSignature(
   mimeType: string,
 ): Promise<{ widthPx: number; heightPx: number }> {
   const probe = await PDFDocument.create()
-  const image = mimeType === 'image/png' ? await probe.embedPng(buffer) : await probe.embedJpg(buffer)
+  const image =
+    mimeType === 'image/png' ? await probe.embedPng(buffer) : await probe.embedJpg(buffer)
   return { widthPx: image.width, heightPx: image.height }
 }
 
@@ -355,8 +359,6 @@ export async function savePlacements(
     return removePlacements(document, actor, context)
   }
 
-  const pageCount = new Set(input.placements.map((placement) => placement.pageNumber)).size
-
   // Only the signatures this set actually calls for. A document that carries an
   // employee box and no HR box must not be blocked because the person saving it
   // has not enrolled their own signature yet.
@@ -422,106 +424,43 @@ export async function savePlacements(
     )
   }
 
-  const [source, employeeImage, authoriserImage] = await Promise.all([
-    storage.readStoredFile(location.originalFilePath),
-    employeeSignature ? storage.readStoredFile(employeeSignature.relativePath) : null,
-    authoriserSignature ? storage.readStoredFile(authoriserSignature.relativePath) : null,
-  ])
-
-  const signatures: Partial<Record<SignerRole, SignatureImage>> = {}
-  if (employeeSignature && employeeImage) {
-    signatures[SIGNER_ROLES.EMPLOYEE] = {
-      data: employeeImage,
-      mimeType: employeeSignature.mimeType,
-    }
-  }
-  if (authoriserSignature && authoriserImage) {
-    signatures[SIGNER_ROLES.AUTHORISER] = {
-      data: authoriserImage,
-      mimeType: authoriserSignature.mimeType,
-    }
-  }
-  if (photo) {
-    signatures[SIGNER_ROLES.PHOTO] = photo
-  }
-
-  const stamped = await stampSignature({
-    source,
-    sourceMimeType: location.mimeType ?? 'application/pdf',
-    signatures,
-    placements: input.placements.map((placement) => ({
-      pageNumber: placement.pageNumber,
-      rect: {
-        x: placement.x,
-        y: placement.y,
-        width: placement.width,
-        height: placement.height,
-      },
-      pageRotation: normalizeRotation(placement.pageRotation),
-      signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
-    })),
+  const signatures = await readSignatureImages({
+    employee: employeeSignature,
+    authoriser: authoriserSignature,
+    photo,
   })
 
-  // Q8: the signed output is always a PDF, whatever the original was, so there
-  // is one format to preview, download and print.
-  const stored = await storage.storeProcessedDocument(document.employeeId, stamped, '.pdf')
+  // Signed only if something in the set IS a signature. A photograph on its
+  // own rebuilds the PDF and is kept, but the status stays where it was: a
+  // document reading 'Signature added' over a picture would close the skip
+  // path and tell the checklist a lie.
+  const signed = Array.from(roles).some(isSignatureRole)
 
-  try {
-    await signaturePlacementRepository.replaceForDocument(
-      documentId,
-      document.employeeId,
-      input.placements.map((placement) => ({
-        pageNumber: placement.pageNumber,
-        x: placement.x,
-        y: placement.y,
-        width: placement.width,
-        height: placement.height,
-        pageRotation: placement.pageRotation,
-        method: placement.method,
-        detectionMethod: placement.detectionMethod,
-        confidence: placement.confidence,
-        signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
-        // Recorded rather than looked up on the next rebuild: regenerating a
-        // signed PDF a year from now must reproduce the document that was
-        // issued, not sign it in whoever happens to be logged in that day.
-        signerUserId:
-          (placement.signerRole ?? SIGNER_ROLES.EMPLOYEE) === SIGNER_ROLES.AUTHORISER
-            ? actor.userId
-            : null,
-      })),
-      actor.userId,
-    )
-    // Signed only if something in the set IS a signature. A photograph on its
-    // own rebuilds the PDF and is kept, but the status stays where it was: a
-    // document reading 'Signature added' over a picture would close the skip
-    // path and tell the checklist a lie.
-    const signed = Array.from(roles).some(isSignatureRole)
-    await employeeDocumentRepository.setProcessedFile(
-      documentId,
-      stored.relativePath,
-      signed ? SIGNATURE_STATUS.ADDED : document.signatureStatus,
-    )
-    await signaturePlacementRepository.markApplied(documentId)
-  } catch (error) {
-    await storage.discardStoredFile(stored.relativePath)
-    throw error
-  }
-
-  await audit.record({
-    userId: actor.userId,
+  await applyPlacements({
+    document,
+    originalFilePath: location.originalFilePath,
+    sourceMimeType: location.mimeType ?? 'application/pdf',
+    boxes: input.placements.map((placement) => ({
+      pageNumber: placement.pageNumber,
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+      pageRotation: placement.pageRotation,
+      signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
+      method: placement.method,
+      detectionMethod: placement.detectionMethod,
+      confidence: placement.confidence ?? null,
+    })),
+    signatures,
+    nextStatus: signed ? SIGNATURE_STATUS.ADDED : document.signatureStatus,
+    actor,
+    context,
     // Three different things a person can have done, and the audit trail should
     // be able to tell them apart: placed it themselves, accepted what detection
     // proposed, or moved what detection proposed before accepting it.
-    action: placementAction(input),
-    entityType: AUDIT_ENTITY_TYPES.SIGNATURE_PLACEMENT,
-    entityId: documentId,
-    ipAddress: context.ipAddress,
-    metadata: {
-      employeeCode: document.employeeCode,
-      documentName: document.documentName,
-      placements: input.placements.length,
-      pages: pageCount,
-      signers: Array.from(roles),
+    auditAction: placementAction(input),
+    auditMetadata: {
       // Boxes that already had something in them and were stamped anyway,
       // with what was measured: the trail can answer 'why is there a
       // signature on top of a signature' with 'HR saw 6.1% ink and said so'.
@@ -534,16 +473,172 @@ export async function savePlacements(
         coverage: round(box.overlap.coverage),
         inkPercent: box.ink ? Math.round(box.ink.percent * 100) / 100 : null,
       })),
+    },
+  })
+
+  return documentService.getById(documentId)
+}
+
+/* -------------------------------------------------------------------------- */
+/* The stamping itself, shared by the editor and by stamping on upload         */
+/* -------------------------------------------------------------------------- */
+
+/** One box to stamp: where, what goes in it, and how it came to be placed. */
+export interface StampBox {
+  pageNumber: number
+  x: number
+  y: number
+  width: number
+  height: number
+  pageRotation: number
+  signerRole: SignerRole
+  method: PlacementMethod
+  detectionMethod: DetectionMethod
+  confidence: number | null
+}
+
+export interface ApplyPlacementsInput {
+  /** Only what the stamp and the audit entry need to say about the document. */
+  document: Pick<EmployeeDocument, 'documentId' | 'employeeId' | 'employeeCode' | 'documentName'>
+  originalFilePath: string
+  sourceMimeType: string
+  boxes: readonly StampBox[]
+  signatures: Partial<Record<SignerRole, SignatureImage>>
+  /** Where the document's signature status lands once the copy is stored. */
+  nextStatus: SignatureStatus
+  actor: AuthUser
+  context: RequestContext
+  /** The placement audit entry: what kind of act this was, and what else to say about it. */
+  auditAction: AuditAction
+  auditMetadata?: Record<string, unknown>
+}
+
+/**
+ * The images to stamp with, read from where each is kept.
+ *
+ * Only the ones asked for are read: a document with no HR box must not cost
+ * a read of the uploader's signature, and a null record is simply absent from
+ * the answer.
+ */
+export async function readSignatureImages(records: {
+  employee?: { relativePath: string; mimeType: string } | null
+  authoriser?: { relativePath: string; mimeType: string } | null
+  photo?: SignatureImage | null
+}): Promise<Partial<Record<SignerRole, SignatureImage>>> {
+  const [employeeImage, authoriserImage] = await Promise.all([
+    records.employee ? storage.readStoredFile(records.employee.relativePath) : null,
+    records.authoriser ? storage.readStoredFile(records.authoriser.relativePath) : null,
+  ])
+
+  const signatures: Partial<Record<SignerRole, SignatureImage>> = {}
+  if (records.employee && employeeImage) {
+    signatures[SIGNER_ROLES.EMPLOYEE] = { data: employeeImage, mimeType: records.employee.mimeType }
+  }
+  if (records.authoriser && authoriserImage) {
+    signatures[SIGNER_ROLES.AUTHORISER] = {
+      data: authoriserImage,
+      mimeType: records.authoriser.mimeType,
+    }
+  }
+  if (records.photo) {
+    signatures[SIGNER_ROLES.PHOTO] = records.photo
+  }
+  return signatures
+}
+
+/**
+ * Stamps the boxes onto the ORIGINAL file and records everything about it.
+ *
+ * The one place a signature is painted onto a document. The editor calls it
+ * after HR has checked and confirmed the boxes; stamping on upload calls it
+ * with the boxes the template decided. Neither has a copy of what happens
+ * here: the signed PDF is stored, the placements are replaced, the status is
+ * moved, and both audit entries are written - or, if the rows cannot be
+ * saved, the generated file is removed again.
+ *
+ * Every decision about WHETHER to stamp - the images exist, the boxes are
+ * empty, the person is allowed - is the caller's. This only does it.
+ */
+export async function applyPlacements(input: ApplyPlacementsInput): Promise<void> {
+  const { document, boxes, actor, context } = input
+  const documentId = document.documentId
+  const roles = new Set(boxes.map((box) => box.signerRole))
+  const pageCount = new Set(boxes.map((box) => box.pageNumber)).size
+
+  const source = await storage.readStoredFile(input.originalFilePath)
+
+  const stamped = await stampSignature({
+    source,
+    sourceMimeType: input.sourceMimeType,
+    signatures: input.signatures,
+    placements: boxes.map((box) => ({
+      pageNumber: box.pageNumber,
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      pageRotation: normalizeRotation(box.pageRotation),
+      signerRole: box.signerRole,
+    })),
+  })
+
+  // Q8: the signed output is always a PDF, whatever the original was, so there
+  // is one format to preview, download and print.
+  const stored = await storage.storeProcessedDocument(document.employeeId, stamped, '.pdf')
+
+  try {
+    await signaturePlacementRepository.replaceForDocument(
+      documentId,
+      document.employeeId,
+      boxes.map((box) => ({
+        pageNumber: box.pageNumber,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        pageRotation: box.pageRotation,
+        method: box.method,
+        detectionMethod: box.detectionMethod,
+        confidence: box.confidence,
+        signerRole: box.signerRole,
+        // Recorded rather than looked up on the next rebuild: regenerating a
+        // signed PDF a year from now must reproduce the document that was
+        // issued, not sign it in whoever happens to be logged in that day.
+        signerUserId: box.signerRole === SIGNER_ROLES.AUTHORISER ? actor.userId : null,
+      })),
+      actor.userId,
+    )
+    await employeeDocumentRepository.setProcessedFile(
+      documentId,
+      stored.relativePath,
+      input.nextStatus,
+    )
+    await signaturePlacementRepository.markApplied(documentId)
+  } catch (error) {
+    await storage.discardStoredFile(stored.relativePath)
+    throw error
+  }
+
+  await audit.record({
+    userId: actor.userId,
+    action: input.auditAction,
+    entityType: AUDIT_ENTITY_TYPES.SIGNATURE_PLACEMENT,
+    entityId: documentId,
+    ipAddress: context.ipAddress,
+    metadata: {
+      employeeCode: document.employeeCode,
+      documentName: document.documentName,
+      placements: boxes.length,
+      pages: pageCount,
+      signers: Array.from(roles),
+      ...(input.auditMetadata ?? {}),
       // The positions themselves, so the audit trail can answer where a
       // signature was put, not merely that one was.
-      rects: input.placements.map((placement) => ({
-        page: placement.pageNumber,
-        x: round(placement.x),
-        y: round(placement.y),
-        width: round(placement.width),
-        height: round(placement.height),
-        method: placement.method,
-        signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
+      rects: boxes.map((box) => ({
+        page: box.pageNumber,
+        x: round(box.x),
+        y: round(box.y),
+        width: round(box.width),
+        height: round(box.height),
+        method: box.method,
+        signerRole: box.signerRole,
       })),
     },
   })
@@ -556,8 +651,6 @@ export async function savePlacements(
     ipAddress: context.ipAddress,
     metadata: { sizeBytes: stored.sizeBytes, sha256: stored.sha256.toString('hex') },
   })
-
-  return documentService.getById(documentId)
 }
 
 function placementAction(input: SavePlacementsInput) {
@@ -624,7 +717,7 @@ async function removePlacements(
  * Null when there is no photograph, or the file has gone: the caller refuses
  * the placement and says so, which is better than a box with nothing in it.
  */
-async function readPhotoForStamp(employeeId: number): Promise<SignatureImage | null> {
+export async function readPhotoForStamp(employeeId: number): Promise<SignatureImage | null> {
   const photo = await employeeRepository.findPhoto(employeeId)
   if (!photo) return null
   if (!(await storage.storedFileExists(photo.filePath))) return null

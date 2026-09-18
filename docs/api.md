@@ -251,6 +251,45 @@ joining date in the PDF's text. To test the refusal, change any one of them.
 Set `IDENTITY_CHECK_ENABLED=false` in `backend/.env` to switch the whole check
 off; the document is then recorded as `NotChecked`.
 
+### Stamping on upload
+
+A document that needs a signature is uploaded in `PendingDetection` ("Detecting")
+and leaves it a few seconds later, after the identity check has settled. If
+the type has a template and the file matches one of its forms, the boxes are
+stamped - the employee's enrolled signature, the uploader's own `/me/signature`
+in the HR box, the employee's photograph on the ESIC form - and the document
+becomes `Added`. Any box left alone (something already in it, an image not on
+file, no matching template, a JPG or PNG scan, a failed identity check) sends
+the document to `ReviewRequired` with the reason on the row:
+
+```jsonc
+// GET /documents/:documentId  - the latest decision travels with the document
+"stampDecision": {
+  "mode": "Stamp",                 // Report | Stamp - the server's AUTO_STAMP at the time
+  "outcome": "Partial",            // Stamped | Partial | Nothing | NoTemplate | NoVariant |
+                                   // AmbiguousVariant | NotPdf | Unreadable | IdentityFailed | Failed
+  "summary": "Stamped: employee signature. Not stamped: the hr signature - the person who uploaded it has no signature on file.",
+  "stampedCount": 1,
+  "skippedCount": 1,
+  "boxes": [
+    { "signerRole": "Employee",   "pageNumber": 1, "action": "stamp", "reason": null, "found": "empty" },
+    { "signerRole": "Authoriser", "pageNumber": 1, "action": "skip",
+      "reason": "the person who uploaded it has no signature on file", "found": "empty" }
+  ],
+  "decidedAt": "2026-09-18T04:11:00.000Z"
+}
+```
+
+`stampDecision` is `null` for a document uploaded before this existed or
+whose type needs no signature. With `AUTO_STAMP=report` (the default) the
+decision is recorded, `mode` is `Report`, nothing is stamped, and the document
+goes to `ReviewRequired` whatever the outcome says - the outcome is what
+*would* have happened. Placements stamped this way carry
+`detectionMethod: "Template"`; the audit trail records `AUTO_STAMP_DECIDED`
+for every decision and `SIGNATURE_PLACED_FROM_TEMPLATE` when boxes went on.
+There is no endpoint to trigger or approve it; `npm run auto-stamp` reports
+and works the backlog (see the deployment notes).
+
 ### Other document bodies
 
 ```jsonc
@@ -265,6 +304,55 @@ off; the document is then recorded as `NotChecked`.
 
 Status changes go through a state machine. One it does not allow is **409
 `INVALID_STATE_TRANSITION`**, not a silent write.
+
+---
+
+## Placement templates
+
+| Method | URL | Permission | Roles |
+|---|---|---|---|
+| GET | `/document-types/placements` | `template:manage` | Admin |
+| GET | `/document-types/:documentTypeId/placements` | `template:manage` | Admin |
+| PUT | `/document-types/:documentTypeId/placements` | `template:manage` | Admin |
+| GET | `/document-types/:documentTypeId/shapes` | `template:manage` | Admin |
+
+A template says where the boxes go on every document of a type, as fractions
+of the page (`x`, `y`, `width`, `height` from 0 to 1), drawn on one real
+sample. A type holds one template per **shape**: the page count, exactly,
+plus which way up the first page is and its proportions to one per cent.
+Size does not come into it - 595x842, 595x841 and 596x842 are one shape
+(A4 portrait) and one template; Letter (612x792, 1.294 to 1) is another;
+a two-page form is another again. A save on a sample replaces the template
+of the same shape, whatever exact size that template was drawn on.
+
+```jsonc
+// GET /document-types/:documentTypeId/shapes  - the type's stored PDFs, measured
+{
+  "shapes": {
+    "documentTypeId": 1,
+    "measured": 121,           // stored PDFs that could be opened
+    "unmeasured": 2,           // scans, or files that would not open
+    "groups": [                // largest first; a group is what one template covers
+      {
+        "variant": { "pageCount": 1, "widthPt": 595, "heightPt": 842 },
+        "label": "A4 portrait, 1 page",
+        "documents": 118, "percent": 98,
+        "sizes": ["595x842 (110)", "596x842 (8)"],
+        "hasTemplate": true,
+        "documentIds": [12, 15, 19, "..."]
+      },
+      { "variant": { "pageCount": 1, "widthPt": 612, "heightPt": 792 },
+        "label": "Letter portrait, 1 page", "documents": 3, "percent": 2,
+        "sizes": ["612x792 (3)"], "hasTemplate": false, "documentIds": [88, 91, 97] }
+    ]
+  }
+}
+```
+
+The first call for a type opens every stored PDF once and can take a few
+seconds; the answer is kept until the type's files change. It is what the
+template editor shows beside a sample, and what `npm run stamp-check --
+--shapes` prints for every type.
 
 ---
 

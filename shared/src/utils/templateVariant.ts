@@ -1,5 +1,5 @@
 /**
- * Which form a PDF is: its page count and its first page's size.
+ * Which form a PDF is: its page count and the SHAPE of its first page.
  *
  * A document type on the checklist can be more than one piece of paper -
  * 'PF Form / Form 11' is a two-page form for some employees and a one-page
@@ -7,15 +7,36 @@
  * template and an upload are matched, and it is decided by what the PDF IS,
  * not by anything a person picks.
  *
- * Sizes are WHOLE POINTS. A generated PDF re-saved through a printer driver
- * can move by a fraction of a point; a key that included the fraction would
- * make every such re-save a different form.
+ * SHAPE, NOT SIZE, since 2026-09-18. The office's generated forms come out at
+ * twenty slightly different sizes for one document type - 595x842, 595x841,
+ * 596x842, whatever the printer driver and the re-save did - and a template
+ * keyed on the exact size wanted twenty templates for one form. The boxes are
+ * stored as fractions of the page and stamped onto whatever size arrives, so
+ * the size was never what mattered. What matters is that the page is the
+ * same SHAPE: the same way up, and the same proportions, so a box drawn at
+ * 60% across lands on the same printed line.
+ *
+ * Proportion is judged to ONE PER CENT. A4 is 1.414 to 1 and Letter 1.294, a
+ * difference of nine per cent: they are different shapes, and a template for
+ * one is never used on the other. A box in the wrong place is worse than a
+ * document HR has to sign by hand. 595x841 against 595x842 is a tenth of a
+ * per cent: one shape.
  */
 export interface TemplateVariant {
   pageCount: number
-  /** The first page, unrotated, rounded to whole points. */
+  /** The first page, unrotated, rounded to whole points - the sample it was drawn on. */
   widthPt: number
   heightPt: number
+}
+
+export type PageOrientation = 'portrait' | 'landscape' | 'square'
+
+/** What a template covers: pages, which way up, and how long for its width. */
+export interface PageShape {
+  pageCount: number
+  orientation: PageOrientation
+  /** Long side over short side. 1.414 for A4, 1.294 for Letter, 1 for square. */
+  aspect: number
 }
 
 /** Rounds a measured page to the variant it belongs to. */
@@ -23,39 +44,69 @@ export function toVariant(pageCount: number, widthPt: number, heightPt: number):
   return { pageCount, widthPt: Math.round(widthPt), heightPt: Math.round(heightPt) }
 }
 
-/** The one string that names a variant, for maps and comparisons. */
-export function variantKey(variant: TemplateVariant): string {
-  return `${variant.pageCount}p-${variant.widthPt}x${variant.heightPt}`
-}
+/**
+ * Pages within this of square are square: neither portrait nor landscape,
+ * and matching neither. Only an identity card scan comes close.
+ */
+const SQUARE_BELOW = 1.05
 
-export function sameVariant(a: TemplateVariant, b: TemplateVariant): boolean {
-  return variantKey(a) === variantKey(b)
+/** How far two proportions may differ, relative, and still be one shape. */
+export const SHAPE_TOLERANCE = 0.01
+
+export function shapeOf(page: { pageCount: number; widthPt: number; heightPt: number }): PageShape {
+  const long = Math.max(page.widthPt, page.heightPt)
+  const short = Math.min(page.widthPt, page.heightPt)
+  const aspect = short > 0 ? long / short : 1
+  const orientation: PageOrientation =
+    aspect < SQUARE_BELOW ? 'square' : page.widthPt < page.heightPt ? 'portrait' : 'landscape'
+  return { pageCount: page.pageCount, orientation, aspect }
 }
 
 /**
- * How far a page may be from a variant's size and still be that form.
- *
- * Two points. Enough for a re-save; not enough to mistake A4 for Letter,
- * which differ by seventeen points in width and fifty in height.
+ * Whether two pages are one shape: the same page count, exactly; the same
+ * way up; and proportions within one per cent of each other. The page count
+ * is never approximated - a one-page form and a two-page form are different
+ * papers however alike their first pages are.
+ */
+export function sameShape(a: PageShape, b: PageShape, tolerance = SHAPE_TOLERANCE): boolean {
+  return (
+    a.pageCount === b.pageCount &&
+    a.orientation === b.orientation &&
+    Math.abs(a.aspect - b.aspect) <= tolerance * Math.max(a.aspect, b.aspect)
+  )
+}
+
+/**
+ * The one string that names a shape, for grouping and display. NOT for
+ * matching: 1.414 and 1.415 round apart at some boundary, and a template must
+ * not stop matching because a re-save moved the page by a point. Match with
+ * sameShape; group and label with this.
+ */
+export function variantKey(variant: TemplateVariant): string {
+  const shape = shapeOf(variant)
+  return `${shape.pageCount}p-${shape.orientation}-${shape.aspect.toFixed(2)}`
+}
+
+export function sameVariant(a: TemplateVariant, b: TemplateVariant): boolean {
+  return sameShape(shapeOf(a), shapeOf(b))
+}
+
+/**
+ * Kept for the template editor's collision warning: a re-save that moved the
+ * page by up to this many points is still, to a person, the same sample.
  */
 export const VARIANT_SIZE_SLACK_PT = 2
 
 /**
  * Whether an uploaded document is a given variant: the same page count,
- * exactly, and a first page within the slack. The page count is never
- * approximated - a one-page form and a two-page form are different papers
- * however alike their first pages are.
+ * exactly, and the first page the same shape.
  */
 export function variantMatches(
   variant: TemplateVariant,
   document: { pageCount: number; widthPt: number; heightPt: number },
-  slackPt: number = VARIANT_SIZE_SLACK_PT,
+  tolerance: number = SHAPE_TOLERANCE,
 ): boolean {
-  return (
-    document.pageCount === variant.pageCount &&
-    Math.abs(document.widthPt - variant.widthPt) <= slackPt &&
-    Math.abs(document.heightPt - variant.heightPt) <= slackPt
-  )
+  return sameShape(shapeOf(variant), shapeOf(document), tolerance)
 }
 
 /**
@@ -73,18 +124,31 @@ export function findVariant<T extends TemplateVariant>(
   return matching.length === 1 ? (matching[0] ?? null) : null
 }
 
-/** 'A4 portrait', or the size in points for anything else. */
+/** The paper sizes a person has a name for, by proportion. */
+const NAMED_PAPERS: readonly { name: string; aspect: number }[] = [
+  { name: 'A4', aspect: 842 / 595 },
+  { name: 'Letter', aspect: 792 / 612 },
+  { name: 'Legal', aspect: 1008 / 612 },
+]
+
+/**
+ * 'A4 portrait', 'Letter landscape', or 'portrait, 1.38 to 1' for a shape
+ * nobody has a name for. Named by proportion, not by size: every A4-shaped
+ * page is 'A4' here, whatever its point size.
+ */
 export function paperSizeLabel(widthPt: number, heightPt: number): string {
-  const near = (a: number, b: number) => Math.abs(a - b) <= VARIANT_SIZE_SLACK_PT
-  if (near(widthPt, 595) && near(heightPt, 842)) return 'A4 portrait'
-  if (near(widthPt, 842) && near(heightPt, 595)) return 'A4 landscape'
-  if (near(widthPt, 612) && near(heightPt, 792)) return 'Letter portrait'
-  if (near(widthPt, 792) && near(heightPt, 612)) return 'Letter landscape'
-  return `${widthPt} x ${heightPt} pt`
+  const shape = shapeOf({ pageCount: 1, widthPt, heightPt })
+  if (shape.orientation === 'square') return 'square'
+  const named = NAMED_PAPERS.find(
+    (paper) => Math.abs(paper.aspect - shape.aspect) <= SHAPE_TOLERANCE * paper.aspect,
+  )
+  return named
+    ? `${named.name} ${shape.orientation}`
+    : `${shape.orientation}, ${shape.aspect.toFixed(2)} to 1`
 }
 
-/** '2-page form (A4 portrait)'. */
+/** 'A4 portrait, 2 pages'. */
 export function variantLabel(variant: TemplateVariant): string {
-  const pages = `${variant.pageCount}-page form`
-  return `${pages} (${paperSizeLabel(variant.widthPt, variant.heightPt)})`
+  const pages = variant.pageCount === 1 ? '1 page' : `${variant.pageCount} pages`
+  return `${paperSizeLabel(variant.widthPt, variant.heightPt)}, ${pages}`
 }

@@ -19,9 +19,9 @@ import {
 /**
  * The employee's signature.
  *
- * Signed on the pad, not uploaded as a file: the employee is standing at the
- * desk with the tablet when their record is created, and a scan of a signature
- * on paper is a photograph of a signature rather than the thing itself.
+ * Signed on the pad when the employee is at the desk with the tablet, or
+ * uploaded as a scan or photograph of their signature when they are not - the
+ * dialog offers both, and the record says which it was.
  *
  * Uploaded once and reused on every document they sign (Section 24), which is
  * why it lives on the employee rather than on any one document.
@@ -104,12 +104,15 @@ export function SignatureCard({
                 <p>
                   {data.widthPx} x {data.heightPx} pixels
                 </p>
-                <p className="text-xs text-slate-500">Signed {formatDateTime(data.uploadedAt)}</p>
+                <p className="text-xs text-slate-500">
+                  On file since {formatDateTime(data.uploadedAt)}
+                </p>
               </>
             ) : (
               <p className="max-w-md">
-                A signature is needed before one can be placed on a document. Hand the employee
-                the pen tablet and have them sign on the pad.
+                A signature is needed before one can be placed on a document. Hand the employee the
+                pen tablet and have them sign on the pad, or upload a scan or photograph of their
+                signature.
               </p>
             )}
 
@@ -122,11 +125,11 @@ export function SignatureCard({
                     setSigning(true)
                   }}
                 >
-                  {data?.hasSignature ? 'Sign again' : 'Sign on pad'}
+                  {data?.hasSignature ? 'Replace signature' : 'Add signature'}
                 </Button>
                 {data?.hasSignature ? (
                   <p className="mt-2 max-w-md text-xs text-slate-500">
-                    Signing again does not change documents that have already been signed.
+                    Replacing it does not change documents that have already been signed.
                   </p>
                 ) : null}
               </div>
@@ -138,7 +141,7 @@ export function SignatureCard({
       <SignatureCaptureDialog
         open={signing}
         title="Employee signature"
-        description="The employee signs here. This signature is stamped on every document of theirs that needs one."
+        description="The employee signs here, or switch to Upload for a scan or photograph of their signature. It is stamped on every document of theirs that needs one."
         busy={save.isPending}
         failure={failure}
         onCancel={() => {

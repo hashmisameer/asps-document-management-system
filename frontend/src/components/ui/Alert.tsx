@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import clsx from 'clsx'
 
 interface AlertProps {
-  tone?: 'error' | 'info'
+  /** 'warning': something to read before going on, not something that went wrong. */
+  tone?: 'error' | 'info' | 'warning'
   title?: string
   children: ReactNode
   /** Shown small and monospaced: it matches a line in the server log. */
@@ -23,7 +24,9 @@ export function Alert({ tone = 'error', title, children, referenceId }: AlertPro
         'rounded-md border px-3 py-2 text-sm',
         tone === 'error'
           ? 'border-red-200 bg-red-50 text-status-rejected'
-          : 'border-brand-200 bg-brand-50 text-brand-800',
+          : tone === 'warning'
+            ? 'border-amber-200 bg-amber-50 text-status-pending'
+            : 'border-brand-200 bg-brand-50 text-brand-800',
       )}
     >
       {title ? <p className="font-medium">{title}</p> : null}

@@ -1,5 +1,6 @@
 import type { Role } from '../constants/roles.js'
 import type { DocumentStatus, Gender, SignatureStatus, SignerRole } from '../constants/documents.js'
+import type { StampDecisionSummary } from '../constants/autoStamp.js'
 import type { DeadlineState, DeadlineUnit } from '../constants/deadlines.js'
 import type { DocumentField, FieldCheckResult, TextSource } from '../constants/documentFields.js'
 import type { EmploymentStatus, ExitReason } from '../constants/employment.js'
@@ -390,6 +391,13 @@ export interface EmployeeDocument {
   /** What reading this document found, and any recorded override of a failure. */
   identityCheck: DocumentIdentityCheck | null
 
+  /**
+   * What stamping on upload decided about this file, the last time it was
+   * uploaded. Null for a document uploaded before there was such a thing, or
+   * that needs no signature. Written for HR to read beside the Sign button.
+   */
+  stampDecision: StampDecisionSummary | null
+
   uploadedByName: string | null
   uploadedAt: string | null
   verifiedByName: string | null
@@ -523,8 +531,41 @@ export interface DocumentTypeTemplateSummary {
   variants: TemplateVariantSummary[]
 }
 
+/**
+ * One shape of page among a type's stored documents: how many are that
+ * shape, and which template, if any, covers them.
+ *
+ * What the template editor shows beside the sample - 'A4 portrait, 1 page:
+ * 118 of 121 documents' - and what warns when a sample is a shape only a few
+ * documents have. Measured from the files themselves.
+ */
+export interface DocumentShapeGroup {
+  variant: TemplateVariant
+  label: string
+  /** Stored PDFs of the type that are this shape. */
+  documents: number
+  /** Of the type's stored PDFs that could be measured. 0-100. */
+  percent: number
+  /** The exact sizes seen, most common first: '595x842 (112)'. */
+  sizes: string[]
+  /** A template is saved for this shape. */
+  hasTemplate: boolean
+  /** The document ids in this group - so a sample list can say which are covered. */
+  documentIds: number[]
+}
+
+export interface DocumentTypeShapes {
+  documentTypeId: number
+  /** Stored PDFs of the type, measured. */
+  measured: number
+  /** Stored files that could not be measured: not PDFs, or unreadable. */
+  unmeasured: number
+  groups: DocumentShapeGroup[]
+}
+
 export type PlacementMethod = 'Automatic' | 'Manual' | 'Adjusted'
-export type DetectionMethod = 'OCR' | 'CV' | 'Combined' | 'Manual'
+/** 'Template': placed by the application from the document type's template, unasked. */
+export type DetectionMethod = 'OCR' | 'CV' | 'Combined' | 'Manual' | 'Template'
 
 /** A candidate returned by the detection engine. Advisory only, never applied. */
 export interface DetectionCandidate {

@@ -55,8 +55,9 @@ export function MySignaturePage() {
     <div className="mx-auto max-w-3xl">
       <h1 className="text-lg font-semibold text-slate-900">My signature</h1>
       <p className="mt-1 max-w-2xl text-sm text-slate-600">
-        This is the signature stamped on documents you sign off, over your name. Sign once on the
-        pen tablet and it is reused on every document you authorise afterwards.
+        This is the signature stamped on documents you sign off, over your name. Draw it on the pad,
+        or upload a scan or photograph of your signature. Either way it is kept once and reused on
+        every document you authorise afterwards.
       </p>
 
       <div className="mt-4 rounded-card border border-slate-200 bg-white p-4 shadow-sm">
@@ -90,7 +91,9 @@ export function MySignaturePage() {
                 <p>
                   {data.widthPx} x {data.heightPx} pixels
                 </p>
-                <p className="text-xs text-slate-500">Signed {formatDateTime(data.updatedAt)}</p>
+                <p className="text-xs text-slate-500">
+                  On file since {formatDateTime(data.updatedAt)}
+                </p>
               </>
             ) : null}
 
@@ -102,13 +105,13 @@ export function MySignaturePage() {
                   setSigning(true)
                 }}
               >
-                {data?.hasSignature ? 'Sign again' : 'Sign on pad'}
+                {data?.hasSignature ? 'Replace signature' : 'Add signature'}
               </Button>
             </div>
 
             {data?.hasSignature ? (
               <p className="mt-2 max-w-md text-xs text-slate-500">
-                Signing again does not change documents you have already signed off. Those keep the
+                Replacing it does not change documents you have already signed off. Those keep the
                 signature that was current when they were issued.
               </p>
             ) : null}
@@ -119,7 +122,7 @@ export function MySignaturePage() {
       <SignatureCaptureDialog
         open={signing}
         title="Your signature"
-        description="Sign as you would on paper. This is stamped on documents you authorise."
+        description="Draw your signature as you would on paper, or switch to Upload for a scan or photograph of it. This is stamped on documents you authorise."
         busy={save.isPending}
         failure={failure}
         onCancel={() => {

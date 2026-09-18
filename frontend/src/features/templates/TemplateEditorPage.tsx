@@ -22,7 +22,8 @@ import { documentListKeys, listDocuments } from '../documents/listApi.js'
 import { documentTypeKeys, listDocumentTypes } from '../employees/api.js'
 import { PlacementBox, type RenderedSize } from '../signatures/PlacementEditorPage.js'
 import { newPlacement, type DraftPlacement } from '../signatures/placementModel.js'
-import { fetchTemplate, saveTemplate, templateKeys } from './api.js'
+import { fetchShapes, fetchTemplate, saveTemplate, templateKeys } from './api.js'
+import { describeShape, sampleIsCovered } from './shapeText.js'
 
 /**
  * Drawing a document type's template on a real document of that type.
@@ -33,13 +34,20 @@ import { fetchTemplate, saveTemplate, templateKeys } from './api.js'
  * type. What is saved goes against the TYPE. The sample is only looked at:
  * its own placements are not read, and nothing about it is written.
  *
- * ONE TEMPLATE PER VARIANT. A type can be two pieces of paper - the PF form
- * is two pages, Form 11 is one - and the variant is what the sample PDF is:
- * its page count and its first page's size. The editor works out the variant
- * from the sample, loads that variant's boxes, and saves to that variant.
- * Unsaved boxes are kept PER VARIANT for the session, so switching the sample
- * from the two-page form to the one-page form and back loses nothing and
- * carries nothing over - which is the mistake that made this necessary.
+ * ONE TEMPLATE PER SHAPE. A type can be two pieces of paper - the PF form is
+ * two pages, Form 11 is one - and the variant is what the sample PDF is: its
+ * page count and the SHAPE of its first page, which way up and what
+ * proportions, to one per cent. Not its size: the office's forms come out at
+ * twenty sizes for one document, all A4-shaped, and one template covers them
+ * all. The editor works out the shape from the sample, loads that shape's
+ * boxes, and saves to that shape. Unsaved boxes are kept PER SHAPE for the
+ * session, so switching the sample from the two-page form to the one-page
+ * form and back loses nothing and carries nothing over.
+ *
+ * The editor also says how much of the type the sample's shape covers - 118
+ * of 121 stored Appointment Letters - and warns when it is only a few, which
+ * is usually the wrong sample. That comes from measuring the stored files,
+ * asked for once and never waited on.
  */
 
 /** The page as pdf.js reports it, in points and unrotated. */
@@ -88,6 +96,16 @@ export function TemplateEditorPage() {
     queryKey: templateKeys.forType(documentTypeId),
     queryFn: () => fetchTemplate(documentTypeId),
     enabled: Number.isFinite(documentTypeId),
+  })
+
+  // The shapes of every stored document of the type. Measured on the server
+  // from the files, slowly the first time, so it arrives after the page and
+  // the page does not wait for it.
+  const shapes = useQuery({
+    queryKey: templateKeys.shapes(documentTypeId),
+    queryFn: () => fetchShapes(documentTypeId),
+    enabled: Number.isFinite(documentTypeId),
+    staleTime: 5 * 60 * 1000,
   })
 
   // Which form the sample is, once pdf.js has told us how many pages it has
@@ -199,6 +217,7 @@ export function TemplateEditorPage() {
     | undefined
   const willReplace = key !== null && savedVariants.has(key)
   const hasDraft = key !== null && drafts.has(key)
+  const shape = variant ? describeShape(variant, shapes.data, type?.documentName ?? 'document') : null
 
   return (
     <main>
@@ -210,8 +229,21 @@ export function TemplateEditorPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
             Template for {type?.documentName ?? 'document'}
-            {variant ? <span className="ml-2 text-base font-normal text-slate-600">- {variantLabel(variant)}</span> : null}
+            {shape ? (
+              <span className="ml-2 text-base font-normal text-slate-600">- {shape.label}</span>
+            ) : null}
           </h1>
+          {/* What this template will cover: every stored document of the type
+              that is this shape. Said in numbers, so 'A4 portrait' is not an
+              abstraction - it is 118 of the 121 letters on file. */}
+          {shape?.coverage ? (
+            <p className="mt-1 text-sm text-slate-600">
+              {shape.coverage}
+              {shape.group?.hasTemplate ? ' A template is saved for this shape.' : ''}
+            </p>
+          ) : shapes.isLoading && variant ? (
+            <p className="mt-1 text-sm text-slate-500">Measuring the stored documents...</p>
+          ) : null}
           <p className="mt-1 text-sm text-slate-600">
             Drag each box to where it goes on the form. Saved against the type, for this form;
             nothing already uploaded is changed.
@@ -250,10 +282,21 @@ export function TemplateEditorPage() {
           the same page count and size can be confused. */}
       {willReplace && hasDraft ? (
         <div className="mt-3">
-          <Alert tone="info" title={`This replaces the existing ${variant ? variantLabel(variant) : ''} template`}>
-            A template for a {variant?.pageCount}-page form of this size is already saved. Saving
-            writes these boxes over it. If this is a different form that happens to be the same
-            size, the two cannot be told apart by their pages.
+          <Alert tone="info" title={`This replaces the existing ${shape?.label ?? ''} template`}>
+            A template for this shape of {type?.documentName ?? 'document'} is already saved.
+            Saving writes these boxes over it. If this is a different form that happens to be
+            the same shape, the two cannot be told apart by their pages.
+          </Alert>
+        </div>
+      ) : null}
+
+      {/* A sample that is a shape hardly anything else is, is usually the wrong
+          sample - and a template drawn on it stamps almost nothing. Said
+          before the save, not after. */}
+      {shape?.warning ? (
+        <div className="mt-3">
+          <Alert tone="warning" title="This is a rare shape for this document">
+            {shape.warning}
           </Alert>
         </div>
       ) : null}
@@ -274,9 +317,10 @@ export function TemplateEditorPage() {
 
       {savedVariant ? (
         <div className="mt-3">
-          <Alert tone="info" title={`Template saved for the ${savedVariant}`}>
-            Every {type?.documentName ?? 'document'} uploaded from now on that is a {savedVariant}{' '}
-            will use these boxes. Other forms of this type are not affected.
+          <Alert tone="info" title={`Template saved: ${savedVariant}`}>
+            Every {type?.documentName ?? 'document'} uploaded from now on that is {savedVariant}{' '}
+            - whatever its exact size - will use these boxes. Other shapes of this type are not
+            affected.
           </Alert>
         </div>
       ) : null}
@@ -295,10 +339,16 @@ export function TemplateEditorPage() {
           <Select
             label="Sample document"
             value={sampleId ? String(sampleId) : ''}
-            options={(samples.data?.items ?? []).map((item) => ({
-              value: String(item.documentId),
-              label: `${item.employeeCode} - ${item.employeeName}`,
-            }))}
+            options={(samples.data?.items ?? []).map((item) => {
+              // Which samples the template drawn on THIS sample would cover:
+              // the ones that are the same shape. Unknown until measured.
+              const covered = sampleIsCovered(shapes.data, variant, item.documentId)
+              const mark = covered === null ? '' : covered ? ' - same shape' : ' - different shape'
+              return {
+                value: String(item.documentId),
+                label: `${item.employeeCode} - ${item.employeeName}${mark}`,
+              }
+            })}
             onChange={(event) => chooseSample(event.target.value)}
           />
         </div>

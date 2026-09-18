@@ -39,7 +39,7 @@ function withinPage<T extends z.ZodTypeAny>(schema: T) {
 export const placementSchema = withinPage(
   boxSchema.extend({
     method: z.enum(['Automatic', 'Manual', 'Adjusted']),
-    detectionMethod: z.enum(['OCR', 'CV', 'Combined', 'Manual']),
+    detectionMethod: z.enum(['OCR', 'CV', 'Combined', 'Manual', 'Template']),
     /*
      * signerRole, from the box: whose signature goes in it. Defaults to the
      * employee, which is what a placement meant before there was a second

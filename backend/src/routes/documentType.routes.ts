@@ -33,6 +33,15 @@ documentTypeRouter.get(
   placementTemplateController.getForType,
 )
 
+/* The shapes of the type's stored documents - how many are A4 portrait, how
+   many something else - measured from the files. What the editor shows beside
+   a sample, and what warns when a sample is a shape few documents have. */
+documentTypeRouter.get(
+  '/:documentTypeId/shapes',
+  requirePermission(PERMISSIONS.TEMPLATE_MANAGE),
+  placementTemplateController.shapesForType,
+)
+
 documentTypeRouter.put(
   '/:documentTypeId/placements',
   requirePermission(PERMISSIONS.TEMPLATE_MANAGE),

@@ -144,7 +144,7 @@ describe('checkDocument', () => {
     expect(result.outcome).toBe('noVariant')
     expect(result.measured).toEqual(A4_ONE)
     expect(result.boxes).toEqual([])
-    expect(result.detail).toContain('2-page form')
+    expect(result.detail).toContain('A4 portrait, 2 pages')
   })
 
   it('reports a document two templates claim, and assesses neither', async () => {
@@ -258,7 +258,7 @@ describe('printing', () => {
 
   it('prints the document id, type, status and every number', () => {
     const lines = formatResult(checked)
-    expect(lines[0]).toBe('#77  PF Form / Form 11 [PF_FORM]  (Added, has signed copy)  1-page form (A4 portrait)')
+    expect(lines[0]).toBe('#77  PF Form / Form 11 [PF_FORM]  (Added, has signed copy)  A4 portrait, 1 page')
     expect(lines[1]).toContain('Employee   p1')
     expect(lines[1]).toContain('occupied  by ink   scanned')
     expect(lines[1]).toContain('ink 6.13% (bg 231, cut 191)')
@@ -289,10 +289,10 @@ describe('printing', () => {
       outcome: 'noVariant',
       variant: null,
       boxes: [],
-      detail: 'templates: 2-page form (A4 portrait)',
+      detail: 'templates: A4 portrait, 2 pages',
     })
-    expect(lines[0]).toContain('is 1-page form (A4 portrait)')
-    expect(lines[1]).toBe('    no template for this form: templates: 2-page form (A4 portrait)')
+    expect(lines[0]).toContain('is A4 portrait, 1 page')
+    expect(lines[1]).toBe('    no template for this form: templates: A4 portrait, 2 pages')
   })
 
   it('counts verdicts per type and lists the documents that disagree with their status', () => {

@@ -61,7 +61,7 @@ export interface StampCheckResult {
 }
 
 /** The page count and first-page size of a PDF, as the template editor measures them. */
-async function measurePdf(source: Buffer): Promise<TemplateVariant> {
+export async function measurePdf(source: Buffer): Promise<TemplateVariant> {
   const pdf = await openPdf(source)
   try {
     const first = await pdf.getPage(1)

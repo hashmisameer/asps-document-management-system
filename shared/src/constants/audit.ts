@@ -65,6 +65,14 @@ export const AUDIT_ACTIONS = {
   USER_REACTIVATED: 'USER_REACTIVATED',
   /** An HR or Admin user enrolling or re-drawing their own authorising signature. */
   USER_SIGNATURE_SAVED: 'USER_SIGNATURE_SAVED',
+  /**
+   * Stamping on upload decided what to do with a document. Written in report
+   * mode and in stamp mode alike; when boxes were actually stamped the
+   * placement entry follows it.
+   */
+  AUTO_STAMP_DECIDED: 'AUTO_STAMP_DECIDED',
+  /** Boxes placed from the document type's template, by the application, on upload. */
+  SIGNATURE_PLACED_FROM_TEMPLATE: 'SIGNATURE_PLACED_FROM_TEMPLATE',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
