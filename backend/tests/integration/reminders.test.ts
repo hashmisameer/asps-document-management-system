@@ -4,6 +4,7 @@ import { addDays, todayDateOnly } from '@asps-dms/shared'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 import * as reminderRepository from '../../src/repositories/reminder.repository.js'
 import { buildDigest } from '../../src/services/reminderDigest.service.js'
+import { readXlsx } from '../../src/utils/xlsx.js'
 
 /**
  * The reminder digest, built from what is actually in the database.
@@ -103,7 +104,7 @@ describe('the pending-documents reminder', () => {
     ).toBe(false)
   })
 
-  it('builds a digest naming the employee and their documents', async () => {
+  it('builds a digest with the overdue documents in the sheet, not the body', async () => {
     await resetData()
     const express = app()
     const agent = await signIn(express, await createUser('hr.digest', 'HR'))
@@ -113,14 +114,35 @@ describe('the pending-documents reminder', () => {
       .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: JOINED })
     const employee = created.body.employee
 
+    // Judged a month from now: the week-and-fortnight documents are late by
+    // then, the six-month confirmation letter is not.
     const rows = await reminderRepository.findPendingDocuments()
-    const digest = buildDigest(rows, { today: '2026-09-30' })
+    const digest = buildDigest(rows, { today: addDays(todayDateOnly(), 30) })
 
     expect(digest).not.toBeNull()
-    expect(digest?.text).toContain(employee.employeeCode)
-    expect(digest?.text).toContain('Ravi Kumar')
-    expect(digest?.text).toContain('Aadhaar Card')
-    expect(digest?.subject).toContain('pending documents')
+    expect(digest?.subject).toMatch(/^ASPS-DMS: 1 employee with \d+ overdue documents$/)
+
+    const sheet = readXlsx(Buffer.from(digest?.attachment.bytes ?? new Uint8Array()))
+    expect(sheet[0]).toEqual([
+      'employee_id',
+      'employee_name',
+      'documents_pending',
+      'overdue_dates',
+      'days of overdue',
+    ])
+    const documents = sheet.slice(1).map((cells) => cells[2])
+    expect(documents).toContain('Aadhaar Card')
+    expect(documents).not.toContain('Confirmation Letter')
+    for (const cells of sheet.slice(1)) {
+      expect(cells[0]).toBe(employee.employeeCode)
+      expect(cells[1]).toBe('Ravi Kumar')
+      expect(cells[3]).toMatch(/^\d{2}\/\d{2}\/\d{4}$/)
+      expect(Number(cells[4])).toBeGreaterThan(0)
+    }
+
+    // The list has moved out of the body.
+    expect(digest?.text).not.toContain('Ravi Kumar')
+    expect(digest?.text).toContain(digest?.attachment.fileName ?? '')
   })
 
   it('sends nothing when every employee is up to date', async () => {

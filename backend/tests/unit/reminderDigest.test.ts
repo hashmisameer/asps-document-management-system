@@ -1,146 +1,251 @@
 import { describe, expect, it } from 'vitest'
-import { DEADLINE_STATE } from '@asps-dms/shared'
-import { buildDigest, groupPending } from '../../src/services/reminderDigest.service.js'
+import {
+  OVERDUE_SHEET_COLUMNS,
+  buildDigest,
+  buildOverdueSheet,
+  overdueRows,
+  overdueSheetFileName,
+  previewSheet,
+} from '../../src/services/reminderDigest.service.js'
 import type { PendingDocumentRow } from '../../src/repositories/reminder.repository.js'
+import { readXlsx, readZipEntries } from '../../src/utils/xlsx.js'
 
 /**
- * The pending-documents digest.
+ * The overdue-documents digest: a short email and the sheet attached to it.
  *
- * What is pinned here is what someone reading the email actually relies on: the
- * right employees, the right documents against each, worst first, and no email
- * at all when there is nothing outstanding.
+ * What is pinned here is what someone opening the email relies on: only what
+ * is actually late, one row per late document with the employee repeated, the
+ * columns the office asked for in the order they asked for them, codes with
+ * their zeros, and no email at all when nothing is late.
  */
 
-const TODAY = '2026-08-31'
+const TODAY = '2026-09-18'
+const WHEN = new Date(2026, 8, 18, 9, 0, 0)
 
 function row(overrides: Partial<PendingDocumentRow> = {}): PendingDocumentRow {
   return {
     employeeId: 1,
-    employeeCode: 'EMP001',
+    employeeCode: '00005696',
     employeeName: 'Ravi Kumar',
     documentName: 'Aadhaar Card',
     isMandatory: true,
-    dueDate: '2026-08-20',
+    dueDate: '2026-09-11',
     ...overrides,
   }
 }
 
-describe('groupPending', () => {
-  it('gathers each employee\'s documents under one entry', () => {
-    const grouped = groupPending(
+describe('overdueRows', () => {
+  it('keeps only what is late, and nothing that is merely coming up', () => {
+    const rows = overdueRows(
       [
-        row({ documentName: 'Aadhaar Card' }),
-        row({ documentName: 'PAN Card' }),
-        row({ employeeId: 2, employeeCode: 'EMP002', employeeName: 'Anita Desai' }),
+        row({ documentName: 'Overdue', dueDate: '2026-09-17' }),
+        row({ documentName: 'Due today', dueDate: '2026-09-18' }),
+        row({ documentName: 'Due in 3 days', dueDate: '2026-09-21' }),
+        row({ documentName: 'Not due', dueDate: '2027-01-01' }),
+        row({ documentName: 'No deadline', dueDate: null }),
       ],
       { today: TODAY },
     )
 
-    expect(grouped).toHaveLength(2)
-    expect(grouped[0]?.documents.map((d) => d.documentName)).toEqual(['Aadhaar Card', 'PAN Card'])
+    expect(rows.map((r) => r.documentName)).toEqual(['Overdue'])
   })
 
-  it('leaves out a document whose date has not arrived', () => {
-    // Otherwise every new employee's whole checklist arrives on day one and the
-    // digest becomes a copy of the checklist that nobody reads.
-    const grouped = groupPending([row({ dueDate: '2027-01-01' })], { today: TODAY })
-    expect(grouped).toEqual([])
-  })
-
-  it('includes a not-yet-due document when asked to', () => {
-    const grouped = groupPending([row({ dueDate: '2027-01-01' })], {
-      today: TODAY,
-      includeNotYetDue: true,
-    })
-    expect(grouped).toHaveLength(1)
-  })
-
-  it('keeps a document that has no deadline at all', () => {
-    // It is genuinely outstanding. Dropping it would let an employee owe a
-    // document that no reminder ever mentions.
-    const grouped = groupPending([row({ dueDate: null })], { today: TODAY })
-    expect(grouped).toHaveLength(1)
-    expect(grouped[0]?.documents[0]?.state).toBe(DEADLINE_STATE.NOT_APPLICABLE)
-  })
-
-  it('puts the overdue employee first, and the overdue document first', () => {
-    const grouped = groupPending(
+  it('makes one row per overdue document, repeating the employee on each', () => {
+    const rows = overdueRows(
       [
-        row({ employeeId: 2, employeeCode: 'EMP002', dueDate: '2026-09-02' }),
-        row({ employeeId: 1, employeeCode: 'EMP001', documentName: 'PAN Card', dueDate: '2026-09-01' }),
-        row({ employeeId: 1, employeeCode: 'EMP001', documentName: 'Aadhaar Card', dueDate: '2026-08-01' }),
+        row({ documentName: 'Aadhaar Card' }),
+        row({ documentName: 'PAN Card' }),
+        row({ documentName: 'Bio Data Form' }),
       ],
       { today: TODAY },
     )
 
-    expect(grouped[0]?.employeeCode).toBe('EMP001')
-    expect(grouped[0]?.documents[0]?.documentName).toBe('Aadhaar Card')
-    expect(grouped[0]?.documents[0]?.state).toBe(DEADLINE_STATE.OVERDUE)
+    expect(rows).toHaveLength(3)
+    expect(new Set(rows.map((r) => r.employeeCode))).toEqual(new Set(['00005696']))
+    expect(new Set(rows.map((r) => r.employeeName))).toEqual(new Set(['Ravi Kumar']))
   })
-})
 
-describe('buildDigest', () => {
-  it('names every employee and every pending document', () => {
-    const digest = buildDigest(
+  it('counts whole days past the due date', () => {
+    const rows = overdueRows(
+      [row({ dueDate: '2026-09-17' }), row({ documentName: 'PAN Card', dueDate: '2026-08-18' })],
+      { today: TODAY },
+    )
+
+    expect(rows.map((r) => [r.documentName, r.daysOverdue])).toEqual([
+      ['PAN Card', 31],
+      ['Aadhaar Card', 1],
+    ])
+  })
+
+  it('orders by employee code, and within an employee the most overdue first', () => {
+    const rows = overdueRows(
       [
-        row({ documentName: 'Aadhaar Card' }),
-        row({ documentName: 'PAN Card' }),
+        row({ employeeId: 2, employeeCode: '00005700', employeeName: 'B', dueDate: '2026-09-01' }),
         row({
-          employeeId: 2,
-          employeeCode: 'EMP002',
-          employeeName: 'Anita Desai',
-          documentName: 'Service Card',
-          isMandatory: false,
+          employeeId: 1,
+          employeeCode: '00005696',
+          documentName: 'PAN Card',
+          dueDate: '2026-09-10',
+        }),
+        row({
+          employeeId: 1,
+          employeeCode: '00005696',
+          documentName: 'Aadhaar Card',
+          dueDate: '2026-08-01',
         }),
       ],
       { today: TODAY },
     )
 
-    expect(digest).not.toBeNull()
-    for (const expected of ['EMP001', 'Ravi Kumar', 'Aadhaar Card', 'PAN Card', 'EMP002', 'Anita Desai', 'Service Card']) {
-      expect(digest?.text).toContain(expected)
-      expect(digest?.html).toContain(expected)
-    }
-    expect(digest?.employeeCount).toBe(2)
-    expect(digest?.documentCount).toBe(3)
+    expect(rows.map((r) => `${r.employeeCode} ${r.documentName}`)).toEqual([
+      '00005696 Aadhaar Card',
+      '00005696 PAN Card',
+      '00005700 Aadhaar Card',
+    ])
+  })
+})
+
+describe('the sheet', () => {
+  it('has exactly the columns the office asked for, in that order', () => {
+    expect(OVERDUE_SHEET_COLUMNS.map((column) => column.header)).toEqual([
+      'employee_id',
+      'employee_name',
+      'documents_pending',
+      'overdue_dates',
+      'days of overdue',
+    ])
   })
 
-  it('sends nothing when nothing is outstanding', () => {
+  it('reads back with the code intact, the date as the app shows it, and the days as a number', () => {
+    const rows = overdueRows([row({ dueDate: '2026-09-11' })], { today: TODAY })
+    const file = Buffer.from(buildOverdueSheet(rows, WHEN))
+
+    expect(readXlsx(file)).toEqual([
+      ['employee_id', 'employee_name', 'documents_pending', 'overdue_dates', 'days of overdue'],
+      ['00005696', 'Ravi Kumar', 'Aadhaar Card', '11/09/2026', '7'],
+    ])
+
+    // Text cells for everything but the day count, which is a number so Excel
+    // sorts 9 before 10. The code is text BECAUSE the cell says so - not
+    // because Excel guessed right.
+    const sheet = readZipEntries(file).get('xl/worksheets/sheet1.xml')?.toString('utf8') ?? ''
+    expect(sheet).toContain(
+      '<c r="A2" t="inlineStr"><is><t xml:space="preserve">00005696</t></is></c>',
+    )
+    expect(sheet).toContain(
+      '<c r="D2" t="inlineStr"><is><t xml:space="preserve">11/09/2026</t></is></c>',
+    )
+    expect(sheet).toContain('<c r="E2"><v>7</v></c>')
+    expect(sheet).not.toContain('<v>5696</v>')
+  })
+
+  it('carries a name with markup in it as plain text', () => {
+    const rows = overdueRows([row({ employeeName: 'A <b>&</b> B' })], { today: TODAY })
+    const file = Buffer.from(buildOverdueSheet(rows, WHEN))
+
+    expect(readXlsx(file)[1]?.[1]).toBe('A <b>&</b> B')
+  })
+
+  it('is named for the day it was made, on the server calendar', () => {
+    expect(overdueSheetFileName(WHEN)).toBe('asps-dms-overdue-documents-2026-09-18.xlsx')
+    expect(overdueSheetFileName(new Date(2026, 0, 5, 23, 59))).toBe(
+      'asps-dms-overdue-documents-2026-01-05.xlsx',
+    )
+  })
+})
+
+describe('buildDigest', () => {
+  it('sends nothing when nothing is overdue, even with documents pending', () => {
     // A daily email saying all is well teaches people to delete it unread, and
-    // the one that mattered goes with it.
+    // the one that mattered goes with it. Pending but not late is such a day.
     expect(buildDigest([], { today: TODAY })).toBeNull()
+    expect(
+      buildDigest([row({ dueDate: '2026-09-18' }), row({ dueDate: '2026-09-25' })], {
+        today: TODAY,
+      }),
+    ).toBeNull()
   })
 
-  it('counts the overdue documents in the subject', () => {
+  it('says the two numbers and that the list is attached, and no more', () => {
     const digest = buildDigest(
-      [row({ dueDate: '2026-08-01' }), row({ documentName: 'PAN Card', dueDate: '2026-09-02' })],
+      [
+        row({ documentName: 'Aadhaar Card' }),
+        row({ documentName: 'PAN Card' }),
+        row({ employeeId: 2, employeeCode: '00005700', employeeName: 'Anita Desai' }),
+        // Pending, not late: counted nowhere.
+        row({
+          employeeId: 3,
+          employeeCode: '00005701',
+          employeeName: 'Not Late',
+          dueDate: '2026-09-30',
+        }),
+      ],
+      { today: TODAY, when: WHEN },
+    )
+
+    expect(digest?.employeeCount).toBe(2)
+    expect(digest?.overdueCount).toBe(3)
+    expect(digest?.subject).toBe('ASPS-DMS: 2 employees with 3 overdue documents')
+    expect(digest?.text).toContain('2 employees have 3 overdue documents.')
+    expect(digest?.text).toContain('attached as asps-dms-overdue-documents-2026-09-18.xlsx')
+    expect(digest?.text).toContain('repeats until the documents are uploaded')
+    expect(digest?.html).toContain('asps-dms-overdue-documents-2026-09-18.xlsx')
+
+    // The list has moved into the sheet: no names in the body.
+    for (const name of ['Ravi Kumar', 'Anita Desai', 'Aadhaar Card', 'Not Late']) {
+      expect(digest?.text).not.toContain(name)
+      expect(digest?.html).not.toContain(name)
+    }
+  })
+
+  it('counts an employee once however many documents they are late with', () => {
+    const digest = buildDigest(
+      [row({ documentName: 'Aadhaar Card' }), row({ documentName: 'PAN Card' })],
       { today: TODAY },
     )
-    expect(digest?.overdueCount).toBe(1)
-    expect(digest?.subject).toContain('1 overdue')
+    expect(digest?.subject).toBe('ASPS-DMS: 1 employee with 2 overdue documents')
   })
 
-  it('says one employee rather than 1 employees', () => {
-    const digest = buildDigest([row()], { today: TODAY })
-    expect(digest?.subject).toContain('1 employee with')
-    expect(digest?.subject).not.toContain('employees')
+  it('says one document rather than 1 documents', () => {
+    expect(buildDigest([row()], { today: TODAY })?.subject).toBe(
+      'ASPS-DMS: 1 employee with 1 overdue document',
+    )
   })
 
-  it('marks a mandatory document as such', () => {
-    const digest = buildDigest([row({ isMandatory: true })], { today: TODAY })
-    expect(digest?.text).toContain('[mandatory]')
+  it('attaches the sheet with every overdue row and says how many', () => {
+    const digest = buildDigest(
+      [row({ documentName: 'Aadhaar Card' }), row({ documentName: 'PAN Card' })],
+      { today: TODAY, when: WHEN },
+    )
+
+    expect(digest?.attachment.fileName).toBe('asps-dms-overdue-documents-2026-09-18.xlsx')
+    expect(digest?.attachment.rowCount).toBe(2)
+    expect(readXlsx(Buffer.from(digest?.attachment.bytes ?? new Uint8Array()))).toHaveLength(3)
+    expect(digest?.rows).toHaveLength(2)
+  })
+})
+
+describe('previewSheet', () => {
+  it('prints the headings and the first rows as columns, and says what was left out', () => {
+    const rows = overdueRows(
+      Array.from({ length: 25 }, (_, i) =>
+        row({ employeeId: i, employeeCode: String(i).padStart(8, '0'), dueDate: '2026-09-11' }),
+      ),
+      { today: TODAY },
+    )
+
+    const lines = previewSheet(rows, 20)
+
+    expect(lines[0]).toBe(
+      'employee_id  employee_name  documents_pending  overdue_dates  days of overdue',
+    )
+    expect(lines[1]).toBe('00000000     Ravi Kumar     Aadhaar Card       11/09/2026     7')
+    expect(lines).toHaveLength(22)
+    expect(lines[21]).toBe('... and 5 more row(s)')
   })
 
-  it('escapes a name that would otherwise be markup', () => {
-    // Employee names come from a form. One containing a tag must not become one
-    // in the email body.
-    const digest = buildDigest([row({ employeeName: 'A <script>x</script> B' })], { today: TODAY })
-    expect(digest?.html).not.toContain('<script>')
-    expect(digest?.html).toContain('&lt;script&gt;')
-  })
-
-  it('says that it will keep coming', () => {
-    const digest = buildDigest([row()], { today: TODAY })
-    expect(digest?.text).toContain('repeats until the documents are uploaded')
+  it('says nothing about rows left out when none were', () => {
+    const lines = previewSheet(overdueRows([row()], { today: TODAY }))
+    expect(lines).toHaveLength(2)
   })
 })
