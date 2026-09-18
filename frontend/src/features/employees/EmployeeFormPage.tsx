@@ -15,7 +15,9 @@ import { TextField } from '../../components/ui/TextField.js'
 import { EDITABLE_EMPLOYEE_FIELDS } from './employeeFields.js'
 import { previewIdentity } from '../documents/api.js'
 import { ApiError } from '../../lib/apiError.js'
+import { useAuth } from '../auth/useAuth.js'
 import { createEmployee, employeeKeys, fetchEmployee, updateEmployee } from './api.js'
+import { joiningDateWarning as warnAboutJoiningDate } from './joiningDateWarning.js'
 import {
   RequiredDocuments,
   missingMandatory,
@@ -116,6 +118,7 @@ export function EmployeeFormPage() {
 
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { user } = useAuth()
 
   const [values, setValues] = useState(EMPTY)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string>>>({})
@@ -151,6 +154,16 @@ export function EmployeeFormPage() {
     queryKey: employeeKeys.detail(employeeId ?? 0),
     queryFn: () => fetchEmployee(employeeId ?? 0),
     enabled: isEdit,
+  })
+
+  // Whether this person may use this joining date - said as they type it, and
+  // the Save button held until it is put right. See joiningDateWarning.ts.
+  const joiningDateWarning = warnAboutJoiningDate({
+    value: values.joiningDate,
+    user,
+    // Until the record has loaded there is nothing to compare with, and
+    // nothing to warn about: the values are still empty.
+    existingJoiningDate: isEdit ? (existing.data?.joiningDate ?? values.joiningDate) : null,
   })
 
   useEffect(() => {
@@ -388,6 +401,9 @@ export function EmployeeFormPage() {
     setFieldErrors({})
     setMissingFields([])
 
+    // Already on the screen under the date; the server would say the same.
+    if (joiningDateWarning) return
+
     // The two identity documents are the point of the record: an employee whose
     // Aadhaar and PAN were "coming later" is exactly what this stops.
     if (!isEdit && missingMandatory(typesQuery.data, files).length > 0) {
@@ -477,7 +493,7 @@ export function EmployeeFormPage() {
                 key={field.key}
                 label={label}
                 value={value}
-                error={error}
+                error={field.key === 'joiningDate' ? (joiningDateWarning ?? error) : error}
                 hint={
                   field.key === 'joiningDate' && isEdit
                     ? 'Changing this does not move deadlines that have already been set.'
@@ -565,7 +581,12 @@ export function EmployeeFormPage() {
         ) : null}
 
         <div className="mt-2 flex items-center gap-3 border-t border-slate-100 pt-4">
-          <Button type="submit" busy={save.isPending} busyLabel="Saving...">
+          <Button
+            type="submit"
+            busy={save.isPending}
+            busyLabel="Saving..."
+            disabled={joiningDateWarning !== undefined}
+          >
             {isEdit ? 'Save changes' : 'Create employee'}
           </Button>
           <Link

@@ -3,6 +3,7 @@ import {
   AUDIT_ENTITY_TYPES,
   EMPLOYMENT_STATUSES,
   computeDueDate,
+  judgeJoiningDate,
   todayDateOnly,
   type AuthUser,
   type CreateEmployeeInput,
@@ -15,6 +16,7 @@ import {
   type Paginated,
   type UpdateEmployeeInput,
 } from '@asps-dms/shared'
+import { env } from '../config/env.js'
 import { withTransaction } from '../database/pool.js'
 import { withDeadline } from './document.service.js'
 import {
@@ -33,6 +35,7 @@ import { logger } from '../utils/logger.js'
 import * as audit from './audit.service.js'
 import * as storage from './storage.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
+import { prepareForPdf } from './imagePrep.service.js'
 import type { RequestContext } from './auth.service.js'
 
 /**
@@ -48,6 +51,26 @@ import type { RequestContext } from './auth.service.js'
 function isUniqueViolation(error: unknown): boolean {
   const number = (error as { number?: unknown }).number
   return number === 2627 || number === 2601
+}
+
+/**
+ * Refuses a joining date this person may not use - see judgeJoiningDate.
+ *
+ * Raised as a validation issue on the field rather than as a 403, because the
+ * answer belongs next to the date that was typed: the form shows it there, and
+ * the import writes it against the row. Judged against the server's own today,
+ * the same one the deadlines use, with the window from .env.
+ */
+function assertJoiningDateAllowed(joiningDate: string, actor: AuthUser): void {
+  const judgement = judgeJoiningDate({
+    joiningDate,
+    role: actor.role,
+    today: todayDateOnly(),
+    windowDays: env.JOINING_DATE_WINDOW_DAYS,
+  })
+  if (!judgement.allowed) {
+    throw new ValidationError([{ path: 'joiningDate', message: judgement.message ?? '' }])
+  }
 }
 
 export async function list(query: EmployeeListQuery): Promise<Paginated<EmployeeListItem>> {
@@ -83,6 +106,8 @@ export async function create(
   actor: AuthUser,
   context: RequestContext,
 ): Promise<EmployeeProfile> {
+  assertJoiningDateAllowed(input.joiningDate, actor)
+
   let created: { employeeId: number; employeeCode: string }
   let checklistSize = 0
 
@@ -160,6 +185,13 @@ export async function update(
   context: RequestContext,
 ): Promise<EmployeeProfile> {
   const existing = await getById(employeeId)
+
+  // Only a joining date that is CHANGING is judged. The edit form sends the
+  // whole record back, and HR correcting a phone number on somebody who joined
+  // two years ago is not adding a late employee.
+  if (input.joiningDate !== undefined && input.joiningDate !== existing.joiningDate) {
+    assertJoiningDateAllowed(input.joiningDate, actor)
+  }
 
   await employeeRepository.update(employeeId, input)
 
@@ -410,7 +442,12 @@ export async function uploadPhoto(
   await getById(employeeId)
 
   const inspected = await inspectSignatureUpload(file)
-  const stored = await storage.storePhoto(employeeId, file.buffer, inspected.extension)
+  // A progressive JPEG is stored baseline, a rotated one upright, so the file
+  // in the store is one pdf-lib can embed. Found out here, at upload, rather
+  // than months later on the ESIC form, where the failure looks like the
+  // document's.
+  const prepared = await prepareForPdf(file.buffer, inspected.mimeType)
+  const stored = await storage.storePhoto(employeeId, prepared.buffer, inspected.extension)
 
   await employeeRepository.setPhoto(employeeId, {
     filePath: stored.relativePath,
@@ -427,7 +464,13 @@ export async function uploadPhoto(
     // The file name is not recorded: it is chosen by whoever uploaded it and
     // can carry a person's name, which the audit trail keeps for longer than
     // the record does.
-    metadata: { change: 'photo', sizeBytes: stored.sizeBytes, mimeType: inspected.mimeType },
+    metadata: {
+      change: 'photo',
+      sizeBytes: stored.sizeBytes,
+      mimeType: inspected.mimeType,
+      // True when the stored bytes are not the uploaded bytes.
+      reencoded: prepared.converted,
+    },
   })
 
   return getById(employeeId)

@@ -310,6 +310,25 @@ describe('stampSignature', () => {
         signatures: { Employee: { data: Buffer.from('not an image'), mimeType: 'image/png' } },
         placements: [placement],
       }),
-    ).rejects.toMatchObject({ statusCode: 415 })
+    ).rejects.toMatchObject({
+      statusCode: 415,
+      message: expect.stringContaining('signature image'),
+    })
+  })
+
+  it('says the photograph is the problem when that is what would not embed', async () => {
+    const source = await makePdf(1)
+
+    await expect(
+      stampSignature({
+        source,
+        sourceMimeType: 'application/pdf',
+        signatures: { Photo: { data: Buffer.from('not an image'), mimeType: 'image/jpeg' } },
+        placements: [{ ...placement, signerRole: 'Photo' }],
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 415,
+      message: expect.stringContaining('photograph'),
+    })
   })
 })

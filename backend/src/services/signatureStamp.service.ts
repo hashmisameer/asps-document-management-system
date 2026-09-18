@@ -160,14 +160,22 @@ export function toDrawParams(
   }
 }
 
-async function embedSignature(pdf: PDFDocument, image: Buffer, mimeType: string): Promise<PDFImage> {
+async function embedSignature(
+  pdf: PDFDocument,
+  image: Buffer,
+  mimeType: string,
+  role: SignerRole,
+): Promise<PDFImage> {
   try {
     return mimeType === 'image/png' ? await pdf.embedPng(image) : await pdf.embedJpg(image)
   } catch (error) {
-    // pdf-lib cannot read a progressive JPEG. That is worth saying plainly:
-    // "signature could not be embedded" would send HR looking at the document.
+    // pdf-lib cannot read a progressive JPEG. That is worth saying plainly,
+    // and about the right image: "signature could not be embedded" would send
+    // HR looking at the document, or at a signature when it is the photograph.
     throw new UnsupportedMediaTypeError(
-      'That signature image cannot be embedded in a PDF. Re-save it as a PNG and upload it again.',
+      role === SIGNER_ROLES.PHOTO
+        ? "That photograph cannot be embedded in a PDF. Replace it on the employee's record and try again."
+        : 'That signature image cannot be embedded in a PDF. Re-save it as a PNG and upload it again.',
       { cause: error },
     )
   }
@@ -242,7 +250,7 @@ export async function stampSignature(input: StampInput): Promise<Buffer> {
       )
     }
 
-    const drawable = await embedSignature(pdf, image.data, image.mimeType)
+    const drawable = await embedSignature(pdf, image.data, image.mimeType, role)
     embedded.set(role, drawable)
     return drawable
   }

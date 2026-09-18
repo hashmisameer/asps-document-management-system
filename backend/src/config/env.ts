@@ -63,6 +63,17 @@ const envSchema = z
 
     MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(200).default(25),
 
+    /**
+     * How many dates, today included, HR may use as a joining date when
+     * adding an employee. Earlier than that only an administrator can; a date
+     * in the future nobody can. The rule itself is
+     * shared/src/utils/joiningDateRule.ts, and the browser is told this
+     * number so it can warn before the server refuses.
+     *
+     * 7 means today and the six days before it.
+     */
+    JOINING_DATE_WINDOW_DAYS: z.coerce.number().int().min(1).max(366).default(7),
+
     /* The identity check: reading an uploaded document and comparing it with
        the employee's record. */
     IDENTITY_CHECK_ENABLED: booleanish.default('true'),

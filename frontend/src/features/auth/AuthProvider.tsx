@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   roleHasPermission,
-  type AuthUser,
   type ChangePasswordInput,
   type LoginInput,
   type Permission,
+  type SessionUser,
 } from '@asps-dms/shared'
 import { setUnauthenticatedHandler } from '../../lib/api.js'
 import { AUTH_QUERY_KEY, changePassword, fetchCurrentUser, login, logout } from './api.js'
@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      user: (user as AuthUser | null | undefined) ?? null,
+      user: (user as SessionUser | null | undefined) ?? null,
       isLoading: isPending,
       signIn,
       signOut,

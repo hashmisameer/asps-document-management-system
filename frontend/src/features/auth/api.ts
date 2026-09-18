@@ -1,11 +1,11 @@
-import type { AuthUser, ChangePasswordInput, LoginInput, RegisterInput } from '@asps-dms/shared'
+import type { SessionUser, ChangePasswordInput, LoginInput, RegisterInput } from '@asps-dms/shared'
 import { api } from '../../lib/api.js'
 import { ApiError } from '../../lib/apiError.js'
 
 /** The auth endpoints. The session token is never seen here: it is in the cookie. */
 
 interface SessionResponse {
-  user: AuthUser
+  user: SessionUser
   expiresAt: string
 }
 
@@ -16,9 +16,9 @@ interface SessionResponse {
  * on first load, not a failure, and treating it as one would put an error
  * screen in front of the login form.
  */
-export async function fetchCurrentUser(): Promise<AuthUser | null> {
+export async function fetchCurrentUser(): Promise<SessionUser | null> {
   try {
-    const response = await api.get<{ user: AuthUser }>('/auth/me')
+    const response = await api.get<{ user: SessionUser }>('/auth/me')
     return response.data.user
   } catch (error) {
     if (error instanceof ApiError && error.isAuthentication) return null
@@ -26,7 +26,7 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
   }
 }
 
-export async function login(input: LoginInput): Promise<AuthUser> {
+export async function login(input: LoginInput): Promise<SessionUser> {
   const response = await api.post<SessionResponse>('/auth/login', input)
   return response.data.user
 }
@@ -42,7 +42,7 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function changePassword(input: ChangePasswordInput): Promise<AuthUser> {
+export async function changePassword(input: ChangePasswordInput): Promise<SessionUser> {
   const response = await api.post<SessionResponse>('/auth/change-password', input)
   return response.data.user
 }

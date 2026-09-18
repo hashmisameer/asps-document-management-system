@@ -291,3 +291,56 @@ export async function findFirstByRole(role: Role): Promise<UserRecord | null> {
   const row = result.recordset[0]
   return row ? toRecord(row) : null
 }
+
+/**
+ * A user as `npm run user:list` shows them: no password material.
+ *
+ * `role` is the name as dbo.Roles holds it, not narrowed to Role: a listing
+ * should show an account with an unexpected role rather than refuse to print
+ * anything, which is the opposite of what a login must do.
+ */
+export interface UserListing {
+  userId: number
+  username: string
+  fullName: string
+  role: string
+  isActive: boolean
+  mustChangePassword: boolean
+  lastLoginAt: Date | null
+}
+
+/**
+ * Everyone with a login, active first, then by role and username.
+ *
+ * Joined to dbo.Roles like every other read here. The CLI used to carry its
+ * own query for this, naming a Role column dbo.Users does not have - the same
+ * mistake findFirstByRole records above, made once more in the one place that
+ * did not go through this module.
+ */
+export async function listAll(): Promise<UserListing[]> {
+  const request = await createRequest()
+  const result = await request.query<{
+    UserId: number
+    Username: string
+    FullName: string
+    RoleName: string
+    IsActive: boolean
+    MustChangePassword: boolean
+    LastLoginAt: Date | null
+  }>(`
+    SELECT  u.UserId, u.Username, u.FullName, r.RoleName, u.IsActive,
+            u.MustChangePassword, u.LastLoginAt
+    FROM    dbo.Users AS u
+    INNER JOIN dbo.Roles AS r ON r.RoleId = u.RoleId
+    ORDER BY u.IsActive DESC, r.RoleName, u.Username`)
+
+  return result.recordset.map((row) => ({
+    userId: row.UserId,
+    username: row.Username,
+    fullName: row.FullName,
+    role: row.RoleName,
+    isActive: row.IsActive,
+    mustChangePassword: row.MustChangePassword,
+    lastLoginAt: row.LastLoginAt,
+  }))
+}

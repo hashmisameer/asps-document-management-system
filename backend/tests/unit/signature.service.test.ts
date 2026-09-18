@@ -1,3 +1,4 @@
+import sharp from 'sharp'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AUDIT_ACTIONS,
@@ -541,6 +542,48 @@ describe('savePlacements', () => {
       expect(db.stampSignature).not.toHaveBeenCalled()
     })
 
+    it('makes a stored progressive JPEG baseline on the way to the stamper', async () => {
+      // A photograph uploaded before uploads were prepared: still in the store
+      // as a progressive JPEG, which pdf-lib cannot embed. It must stamp
+      // without anyone re-uploading it.
+      const progressive = await sharp({
+        create: { width: 60, height: 80, channels: 3, background: { r: 120, g: 100, b: 90 } },
+      })
+        .jpeg({ progressive: true })
+        .toBuffer()
+      db.findPhoto.mockResolvedValue({ filePath: 'photos/42/photo.jpg', mimeType: 'image/jpeg' })
+      db.readStoredFile.mockImplementation(async (path: string) =>
+        path === 'photos/42/photo.jpg' ? progressive : Buffer.from('bytes'),
+      )
+
+      await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox] }, hr, context)
+
+      const [input] = db.stampSignature.mock.calls[0] ?? []
+      const handed: Buffer = input.signatures.Photo.data
+      expect(input.signatures.Photo.mimeType).toBe('image/jpeg')
+      expect(handed.equals(progressive)).toBe(false)
+      const meta = await sharp(handed).metadata()
+      expect(meta.format).toBe('jpeg')
+      expect(meta.isProgressive).toBe(false)
+    })
+
+    it('hands a baseline JPEG to the stamper byte for byte', async () => {
+      const baseline = await sharp({
+        create: { width: 60, height: 80, channels: 3, background: { r: 120, g: 100, b: 90 } },
+      })
+        .jpeg({ progressive: false })
+        .toBuffer()
+      db.findPhoto.mockResolvedValue({ filePath: 'photos/42/photo.jpg', mimeType: 'image/jpeg' })
+      db.readStoredFile.mockImplementation(async (path: string) =>
+        path === 'photos/42/photo.jpg' ? baseline : Buffer.from('bytes'),
+      )
+
+      await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox] }, hr, context)
+
+      const [input] = db.stampSignature.mock.calls[0] ?? []
+      expect(input.signatures.Photo.data.equals(baseline)).toBe(true)
+    })
+
     it('refuses when the photograph is recorded but the file has gone', async () => {
       db.storedFileExists.mockImplementation(async (path: string) => path !== 'photos/42/photo.png')
 
@@ -709,6 +752,34 @@ describe('uploadSignature', () => {
 
     expect(db.insertAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: AUDIT_ACTIONS.SIGNATURE_REPLACED }),
+    )
+  })
+
+  it('stores a progressive JPEG as baseline rather than failing to measure it', async () => {
+    const progressive = await sharp({
+      create: { width: 300, height: 120, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .jpeg({ progressive: true })
+      .toBuffer()
+    db.storeSignature.mockResolvedValue({
+      storedFileName: 'sig.jpg',
+      relativePath: 'signatures/42/sig.jpg',
+      sizeBytes: 1,
+      sha256: Buffer.alloc(32, 3),
+    })
+
+    await signatureService.uploadSignature(
+      42,
+      { originalname: 'sig.jpg', buffer: progressive, size: progressive.byteLength },
+      hr,
+      context,
+    )
+
+    const [, stored, extension] = db.storeSignature.mock.calls[0] ?? []
+    expect(extension).toBe('.jpg')
+    expect((await sharp(stored).metadata()).isProgressive).toBe(false)
+    expect(db.replaceActiveSignature).toHaveBeenCalledWith(
+      expect.objectContaining({ mimeType: 'image/jpeg', widthPx: 300, heightPx: 120 }),
     )
   })
 

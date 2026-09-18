@@ -125,6 +125,9 @@ describe('POST /api/auth/login', () => {
       fullName: 'Priya Sharma',
       role: ROLES.HR,
       mustChangePassword: false,
+      // The server's setting, sent so the Add Employee form can apply the
+      // same window the server will.
+      joiningDateWindowDays: 7,
     })
 
     const cookie = sessionCookie(response)
@@ -258,6 +261,7 @@ describe('GET /api/auth/me', () => {
     expect(response.status).toBe(200)
     expect(response.body.user.username).toBe('hr1')
     expect(response.body.user.role).toBe(ROLES.HR)
+    expect(response.body.user.joiningDateWindowDays).toBe(7)
   })
 
   it('clears the cookie and says the session ended when it is gone', async () => {

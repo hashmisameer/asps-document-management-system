@@ -39,7 +39,7 @@ function actorOf(req: Request): AuthUser {
 export const preview: RequestHandler = async (req, res) => {
   const file = fileOf(req)
   const { dateFormat } = parseBody(req, importOptionsSchema)
-  res.json({ preview: await importRun.preview(file, dateFormat) })
+  res.json({ preview: await importRun.preview(file, dateFormat, actorOf(req)) })
 }
 
 export const commit: RequestHandler = async (req, res) => {

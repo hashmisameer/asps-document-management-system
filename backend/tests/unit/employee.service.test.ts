@@ -5,6 +5,7 @@ import {
   DOCUMENT_STATUS,
   ROLES,
   SIGNATURE_STATUS,
+  addDays,
   todayDateOnly,
   type AuthUser,
   type DocumentType,
@@ -68,6 +69,21 @@ const actor: AuthUser = {
   username: 'hr1',
   fullName: 'Priya Sharma',
   role: ROLES.HR,
+  mustChangePassword: false,
+}
+
+/**
+ * The fixtures below join on a fixed date, 2026-09-01, because the deadline
+ * arithmetic is a worked example with known answers. HR may only add people
+ * who joined within the last week, so a fixed date that is now weeks old is
+ * an administrator's to create - and the rule itself is tested further down,
+ * against dates counted back from today.
+ */
+const admin: AuthUser = {
+  userId: 1,
+  username: 'admin',
+  fullName: 'Administrator',
+  role: ROLES.ADMIN,
   mustChangePassword: false,
 }
 
@@ -202,7 +218,7 @@ describe('create', () => {
       documentType({ documentTypeId: 3, deadlineValue: null, deadlineUnit: null }),
     ])
 
-    await employeeService.create(input, actor, context)
+    await employeeService.create(input, admin, context)
 
     // Section 20's worked example: 2026-09-01 + 10 DAY -> 2026-09-11.
     expect(db.createChecklist).toHaveBeenCalledWith(
@@ -219,7 +235,7 @@ describe('create', () => {
   it('reads the document types inside the same transaction as the insert', async () => {
     db.listActiveTypes.mockResolvedValue([documentType()])
 
-    await employeeService.create(input, actor, context)
+    await employeeService.create(input, admin, context)
 
     const transaction = db.createEmployee.mock.calls[0]?.[2]
     expect(transaction).toBeDefined()
@@ -230,11 +246,11 @@ describe('create', () => {
   it('records who created the employee, with the generated code', async () => {
     db.listActiveTypes.mockResolvedValue([documentType()])
 
-    await employeeService.create(input, actor, context)
+    await employeeService.create(input, admin, context)
 
     expect(db.insertAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 3,
+        userId: admin.userId,
         action: AUDIT_ACTIONS.EMPLOYEE_CREATED,
         entityId: '42',
       }),
@@ -251,7 +267,7 @@ describe('create', () => {
     db.listActiveTypes.mockResolvedValue([])
     db.createChecklist.mockResolvedValue(0)
 
-    await expect(employeeService.create(input, actor, context)).resolves.toBeDefined()
+    await expect(employeeService.create(input, admin, context)).resolves.toBeDefined()
     expect(db.createChecklist).toHaveBeenCalledWith(42, [], expect.anything())
   })
 
@@ -259,10 +275,68 @@ describe('create', () => {
     db.listActiveTypes.mockResolvedValue([documentType()])
     db.createEmployee.mockRejectedValue(Object.assign(new Error('Violation'), { number: 2627 }))
 
-    await expect(employeeService.create(input, actor, context)).rejects.toMatchObject({
+    await expect(employeeService.create(input, admin, context)).rejects.toMatchObject({
       statusCode: 409,
     })
     expect(db.insertAudit).not.toHaveBeenCalled()
+  })
+
+  describe('who may create, by joining date', () => {
+    const today = todayDateOnly()
+    const daysAgo = (days: number) => addDays(today, -days)
+    const joinedOn = (joiningDate: string) => ({ ...input, joiningDate })
+
+    beforeEach(() => {
+      db.listActiveTypes.mockResolvedValue([documentType()])
+    })
+
+    it('lets HR add somebody who joined today', async () => {
+      await expect(employeeService.create(joinedOn(today), actor, context)).resolves.toBeDefined()
+    })
+
+    it('lets HR add somebody who joined six days ago, the edge of the window', async () => {
+      await expect(
+        employeeService.create(joinedOn(daysAgo(6)), actor, context),
+      ).resolves.toBeDefined()
+    })
+
+    it('refuses HR somebody who joined seven days ago, on the joining date field', async () => {
+      await expect(
+        employeeService.create(joinedOn(daysAgo(7)), actor, context),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        details: {
+          issues: [
+            {
+              path: 'joiningDate',
+              message:
+                'This joining date is more than 7 days old. Only an administrator can add this employee.',
+            },
+          ],
+        },
+      })
+      // Refused before anything was written or recorded.
+      expect(db.createEmployee).not.toHaveBeenCalled()
+      expect(db.insertAudit).not.toHaveBeenCalled()
+    })
+
+    it('lets an administrator add somebody who joined long ago', async () => {
+      await expect(
+        employeeService.create(joinedOn(daysAgo(400)), admin, context),
+      ).resolves.toBeDefined()
+    })
+
+    it('refuses a joining date in the future, even for an administrator', async () => {
+      await expect(
+        employeeService.create(joinedOn(addDays(today, 1)), admin, context),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        details: {
+          issues: [{ path: 'joiningDate', message: 'The joining date cannot be in the future.' }],
+        },
+      })
+      expect(db.createEmployee).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -292,6 +366,62 @@ describe('update', () => {
       employeeService.update(999, { employeeName: 'Nobody' }, actor, context),
     ).rejects.toMatchObject({ statusCode: 404 })
     expect(db.updateEmployee).not.toHaveBeenCalled()
+  })
+
+  describe('changing the joining date', () => {
+    const today = todayDateOnly()
+    const daysAgo = (days: number) => addDays(today, -days)
+
+    it('lets HR edit an old record when the joining date is sent back unchanged', async () => {
+      // The record joined on 2026-09-01 - weeks ago - and the edit form sends
+      // every field back. Correcting the department is not adding a late
+      // employee.
+      await expect(
+        employeeService.update(
+          42,
+          { joiningDate: '2026-09-01', department: 'Finance' },
+          actor,
+          context,
+        ),
+      ).resolves.toBeDefined()
+      expect(db.updateEmployee).toHaveBeenCalled()
+    })
+
+    it('lets HR move the joining date to a day within the window', async () => {
+      await expect(
+        employeeService.update(42, { joiningDate: daysAgo(3) }, actor, context),
+      ).resolves.toBeDefined()
+    })
+
+    it('refuses HR moving the joining date to a day outside the window', async () => {
+      await expect(
+        employeeService.update(42, { joiningDate: daysAgo(7) }, actor, context),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        details: { issues: [{ path: 'joiningDate' }] },
+      })
+      expect(db.updateEmployee).not.toHaveBeenCalled()
+      expect(db.insertAudit).not.toHaveBeenCalled()
+    })
+
+    it('lets an administrator set an old joining date', async () => {
+      await expect(
+        employeeService.update(42, { joiningDate: daysAgo(400) }, admin, context),
+      ).resolves.toBeDefined()
+    })
+
+    it('refuses a future joining date for everybody', async () => {
+      for (const who of [actor, admin]) {
+        await expect(
+          employeeService.update(42, { joiningDate: addDays(today, 1) }, who, context),
+        ).rejects.toMatchObject({
+          details: {
+            issues: [{ path: 'joiningDate', message: 'The joining date cannot be in the future.' }],
+          },
+        })
+      }
+      expect(db.updateEmployee).not.toHaveBeenCalled()
+    })
   })
 })
 

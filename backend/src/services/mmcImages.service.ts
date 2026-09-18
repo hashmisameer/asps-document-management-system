@@ -1,12 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
-import {
-  AUDIT_ACTIONS,
-  AUDIT_ENTITY_TYPES,
-  MAX_SIGNATURE_SIZE_BYTES,
-  type AuthUser,
-} from '@asps-dms/shared'
+import { AUDIT_ACTIONS, AUDIT_ENTITY_TYPES, type AuthUser } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeSignatureRepository from '../repositories/employeeSignature.repository.js'
@@ -15,6 +10,7 @@ import { logger } from '../utils/logger.js'
 import * as audit from './audit.service.js'
 import type { RequestContext } from './auth.service.js'
 import { inspectSignatureUpload } from './fileValidation.service.js'
+import { preparePhoto } from './imagePrep.service.js'
 import * as signatureService from './signature.service.js'
 import * as storage from './storage.service.js'
 
@@ -119,43 +115,11 @@ export async function folderReachable(dir: string): Promise<boolean> {
 /* The conversions                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** The longest side a photograph is kept at when it has to be shrunk to fit. */
-const PHOTO_MAX_PX = 1600
-
-/**
- * A photograph as the DMS can use it.
- *
- * Left byte for byte as it was when nothing is wrong with it. Re-encoded when
- * something is: a PROGRESSIVE JPEG, which pdf-lib cannot embed and so could
- * never be stamped or printed; an EXIF rotation, which pdf-lib does not read
- * and would draw sideways; or a file over the upload limit, which is shrunk
- * to fit rather than left behind. A re-encode is baseline, the right way up,
- * and under the limit.
+/*
+ * A photograph is prepared by imagePrep.service's preparePhoto - the same
+ * function the hand-upload path and the stamper use, so a JPEG MMC wrote and
+ * a JPEG HR uploaded end up in the store in the same form.
  */
-export async function prepareMmcPhoto(
-  source: Buffer,
-): Promise<{ buffer: Buffer; progressive: boolean; converted: boolean }> {
-  const meta = await sharp(source, { failOn: 'error' }).metadata()
-  const progressive = meta.isProgressive === true
-  const rotated = (meta.orientation ?? 1) !== 1
-  const tooLarge = source.byteLength > MAX_SIGNATURE_SIZE_BYTES
-
-  if (!progressive && !rotated && !tooLarge) {
-    return { buffer: source, progressive, converted: false }
-  }
-
-  let pipeline = sharp(source, { failOn: 'error' }).rotate()
-  if (tooLarge) {
-    pipeline = pipeline.resize({
-      width: PHOTO_MAX_PX,
-      height: PHOTO_MAX_PX,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-  }
-  const buffer = await pipeline.jpeg({ progressive: false, quality: tooLarge ? 85 : 90 }).toBuffer()
-  return { buffer, progressive, converted: true }
-}
 
 /** Above this brightness a pixel is paper, not ink. */
 const PAPER = 235
@@ -264,7 +228,7 @@ async function attachOne(
 
   let prepared: { buffer: Buffer; progressive: boolean }
   try {
-    prepared = kind === 'photo' ? await prepareMmcPhoto(source) : await prepareMmcSignature(source)
+    prepared = kind === 'photo' ? await preparePhoto(source) : await prepareMmcSignature(source)
   } catch (error) {
     result.detail = { ...result.detail, [kind]: describeError(error) }
     return 'unreadable'

@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { addDays, todayDateOnly } from '@asps-dms/shared'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 import * as reminderRepository from '../../src/repositories/reminder.repository.js'
 import { buildDigest } from '../../src/services/reminderDigest.service.js'
@@ -26,6 +27,10 @@ async function pdfFor(name: string, code: string): Promise<Buffer> {
 
 let codeSeq = 0
 
+// Three days ago, not a fixed date: HR may only add somebody who joined
+// within the last week, and a date written here would fall out of that week.
+const JOINED = addDays(todayDateOnly(), -3)
+
 describe('the pending-documents reminder', () => {
   beforeAll(async () => {
     await ensureSchema()
@@ -44,7 +49,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: JOINED })
     const employee = created.body.employee
 
     const before = await reminderRepository.findPendingDocuments()
@@ -82,7 +87,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Departed Person', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Departed Person', joiningDate: JOINED })
     const employeeId = created.body.employee.employeeId
 
     expect(
@@ -105,7 +110,7 @@ describe('the pending-documents reminder', () => {
 
     const created = await agent
       .post('/api/employees')
-      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: '2026-04-01' })
+      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: JOINED })
     const employee = created.body.employee
 
     const rows = await reminderRepository.findPendingDocuments()
