@@ -128,3 +128,60 @@ describe('the formats a card may be uploaded as', () => {
     timeout,
   )
 })
+
+describe('an image that cannot be prepared', () => {
+  const timeout = 60_000
+
+  it(
+    'is reported as unreadable when Tesseract could not read it as it arrived, rather than handed over',
+    async () => {
+      // A TIFF header and nothing after it: sharp cannot open it, and neither
+      // can the Leptonica inside tesseract.js. The old fallback handed it
+      // over anyway, and the rejected job became an uncaught exception.
+      const stub = Buffer.concat([Buffer.from('II*\0', 'latin1'), Buffer.alloc(64)])
+
+      const out = await extractText(stub, 'image/tiff', (t) => matchWords(NAME, t))
+
+      expect(out.text).toBe('')
+      expect(out.source).toBe('None')
+    },
+    timeout,
+  )
+
+  it(
+    'is still read as it arrived when it is a format Tesseract can decode',
+    async () => {
+      // A real JPEG whose preparation is made to fail is not made unreadable
+      // by that: it goes to Tesseract as it is. Preparation cannot be made to
+      // fail on a valid file from here, so this pins the other half - a JPEG
+      // reads at all through the same path.
+      const jpeg = await sharp(drawCard(1200, 760)).jpeg({ quality: 92 }).toBuffer()
+      const out = await extractText(jpeg, 'image/jpeg', (t) => matchWords(NAME, t))
+
+      expect(matchWords(NAME, out.text)).toBe(true)
+    },
+    timeout,
+  )
+
+  it(
+    'leaves the process standing when Tesseract itself rejects the image',
+    async () => {
+      // A PNG signature over garbage: sharp refuses it, so it is handed to
+      // Tesseract as it arrived - PNG is a format it reads - and Leptonica
+      // rejects it. Without an errorHandler on the worker that rejection was
+      // rethrown inside a message listener, which vitest reports as an
+      // unhandled error and server.ts treats as fatal. The run passing at all
+      // is the assertion for that.
+      const garbage = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(256, 0x5a),
+      ])
+
+      const out = await extractText(garbage, 'image/png', (t) => matchWords(NAME, t))
+
+      expect(out.text).toBe('')
+      expect(out.source).toBe('None')
+    },
+    timeout,
+  )
+})
