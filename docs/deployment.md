@@ -263,12 +263,21 @@ A4-shaped. Before drawing any:
 ```
 npm run stamp-check -- --shapes                 # every type
 npm run stamp-check -- --shapes --type PF_FORM  # one type
+npm run stamp-check -- --list                   # the templates saved, and what they cover
 ```
 
-prints each type's shapes with how many documents are each, the sizes seen,
-and whether a template is saved for it - and how many templates would cover
-everything. The template editor shows the same for the sample on screen, and
-warns when the sample is a shape only a few documents have.
+`--shapes` prints each type's shapes with how many documents are each, the
+sizes seen, and whether a template is saved for it - and how many templates
+would cover everything. `--list` is the Templates screen on the console: for
+every type, the templates saved (shape, boxes, who set it and when, how many
+documents it covers) and the shapes still without one, ending with how many
+documents that leaves uncovered. Both name no employee.
+
+The template editor shows the same for the type on screen: a summary line
+("3 shapes: 2 with a template, 1 without. Templates cover 118 of 121 stored
+Appointment Letters (98%)."), a shape filter on the sample list that opens on
+the largest shape with no template and moves on to the next after a save,
+and a warning when the sample is a shape only a few documents have.
 
 **The backlog.** Every document uploaded before this existed is still marked
 "Detecting" - nothing ever moved it on. Once, after migrating:

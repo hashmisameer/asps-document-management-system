@@ -24,6 +24,13 @@ import { PlacementBox, type RenderedSize } from '../signatures/PlacementEditorPa
 import { newPlacement, type DraftPlacement } from '../signatures/placementModel.js'
 import { fetchShapes, fetchTemplate, saveTemplate, templateKeys } from './api.js'
 import { describeShape, sampleIsCovered } from './shapeText.js'
+import {
+  ALL_SHAPES,
+  defaultShapeKey,
+  filterSamples,
+  shapeOptions,
+  shapesSummary,
+} from './sampleFilter.js'
 
 /**
  * Drawing a document type's template on a real document of that type.
@@ -80,17 +87,14 @@ export function TemplateEditorPage() {
   const type = types.data?.find((t) => t.documentTypeId === documentTypeId)
 
   // The documents this template could be drawn on: received ones of the
-  // type. Ten is plenty; the point is one real page of each form, not a choice.
-  const sampleParams = { documentTypeId, state: 'received' as const, pageSize: 10 }
+  // type. A hundred, so a shape only a few documents have still has a sample
+  // in the list once it is filtered down to that shape.
+  const sampleParams = { documentTypeId, state: 'received' as const, pageSize: 100 }
   const samples = useQuery({
     queryKey: documentListKeys.list(sampleParams),
     queryFn: () => listDocuments(sampleParams),
     enabled: Number.isFinite(documentTypeId),
   })
-
-  const sampleParam = Number(search.get('sample'))
-  const sampleId =
-    Number.isFinite(sampleParam) && sampleParam > 0 ? sampleParam : samples.data?.items[0]?.documentId ?? null
 
   const existing = useQuery({
     queryKey: templateKeys.forType(documentTypeId),
@@ -107,6 +111,27 @@ export function TemplateEditorPage() {
     enabled: Number.isFinite(documentTypeId),
     staleTime: 5 * 60 * 1000,
   })
+
+  // Which shape's samples are listed. Chosen in the URL, so it survives a
+  // reload; when nobody has chosen, the largest shape with no template - the
+  // most documents waiting. NOT remembered across a save: the shape just
+  // saved now has a template, and the filter moving on to the next one that
+  // has none is the point. Staying put was what made a finished shape look
+  // like the next job.
+  const shapeParam = search.get('shape')
+  const shapeKey = shapeParam ?? defaultShapeKey(shapes.data)
+  const shapeFilterOptions = shapeOptions(shapes.data)
+  const filteredSamples = filterSamples(samples.data?.items ?? [], shapes.data, shapeKey)
+
+  // The sample on screen: the one chosen, if it is in the filtered list, else
+  // the first of that list. A sample outside the chosen shape is not offered.
+  const sampleParam = Number(search.get('sample'))
+  const chosenSample =
+    Number.isFinite(sampleParam) && sampleParam > 0 ? sampleParam : null
+  const sampleId =
+    chosenSample !== null && filteredSamples.some((item) => item.documentId === chosenSample)
+      ? chosenSample
+      : (filteredSamples[0]?.documentId ?? null)
 
   // Which form the sample is, once pdf.js has told us how many pages it has
   // and how big the first one is.
@@ -178,6 +203,11 @@ export function TemplateEditorPage() {
           return next
         })
       }
+      // The shape just saved is done. Forget the chosen shape and sample so
+      // the filter falls back to the next shape without a template once the
+      // measurements come back - which they do now, because the templates
+      // are part of what the shapes answer says.
+      setSearch({})
       await queryClient.invalidateQueries({ queryKey: templateKeys.all })
     },
     onError: (error: unknown) => {
@@ -200,8 +230,20 @@ export function TemplateEditorPage() {
     if (selected === boxKey) setSelected(null)
   }
 
+  const chooseShape = (nextKey: string) => {
+    // A new shape means a new sample: the first in that shape.
+    setSearch({ shape: nextKey })
+    setPageNumber(1)
+    setPageCount(0)
+    setFirstPage(null)
+    setCurrentPage(null)
+    setRendered(null)
+    setSelected(null)
+    setSavedVariant(null)
+  }
+
   const chooseSample = (documentId: string) => {
-    setSearch({ sample: documentId })
+    setSearch(shapeKey ? { shape: shapeKey, sample: documentId } : { sample: documentId })
     setPageNumber(1)
     setPageCount(0)
     setFirstPage(null)
@@ -218,6 +260,7 @@ export function TemplateEditorPage() {
   const willReplace = key !== null && savedVariants.has(key)
   const hasDraft = key !== null && drafts.has(key)
   const shape = variant ? describeShape(variant, shapes.data, type?.documentName ?? 'document') : null
+  const summary = shapesSummary(shapes.data, type?.documentName ?? 'document')
 
   return (
     <main>
@@ -334,15 +377,35 @@ export function TemplateEditorPage() {
         </div>
       ) : null}
 
-      <section className="mt-4 flex flex-wrap items-end gap-4">
+      {/* How the type stands: shapes, which have a template, and how much of
+          the type the templates reach. The line an administrator reads to
+          know whether they are finished. */}
+      {summary ? <p className="mt-4 text-sm text-slate-700">{summary}</p> : null}
+
+      <section className="mt-2 flex flex-wrap items-end gap-4">
+        {shapeFilterOptions.length > 0 ? (
+          <div className="min-w-72">
+            <Select
+              label="Shape"
+              value={shapeKey ?? ALL_SHAPES}
+              options={shapeFilterOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
+              onChange={(event) => chooseShape(event.target.value)}
+            />
+          </div>
+        ) : null}
+
         <div className="min-w-72">
           <Select
             label="Sample document"
             value={sampleId ? String(sampleId) : ''}
-            options={(samples.data?.items ?? []).map((item) => {
-              // Which samples the template drawn on THIS sample would cover:
-              // the ones that are the same shape. Unknown until measured.
-              const covered = sampleIsCovered(shapes.data, variant, item.documentId)
+            options={filteredSamples.map((item) => {
+              // Within one shape every sample is that shape; across all of
+              // them, say which ones a template drawn on THIS sample covers.
+              const covered =
+                shapeKey === ALL_SHAPES ? sampleIsCovered(shapes.data, variant, item.documentId) : null
               const mark = covered === null ? '' : covered ? ' - same shape' : ' - different shape'
               return {
                 value: String(item.documentId),
@@ -351,6 +414,11 @@ export function TemplateEditorPage() {
             })}
             onChange={(event) => chooseSample(event.target.value)}
           />
+          {shapes.data && filteredSamples.length === 0 && (samples.data?.items.length ?? 0) > 0 ? (
+            <p className="mt-1 text-xs text-slate-500">
+              None of the first {samples.data?.items.length} received documents is this shape.
+            </p>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2 text-sm text-slate-600">

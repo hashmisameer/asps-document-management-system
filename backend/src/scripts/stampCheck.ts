@@ -6,6 +6,7 @@
  *   npm run stamp-check -- --document 1234
  *   npm run stamp-check -- --limit 50 --cutoffs 128,160,200
  *   npm run stamp-check -- --shapes
+ *   npm run stamp-check -- --list
  *
  * For every document whose type has a template, the template's boxes are
  * assessed against the ORIGINAL file exactly as a save would assess them, and
@@ -26,8 +27,15 @@
  * That is how many templates a type needs, and it is what the editor shows
  * beside a sample.
  *
+ * --list is the Templates screen on the console: for every type, the
+ * templates saved - shape, boxes, who set it and when - and, against the
+ * shapes the documents actually come in, which shapes have no template and
+ * how many documents that leaves uncovered. For checking from the server
+ * without opening the app. Read-only.
+ *
  * Flags:
  *   --shapes             the shapes of every type's documents, and nothing else
+ *   --list               the templates saved, and what they cover
  *   --type <code>        one document type, by its code
  *   --document <id>      one document
  *   --limit <n>          stop after n documents (default 500)
@@ -46,6 +54,7 @@ import {
   type StampCheckResult,
 } from '../services/stampCheck.service.js'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
+import { sameShape, shapeOf, variantLabel } from '@asps-dms/shared'
 import { shapesForType } from '../services/templateShapes.service.js'
 import { describeError } from '../utils/errors.js'
 
@@ -100,11 +109,75 @@ async function printShapes(documentCode: string | undefined): Promise<void> {
 ${templatesNeeded} template(s) would cover every shape seen, across ${types.length} type(s).`)
 }
 
+function when(iso: string | null): string {
+  if (!iso) return ''
+  const at = new Date(iso)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${pad(at.getDate())}/${pad(at.getMonth() + 1)}/${at.getFullYear()}`
+}
+
+/**
+ * Every type's saved templates and what they cover. No employee is named -
+ * the summary carries the sample's employee code for the screen, and it is
+ * left out here on purpose.
+ */
+async function printList(documentCode: string | undefined): Promise<void> {
+  const summaries = (await documentTypePlacementRepository.summaries()).filter(
+    (summary) => documentCode === undefined || summary.documentCode === documentCode,
+  )
+  let uncoveredDocuments = 0
+  let uncoveredShapes = 0
+
+  for (const summary of summaries) {
+    const shapes = await shapesForType(summary.documentTypeId)
+    const templates = summary.variants
+    console.log(
+      `${summary.documentName}: ${templates.length} template(s), ` +
+        `${shapes.measured} PDF(s) in ${shapes.groups.length} shape(s)`,
+    )
+
+    for (const template of templates) {
+      const roles = Object.entries(template.roles)
+        .map(([role, count]) => (count === 1 ? role : `${role} x${count}`))
+        .join(', ')
+      const group = shapes.groups.find((g) =>
+        sameShape(shapeOf(g.variant), shapeOf(template.variant)),
+      )
+      const covers = group
+        ? `covers ${group.documents} doc(s), ${group.percent}%`
+        : 'covers NO stored document'
+      console.log(
+        `    ${variantLabel(template.variant).padEnd(24)} ${template.boxes} box(es): ${roles}` +
+          (template.pageRotation ? `, rotated ${template.pageRotation}` : '') +
+          `  set by ${template.setByName ?? 'unknown'} ${when(template.setAt)}  ${covers}`,
+      )
+    }
+
+    for (const group of shapes.groups.filter((g) => !g.hasTemplate)) {
+      uncoveredShapes += 1
+      uncoveredDocuments += group.documents
+      console.log(
+        `    ${group.label.padEnd(24)} NO TEMPLATE  ${group.documents} doc(s), ${group.percent}%` +
+          `  sizes: ${group.sizes.slice(0, 4).join(', ')}${group.sizes.length > 4 ? ' ...' : ''}`,
+      )
+    }
+  }
+
+  console.log(
+    `
+${uncoveredShapes} shape(s) without a template, ${uncoveredDocuments} document(s) not covered.`,
+  )
+}
+
 async function main(): Promise<void> {
   const flags = readFlags(process.argv.slice(2))
   const documentCode = flags.get('type')
   if (flags.has('shapes')) {
     await printShapes(documentCode)
+    return
+  }
+  if (flags.has('list')) {
+    await printList(documentCode)
     return
   }
   const documentId = flags.has('document') ? Number(flags.get('document')) : undefined
