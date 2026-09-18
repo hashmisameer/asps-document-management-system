@@ -129,6 +129,37 @@ so the endpoint cannot be used to find out which usernames exist.
 
 There is **no DELETE**. Archiving is the only removal.
 
+### Who may add whom, by joining date
+
+The joining date decides whether the caller may create the record at all. The
+same rule applies to `POST /employees`, to the bulk import, and to a `PATCH`
+that *changes* the joining date (sending it back unchanged is never judged):
+
+| Joining date | HR | Admin |
+|---|---|---|
+| Today, or one of the `JOINING_DATE_WINDOW_DAYS - 1` days before it | allowed | allowed |
+| Earlier than that | **refused** | allowed |
+| In the future | **refused** | **refused** |
+
+`JOINING_DATE_WINDOW_DAYS` is a server setting, default 7 - today and the six
+days before it. On 18 September HR may use 12-18 September; 11 September is
+refused. "Today" is the server's own date, the same one the deadlines use.
+
+A refusal is a `400 VALIDATION_FAILED` with one issue on the `joiningDate`
+field, so the form can show it under the date:
+
+```jsonc
+{ "path": "joiningDate",
+  "message": "This joining date is more than 7 days old. Only an administrator can add this employee." }
+
+{ "path": "joiningDate", "message": "The joining date cannot be in the future." }
+```
+
+In the bulk import a row that breaks the rule is listed under "cannot be
+created" with the same sentence, and the other rows still import. The
+signed-in user's `joiningDateWindowDays` is included on `GET /auth/me` and the
+login response, so a form can warn before the server refuses.
+
 ---
 
 ## Document types

@@ -1,11 +1,13 @@
-import type {
-  AuthUser,
-  EmployeeImportPreview,
-  EmployeeImportRefusal,
-  EmployeeImportResult,
-  EmployeeImportRow,
-  ImportDateFormat,
+import {
+  todayDateOnly,
+  type AuthUser,
+  type EmployeeImportPreview,
+  type EmployeeImportRefusal,
+  type EmployeeImportResult,
+  type EmployeeImportRow,
+  type ImportDateFormat,
 } from '@asps-dms/shared'
+import { env } from '../config/env.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import { BadRequestError, describeError } from '../utils/errors.js'
 import { readXlsx } from '../utils/xlsx.js'
@@ -83,10 +85,11 @@ function toRow(plan: RowPlan, outcome: EmployeeImportRow['outcome']): EmployeeIm
 export async function preview(
   file: { originalname: string; buffer: Buffer },
   dateFormat: ImportDateFormat,
+  actor: AuthUser,
 ): Promise<EmployeeImportPreview> {
   const { header, rows } = readUpload(file)
   const existingCodes = await employeeRepository.allEmployeeCodes()
-  const plan = planImport(rows, existingCodes, { format: dateFormat })
+  const plan = planImport(rows, existingCodes, importOptions(dateFormat, actor))
 
   const first = rows[0]
   const firstDate = first
@@ -112,6 +115,20 @@ export async function preview(
 }
 
 /**
+ * The plan is judged for THIS person on THIS day: the joining-date rule
+ * depends on both, and the preview must refuse exactly the rows the commit
+ * would. Today is the server's, the same one the deadlines use.
+ */
+function importOptions(dateFormat: ImportDateFormat, actor: AuthUser) {
+  return {
+    format: dateFormat,
+    role: actor.role,
+    today: todayDateOnly(),
+    windowDays: env.JOINING_DATE_WINDOW_DAYS,
+  }
+}
+
+/**
  * Creates the rows the plan says to create, one at a time, and skips the rest.
  *
  * ROW BY ROW, NOT ONE TRANSACTION. Each employee and their checklist are one
@@ -132,7 +149,7 @@ export async function commit(
 ): Promise<EmployeeImportResult> {
   const { rows } = readUpload(file)
   const existingCodes = await employeeRepository.allEmployeeCodes()
-  const plan = planImport(rows, existingCodes, { format: dateFormat })
+  const plan = planImport(rows, existingCodes, importOptions(dateFormat, actor))
 
   let created = 0
   const refused: EmployeeImportRefusal[] = []

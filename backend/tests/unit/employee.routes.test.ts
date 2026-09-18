@@ -1,6 +1,13 @@
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { API_ERROR_CODES, MAX_FORMS_PER_PRINT, ROLES, type Role } from '@asps-dms/shared'
+import {
+  API_ERROR_CODES,
+  MAX_FORMS_PER_PRINT,
+  ROLES,
+  addDays,
+  todayDateOnly,
+  type Role,
+} from '@asps-dms/shared'
 
 /**
  * The employee routes, over HTTP with the database mocked.
@@ -141,7 +148,9 @@ beforeEach(() => {
 const completeEmployee = {
   employeeCode: 'EMP001',
   employeeName: 'Ravi Kumar',
-  joiningDate: '2026-09-01',
+  // Today, not a fixed date: HR may only add somebody who joined within the
+  // last week, and a date written here would fall out of that week.
+  joiningDate: todayDateOnly(),
   department: 'Accounts',
   designation: 'Officer',
   address: 'C-145, Sector 63, Noida',
@@ -212,6 +221,64 @@ describe('permissions', () => {
   })
 })
 
+describe('who may create, by joining date', () => {
+  // The rule itself is tested in joiningDateRule.test.ts and the service in
+  // employee.service.test.ts. This is the boundary: the refusal arrives as a
+  // validation issue on the field, so the form shows it under the date.
+  const weekAgo = addDays(todayDateOnly(), -7)
+
+  it('refuses HR a joining date outside the window, on the joiningDate field', async () => {
+    const response = await request(app)
+      .post('/api/employees')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ ...completeEmployee, joiningDate: weekAgo })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe(API_ERROR_CODES.VALIDATION_FAILED)
+    expect(response.body.error.details.issues).toEqual([
+      {
+        path: 'joiningDate',
+        message:
+          'This joining date is more than 7 days old. Only an administrator can add this employee.',
+      },
+    ])
+    expect(db.createEmployee).not.toHaveBeenCalled()
+  })
+
+  it('lets an administrator use the same date', async () => {
+    const response = await request(app)
+      .post('/api/employees')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send({ ...completeEmployee, joiningDate: weekAgo })
+
+    expect(response.status).toBe(201)
+  })
+
+  it('refuses a future joining date for an administrator, with its own message', async () => {
+    const response = await request(app)
+      .post('/api/employees')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send({ ...completeEmployee, joiningDate: addDays(todayDateOnly(), 1) })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.details.issues).toEqual([
+      { path: 'joiningDate', message: 'The joining date cannot be in the future.' },
+    ])
+    expect(db.createEmployee).not.toHaveBeenCalled()
+  })
+
+  it('applies the same rule when an edit changes the joining date', async () => {
+    const response = await request(app)
+      .patch('/api/employees/42')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ joiningDate: weekAgo })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.details.issues[0].path).toBe('joiningDate')
+    expect(db.updateEmployee).not.toHaveBeenCalled()
+  })
+})
+
 describe('validation', () => {
   it('rejects a missing joining date with field-level issues', async () => {
     const response = await request(app)
@@ -252,7 +319,7 @@ describe('validation', () => {
     const response = await request(app)
       .post('/api/employees')
       .set('Cookie', signedInAs(ROLES.HR))
-      .send({ employeeName: 'Ravi Kumar', joiningDate: '2026-09-01' })
+      .send({ employeeName: 'Ravi Kumar', joiningDate: todayDateOnly() })
 
     expect(response.status).toBe(400)
     expect(db.createEmployee).not.toHaveBeenCalled()

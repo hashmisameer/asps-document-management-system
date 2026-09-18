@@ -1,5 +1,10 @@
 import path from 'node:path'
-import { createEmployeeSchema, type CreateEmployeeInput } from '@asps-dms/shared'
+import {
+  createEmployeeSchema,
+  judgeJoiningDate,
+  type CreateEmployeeInput,
+  type Role,
+} from '@asps-dms/shared'
 import { readXlsx } from '../utils/xlsx.js'
 
 /**
@@ -484,10 +489,24 @@ export function planRow(row: ParsedRow, format: DateFormat): RowPlan {
  * running the import twice has to be safe. A code that appears twice in the
  * FILE is caught as well - the second one is not a new employee.
  */
+export interface ImportOptions {
+  format: DateFormat
+  strict?: boolean
+  /**
+   * Who is importing, and what day it is. The joining-date rule - HR may
+   * only add people who joined within the window, nobody may add a person
+   * who has not joined yet - is judged per row here, so the preview can say
+   * which rows it refuses and the rest still go in. See judgeJoiningDate.
+   */
+  role: Role
+  today: string
+  windowDays: number
+}
+
 export function planImport(
   rows: readonly ParsedRow[],
   existingCodes: ReadonlySet<string>,
-  options: { format: DateFormat; strict?: boolean },
+  options: ImportOptions,
 ): ImportPlan {
   const seen = new Set<string>()
   const planned: RowPlan[] = []
@@ -499,6 +518,23 @@ export function planImport(
       plan.errors.push(...plan.warnings.map((warning) => `--strict: ${warning}`))
       plan.warnings.length = 0
       delete plan.input
+    }
+
+    // A row that reads perfectly well may still be one this person may not
+    // add. Refused here, per row, with the sentence the form would show, so
+    // it reaches the rejected-rows file; the server's create() judges it
+    // again, in case a row got past the preview.
+    if (plan.input) {
+      const judgement = judgeJoiningDate({
+        joiningDate: plan.input.joiningDate,
+        role: options.role,
+        today: options.today,
+        windowDays: options.windowDays,
+      })
+      if (!judgement.allowed) {
+        plan.errors.push(`joining_date: ${judgement.message}`)
+        delete plan.input
+      }
     }
 
     if (plan.errors.length === 0) {

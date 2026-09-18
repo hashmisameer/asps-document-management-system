@@ -1,6 +1,6 @@
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ROLES, toXlsx, type Role } from '@asps-dms/shared'
+import { ROLES, addDays, todayDateOnly, toXlsx, type Role } from '@asps-dms/shared'
 
 /**
  * Importing employees from the screen, over HTTP with the database mocked.
@@ -106,7 +106,13 @@ function sheet(rows: readonly (readonly string[])[]): Buffer {
   )
 }
 
-/** Thirty-ish rows worth of trouble in five: two good, one padded, one bad date, one duplicate. */
+/**
+ * Thirty-ish rows worth of trouble in five: two good, one padded, one bad date, one duplicate.
+ *
+ * The dates are fixed, and fixed dates age: the file is a piece of history, so
+ * the mechanics below are exercised as an ADMINISTRATOR, who may import any
+ * joining date that has arrived. What HR is refused is tested on its own.
+ */
 const FILE = sheet([
   ['00005696', 'Ravi Kumar Gaur', '07/09/2026', 'Cutting'],
   ['5697', 'Anita Devi', '07/09/2026', ''],
@@ -150,7 +156,7 @@ describe('previewing an import', () => {
   it('judges every row and writes nothing', async () => {
     const response = await request(app)
       .post(PREVIEW_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .field('dateFormat', 'dmy')
       .attach('file', FILE, 'staff.xlsx')
 
@@ -166,7 +172,11 @@ describe('previewing an import', () => {
 
     const byLine = Object.fromEntries(preview.rows.map((row: { line: number }) => [row.line, row]))
     expect(byLine[2]).toMatchObject({ outcome: 'create', employeeCode: '00005696' })
-    expect(byLine[3]).toMatchObject({ outcome: 'create', employeeCode: '00005697', paddedFrom: '5697' })
+    expect(byLine[3]).toMatchObject({
+      outcome: 'create',
+      employeeCode: '00005697',
+      paddedFrom: '5697',
+    })
     expect(byLine[4]).toMatchObject({ outcome: 'fail' })
     expect(byLine[4].errors.join(' ')).toContain('not a date')
     expect(byLine[5]).toMatchObject({ outcome: 'skip', duplicate: 'in the database' })
@@ -182,7 +192,7 @@ describe('previewing an import', () => {
   it('reads the date the other way round when asked, and says what it read', async () => {
     const response = await request(app)
       .post(PREVIEW_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .field('dateFormat', 'mdy')
       .attach('file', FILE, 'staff.xlsx')
 
@@ -194,7 +204,7 @@ describe('previewing an import', () => {
   it('defaults to day/month/year, as the Add Employee form asks', async () => {
     const response = await request(app)
       .post(PREVIEW_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .attach('file', FILE, 'staff.xlsx')
 
     expect(response.body.preview.dateFormat).toBe('dmy')
@@ -209,6 +219,51 @@ describe('previewing an import', () => {
 
     expect(response.status).toBe(400)
     expect(response.body.error.message).toContain('.xlsx')
+  })
+
+  it('refuses HR the rows that joined too long ago, with the reason, and keeps the rest', async () => {
+    // Today, and the day the office's window closes.
+    const recent = todayDateOnly()
+    const tooOld = addDays(recent, -7)
+    const asCell = (iso: string) => iso.split('-').reverse().join('/')
+
+    const file = sheet([
+      ['00007001', 'Joined Today', asCell(recent), ''],
+      ['00007002', 'Joined Last Week', asCell(tooOld), ''],
+    ])
+
+    const response = await request(app)
+      .post(PREVIEW_URL)
+      .set('Cookie', signedInAs(ROLES.HR))
+      .field('dateFormat', 'dmy')
+      .attach('file', file, 'staff.xlsx')
+
+    expect(response.status).toBe(200)
+    expect(response.body.preview.totals).toMatchObject({ read: 2, create: 1, fail: 1 })
+
+    const late = response.body.preview.rows.find(
+      (row: { employeeCode: string }) => row.employeeCode === '00007002',
+    )
+    expect(late.outcome).toBe('fail')
+    expect(late.errors).toEqual([
+      'joining_date: This joining date is more than 7 days old. Only an administrator can add this employee.',
+    ])
+    // The cells travel with the refusal, so the rejected download carries the row.
+    expect(late.cells).toEqual(['00007002', 'Joined Last Week', asCell(tooOld)])
+
+    // The same file, committed by HR: one created, the late one in the rejected list.
+    const committed = await request(app)
+      .post(COMMIT_URL)
+      .set('Cookie', signedInAs(ROLES.HR))
+      .field('dateFormat', 'dmy')
+      .attach('file', file, 'staff.xlsx')
+
+    expect(committed.status).toBe(201)
+    expect(committed.body.result).toMatchObject({ created: 1, skipped: 0, refused: [] })
+    expect(
+      committed.body.result.failed.map((row: { employeeCode: string }) => row.employeeCode),
+    ).toEqual(['00007002'])
+    expect(db.createEmployee).toHaveBeenCalledTimes(1)
   })
 
   it('refuses a Viewer, who cannot create an employee either', async () => {
@@ -226,7 +281,7 @@ describe('committing an import', () => {
   it('creates the valid rows, skips the rest, and reports each bucket', async () => {
     const response = await request(app)
       .post(COMMIT_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .field('dateFormat', 'dmy')
       .attach('file', FILE, 'staff.xlsx')
 
@@ -254,7 +309,7 @@ describe('committing an import', () => {
 
     const response = await request(app)
       .post(COMMIT_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .attach('file', FILE, 'staff.xlsx')
 
     expect(response.status).toBe(201)
@@ -274,7 +329,7 @@ describe('committing an import', () => {
 
     const response = await request(app)
       .post(COMMIT_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+      .set('Cookie', signedInAs(ROLES.ADMIN))
       .attach('file', FILE, 'staff.xlsx')
 
     expect(response.status).toBe(201)
@@ -293,9 +348,7 @@ describe('committing an import', () => {
   })
 
   it('reads /employees/import as a route, not as an employee id', async () => {
-    const response = await request(app)
-      .post(COMMIT_URL)
-      .set('Cookie', signedInAs(ROLES.HR))
+    const response = await request(app).post(COMMIT_URL).set('Cookie', signedInAs(ROLES.HR))
 
     // No file attached: the import's own complaint, not a 404 for employee 'import'.
     expect(response.status).toBe(400)

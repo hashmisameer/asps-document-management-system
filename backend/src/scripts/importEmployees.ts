@@ -14,7 +14,11 @@
  *   --date-format mdy   how to read '4/11/2022'. mdy (default) or dmy
  *   --strict            treat a dropped optional detail as a failed row
  *   --as <username>     whose name the records are created in. Defaults to the
- *                       first active administrator
+ *                       first active administrator. Also decides which joining
+ *                       dates are allowed: HR may only add people who joined
+ *                       within JOINING_DATE_WINDOW_DAYS, and nobody may add a
+ *                       joining date that has not arrived - see
+ *                       shared/src/utils/joiningDateRule.ts
  *   --limit <n>         stop after n rows, for a cautious first run
  *
  * Reads .xlsx and .csv. The .xlsx reader is ours - see utils/xlsx.ts - because
@@ -28,7 +32,8 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { ROLES, type AuthUser } from '@asps-dms/shared'
+import { ROLES, todayDateOnly, type AuthUser } from '@asps-dms/shared'
+import { env } from '../config/env.js'
 import { closePool } from '../database/pool.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as userRepository from '../repositories/user.repository.js'
@@ -121,8 +126,18 @@ async function main(): Promise<void> {
   }
   if (rows.length === 0) throw new Error('The file has a header and no rows.')
 
+  // Resolved before the plan, dry run included: which rows are allowed
+  // depends on who is importing them.
+  const actor = await resolveActor(flags.get('as'))
+
   const existingCodes = await employeeRepository.allEmployeeCodes()
-  const plan = planImport(rows.slice(0, limit), existingCodes, { format, strict })
+  const plan = planImport(rows.slice(0, limit), existingCodes, {
+    format,
+    strict,
+    role: actor.role,
+    today: todayDateOnly(),
+    windowDays: env.JOINING_DATE_WINDOW_DAYS,
+  })
 
   console.log(`\n${path.basename(file)} - ${rows.length} row(s)`)
   console.log(
@@ -152,7 +167,6 @@ async function main(): Promise<void> {
     return
   }
 
-  const actor = await resolveActor(flags.get('as'))
   console.log(`Importing as ${actor.username} (${actor.fullName})...\n`)
 
   let imported = 0

@@ -1,5 +1,11 @@
 import type { RequestHandler, Response } from 'express'
-import { changePasswordSchema, loginSchema } from '@asps-dms/shared'
+import {
+  changePasswordSchema,
+  loginSchema,
+  type AuthUser,
+  type SessionUser,
+} from '@asps-dms/shared'
+import { env } from '../config/env.js'
 import * as authService from '../services/auth.service.js'
 import { requestContext } from '../services/audit.service.js'
 import { clearSessionCookie, setSessionCookie } from '../utils/cookies.js'
@@ -21,7 +27,17 @@ import { parseBody } from '../utils/validation.js'
  */
 function respondWithSession(res: Response, result: authService.LoginResult): void {
   setSessionCookie(res, result.token, result.expiresAt)
-  res.json({ user: result.user, expiresAt: result.expiresAt.toISOString() })
+  res.json({ user: sessionUser(result.user), expiresAt: result.expiresAt.toISOString() })
+}
+
+/**
+ * The account plus the settings the browser applies on its own screens.
+ *
+ * Added at the edge rather than to AuthUser itself: the actor the services
+ * pass around and audit is the person, and a setting is not part of them.
+ */
+function sessionUser(user: AuthUser): SessionUser {
+  return { ...user, joiningDateWindowDays: env.JOINING_DATE_WINDOW_DAYS }
 }
 
 export const login: RequestHandler = async (req, res) => {
@@ -46,7 +62,7 @@ export const logout: RequestHandler = async (req, res) => {
 
 export const me: RequestHandler = (req, res) => {
   if (!req.user) throw new UnauthenticatedError()
-  res.json({ user: req.user })
+  res.json({ user: sessionUser(req.user) })
 }
 
 export const changePassword: RequestHandler = async (req, res) => {

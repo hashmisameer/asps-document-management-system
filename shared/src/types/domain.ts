@@ -22,6 +22,22 @@ export interface AuthUser {
 }
 
 /**
+ * The signed-in user as the BROWSER receives them: the account, plus the
+ * server settings a screen needs in order to warn before the server refuses.
+ *
+ * Kept apart from AuthUser, which is the actor the server passes around and
+ * writes into the audit trail; a setting is not a fact about the person.
+ */
+export interface SessionUser extends AuthUser {
+  /**
+   * How many dates, today included, HR may use as a joining date. The rule is
+   * judgeJoiningDate; this is the server's JOINING_DATE_WINDOW_DAYS, sent so
+   * the form applies the same number the server will.
+   */
+  joiningDateWindowDays: number
+}
+
+/**
  * A user account as an administrator sees it.
  *
  * No hash, no salt and no algorithm: those never leave the repository layer,

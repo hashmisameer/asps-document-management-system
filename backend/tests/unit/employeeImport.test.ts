@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ROLES } from '@asps-dms/shared'
 import {
   IMPORT_COLUMNS,
   looksTruncated,
@@ -38,6 +39,15 @@ const FILE = [
 ].join('\r\n')
 
 const rowsOf = (text: string) => readRows(text).rows
+
+/**
+ * The office's master is years of history, and history is an administrator's
+ * to import: HR may only add people who joined within the window. Today is
+ * fixed rather than read from the clock so the rows above stay 'old' for ever.
+ */
+const TODAY = '2026-09-18'
+const AS_ADMIN = { role: ROLES.ADMIN, today: TODAY, windowDays: 7 } as const
+const AS_HR = { role: ROLES.HR, today: TODAY, windowDays: 7 } as const
 
 describe('reading the file', () => {
   it('keeps an address that has commas inside it', () => {
@@ -233,7 +243,7 @@ describe('judging one row', () => {
 
 describe('planning the whole file', () => {
   const plan = (existing: string[] = [], options = {}) =>
-    planImport(rowsOf(FILE), new Set(existing), { format: 'mdy', ...options })
+    planImport(rowsOf(FILE), new Set(existing), { format: 'mdy', ...AS_ADMIN, ...options })
 
   it('imports everybody it can', () => {
     const result = plan()
@@ -255,7 +265,7 @@ describe('planning the whole file', () => {
     const first = plan()
     const after = new Set(first.create.map((row) => row.employeeCode))
 
-    const second = planImport(rowsOf(FILE), after, { format: 'mdy' })
+    const second = planImport(rowsOf(FILE), after, { format: 'mdy', ...AS_ADMIN })
 
     expect(second.create).toHaveLength(0)
     expect(second.skip).toHaveLength(5)
@@ -264,7 +274,7 @@ describe('planning the whole file', () => {
   it('catches a code that appears twice in the file itself', () => {
     const doubled = [FILE, '00000068,SOMEBODY ELSE,1/1/2024,,,,,ACTIVE,TRUE'].join('\n')
 
-    const result = planImport(rowsOf(doubled), new Set(), { format: 'mdy' })
+    const result = planImport(rowsOf(doubled), new Set(), { format: 'mdy', ...AS_ADMIN })
 
     expect(result.create).toHaveLength(5)
     expect(result.skip[0]?.duplicate).toBe('earlier in this file')
@@ -273,7 +283,7 @@ describe('planning the whole file', () => {
   it('does not let one bad row stop the rest', () => {
     const withBadRow = [FILE, '00009999,NO DATE HERE,,,,,,ACTIVE,TRUE'].join('\n')
 
-    const result = planImport(rowsOf(withBadRow), new Set(), { format: 'mdy' })
+    const result = planImport(rowsOf(withBadRow), new Set(), { format: 'mdy', ...AS_ADMIN })
 
     expect(result.fail).toHaveLength(1)
     expect(result.create).toHaveLength(5)
@@ -293,6 +303,61 @@ describe('planning the whole file', () => {
     expect(result.create.length + result.skip.length + result.fail.length).toBe(
       result.rows.length,
     )
+  })
+})
+
+describe('who may add whom, by joining date', () => {
+  // Against a fixed today of 18 September 2026: one row joined the day before,
+  // one a fortnight ago, and one has not joined yet.
+  const withDates = [
+    HEADER,
+    '00020001,RECENT JOINER,9/17/2026,,,,,ACTIVE,FALSE',
+    '00020002,LATE ENTRY,9/4/2026,,,,,ACTIVE,FALSE',
+    '00020003,NOT YET HERE,9/19/2026,,,,,ACTIVE,FALSE',
+  ].join('\n')
+
+  it('lets HR import the recent joiner and refuses the old one, with the reason', () => {
+    const result = planImport(rowsOf(withDates), new Set(), { format: 'mdy', ...AS_HR })
+
+    expect(result.create.map((row) => row.employeeCode)).toEqual(['00020001'])
+
+    const late = result.fail.find((row) => row.employeeCode === '00020002')
+    expect(late?.errors).toEqual([
+      'joining_date: This joining date is more than 7 days old. Only an administrator can add this employee.',
+    ])
+    expect(late?.input).toBeUndefined()
+  })
+
+  it('lets an administrator import the old one too', () => {
+    const result = planImport(rowsOf(withDates), new Set(), { format: 'mdy', ...AS_ADMIN })
+
+    expect(result.create.map((row) => row.employeeCode)).toEqual(['00020001', '00020002'])
+  })
+
+  it('refuses a joining date in the future for everybody', () => {
+    for (const who of [AS_HR, AS_ADMIN]) {
+      const result = planImport(rowsOf(withDates), new Set(), { format: 'mdy', ...who })
+      const future = result.fail.find((row) => row.employeeCode === '00020003')
+
+      expect(future?.errors).toEqual(['joining_date: The joining date cannot be in the future.'])
+    }
+  })
+
+  it('applies the window it is given, not a number of its own', () => {
+    const result = planImport(rowsOf(withDates), new Set(), {
+      format: 'mdy',
+      ...AS_HR,
+      windowDays: 30,
+    })
+
+    expect(result.create.map((row) => row.employeeCode)).toEqual(['00020001', '00020002'])
+  })
+
+  it('does not judge a row that could not be read in the first place', () => {
+    const unreadable = [HEADER, '00020004,NO DATE,,,,,,ACTIVE,FALSE'].join('\n')
+    const result = planImport(rowsOf(unreadable), new Set(), { format: 'mdy', ...AS_HR })
+
+    expect(result.fail[0]?.errors).toEqual(['joining_date is empty'])
   })
 })
 
@@ -327,7 +392,7 @@ describe('reading a sheet by position', () => {
 
   it('feeds the plan exactly as the named reader does', () => {
     const { rows } = readRowsByPosition(table)
-    const plan = planImport(rows, new Set(['00000068']), { format: 'dmy' })
+    const plan = planImport(rows, new Set(['00000068']), { format: 'dmy', ...AS_ADMIN })
 
     expect(plan.create.map((row) => row.employeeCode)).toEqual(['00005696'])
     expect(plan.create[0]?.paddedFrom).toBe('5696')
