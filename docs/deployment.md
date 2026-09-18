@@ -214,6 +214,70 @@ an unsigned one with an occupied box, is where a threshold wants looking at.
 only - it is meant to be pasted into a message, and a list of who has not
 signed what is not.
 
+### Stamping on upload, and the trial before switching it on
+
+When a document is uploaded and its type has a template that matches the
+file, the signatures are stamped where the template says, there and then -
+the employee's signature from their record (MMC's folder), the uploader's own
+"My signature", and on the ESIC form the employee's photograph. No screen and
+no approval. A box is left alone when something is already in it, when the
+image it needs is not on file, or when the file matches no template; a
+document with any box left alone goes to HR with the reason beside the Sign
+button, and the "documents to sign" count now counts exactly those.
+
+Nothing is stamped on a document whose identity check failed, and nothing is
+stamped until the check has settled. A JPG or PNG scan never matches a
+template and always goes to HR.
+
+`AUTO_STAMP` has two values, and **`report` is the default**:
+
+| Value | What happens on upload |
+|---|---|
+| `report` | The decision is made and recorded; **nothing is stamped**; the document goes to HR as before. |
+| `stamp` | The decision is made, recorded, and acted on. |
+
+**The trial.** Deploy with `AUTO_STAMP=report` (or unset). HR carries on
+signing in the editor exactly as today. After a few days of real uploads:
+
+```
+npm run auto-stamp -- --report               # decisions in the last 7 days
+npm run auto-stamp -- --report --since 24h
+npm run auto-stamp -- --report --since 2026-09-10 --limit 200
+```
+
+The top of the report counts the decisions by outcome and lists the reasons
+boxes were left alone, most common first; below it is every decision with
+its document id, type, mode, outcome, the matched form, the sentence HR sees,
+and each box. Read the reasons: "the person who uploaded it has no signature
+on file" means an HR user has not added theirs under *My signature*; "the box
+already has something in it" on a form nobody has signed means a `STAMP_*`
+threshold wants looking at (section above); "no template for this form" means
+a template is missing or the form is a variant the template does not have.
+When the decisions read right, set `AUTO_STAMP=stamp` and restart.
+
+**The backlog.** Every document uploaded before this existed is still marked
+"Detecting" - nothing ever moved it on. Once, after migrating:
+
+```
+npm run auto-stamp -- --backlog --dry-run    # list them, change nothing
+npm run auto-stamp -- --backlog              # decide about each, in AUTO_STAMP's mode
+npm run auto-stamp -- --backlog --as <username>
+```
+
+Each document is decided in the name of the person who uploaded it, because
+the HR box is theirs. `--as` names whose name to use when that account has
+been deactivated or removed (the first active administrator otherwise). In
+`report` mode this records a decision per document and sends it to HR, which
+is what makes the count right; in `stamp` mode it stamps.
+
+Every decision is a row in `dbo.StampDecisions` and an `AUTO_STAMP_DECIDED`
+entry in the audit trail. **The report and the backlog name no employee.**
+
+**Rebuild `shared` before running any script.** The scripts run with `tsx`
+against the built `shared/dist`, not the source; after pulling a change to
+`shared/`, `npm run build --workspace shared` (which `npm run build` and
+`npm run dev` do for you) or a script fails to import something that exists.
+
 ---
 
 ## 5. Users
@@ -345,6 +409,11 @@ box decides a digital form; on a scan the box's ink is measured against the
 page's own background. `npm run stamp-check` prints the measurements for real
 documents so these can be tuned; every decision is also logged with its numbers.
 
+`AUTO_STAMP` (`report`) - whether an upload that matches its type's template
+is stamped on the spot (`stamp`) or only decided about and recorded
+(`report`). Run a new server in `report` for a few days and read
+`npm run auto-stamp -- --report` before switching (section 4).
+
 `DB_PORT` (1433), `DB_INSTANCE` (named instance - set this **or** `DB_PORT`,
 never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),
 `DB_CONNECTION_TIMEOUT_MS` (15000), `DB_REQUEST_TIMEOUT_MS` (30000),
@@ -459,6 +528,10 @@ Migrations and seeds run **from the repository on the server** (they read
 7. `npm run user:add` five times.
 8. `npm run import-employees -- --file <path> --dry-run`, read it, then run it
    for real (section 4).
+8. `npm run auto-stamp -- --backlog --dry-run`, then without `--dry-run`, so
+   documents uploaded before stamping on upload existed are decided about
+   and the "documents to sign" count is right (section 4). Leave
+   `AUTO_STAMP` unset - report mode - until the trial is done.
 8. Check the log says "Serving the built frontend" - if it does not,
    `frontend/dist` did not make it across (section 7).
 9. Start `node backend/dist/server.js` as a service, working directory

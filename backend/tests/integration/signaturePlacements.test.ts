@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { SIGNER_ROLES } from '@asps-dms/shared'
+import { SIGNER_ROLES, addDays, todayDateOnly } from '@asps-dms/shared'
 import * as signaturePlacementRepository from '../../src/repositories/signaturePlacement.repository.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
@@ -47,7 +47,9 @@ describe('signature placements, in the database', () => {
     const created = await agent.post('/api/employees').send({
       employeeCode: 'PLACE1',
       employeeName: 'Ravi Kumar Gaur',
-      joiningDate: '2026-04-01',
+      // Three days ago, not a fixed date: HR may only add somebody who joined
+      // within the last week, and a date written here would fall out of it.
+      joiningDate: addDays(todayDateOnly(), -3),
     })
     expect(created.status).toBe(201)
     employeeId = created.body.employee.employeeId

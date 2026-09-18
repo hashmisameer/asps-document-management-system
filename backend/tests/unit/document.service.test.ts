@@ -36,6 +36,7 @@ const db = vi.hoisted(() => ({
   recordIdentityCheck: vi.fn(),
   setNotRequired: vi.fn(),
   readStoredFile: vi.fn(),
+  autoStampRun: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
@@ -89,6 +90,10 @@ vi.mock('../../src/services/documentText.service.js', () => ({
   extractText: db.extractText,
   closeOcrWorker: vi.fn(),
 }))
+
+// Stamping on upload is its own module with its own tests; here it is a spy
+// that says whether, and when, the upload handed the document to it.
+vi.mock('../../src/services/autoStampRun.service.js', () => ({ run: db.autoStampRun }))
 
 const documentService = await import('../../src/services/document.service.js')
 
@@ -161,6 +166,7 @@ function record(overrides: Partial<EmployeeDocumentRecord> = {}): EmployeeDocume
     verifiedAt: null,
     rejectionReason: null,
     identityCheck: null,
+    stampDecision: null,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
     ...overrides,
@@ -420,7 +426,9 @@ describe('uploadFile', () => {
   })
 
   it('records a replacement as a replacement, not as a first upload', async () => {
-    db.findById.mockResolvedValue(record({ originalFileName: 'old.pdf', status: DOCUMENT_STATUS.UPLOADED }))
+    db.findById.mockResolvedValue(
+      record({ originalFileName: 'old.pdf', status: DOCUMENT_STATUS.UPLOADED }),
+    )
 
     await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
 
@@ -447,8 +455,91 @@ describe('uploadFile', () => {
     )
   })
 
+  describe('stamping on upload', () => {
+    /** The upload has answered; the background work runs after it. */
+    const afterBackground = () =>
+      vi.waitFor(() => expect(db.autoStampRun).toHaveBeenCalled(), { timeout: 1000 })
+
+    it('hands a document that needs a signature to the stamp runner, after answering', async () => {
+      db.autoStampRun.mockResolvedValue(null)
+      db.findById.mockResolvedValue(record({ requiresSignature: true }))
+
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      await afterBackground()
+      expect(db.autoStampRun).toHaveBeenCalledWith(5, hr, context)
+    })
+
+    it('waits for the identity check to settle before stamping', async () => {
+      db.autoStampRun.mockResolvedValue(null)
+      db.findById.mockResolvedValue(record({ requiresSignature: true }))
+      db.findStoredFile.mockResolvedValue({
+        documentId: 5,
+        employeeId: 42,
+        storedFileName: 'stored.pdf',
+        originalFilePath: 'documents/42/stored.pdf',
+        processedFilePath: null,
+        originalFileName: 'pan.pdf',
+        mimeType: 'application/pdf',
+      })
+      db.readStoredFile.mockResolvedValue(Buffer.from('stored bytes'))
+      db.recordIdentityCheck.mockResolvedValue(true)
+      db.findDocumentType.mockResolvedValue({
+        documentTypeId: 1,
+        requiredFields: ['EmployeeName', 'EmployeeCode'],
+        recognitionKeywords: [],
+        documentName: 'PAN Card',
+        documentCode: 'PAN_CARD',
+        refuseOnCheckFailure: false,
+      })
+      db.findEmployee.mockResolvedValue({
+        employeeId: 42,
+        employeeCode: 'EMP007',
+        employeeName: 'Ravi Kumar',
+        joiningDate: '2026-04-01',
+      })
+      db.extractText.mockResolvedValue({
+        text: 'RAVI KUMAR EMP007',
+        source: 'PdfText',
+        pagesRead: 1,
+      })
+
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      await afterBackground()
+      // The verdict was on the row before the runner was asked.
+      const verdictOrder = db.recordIdentityCheck.mock.invocationCallOrder[0] ?? Infinity
+      const stampOrder = db.autoStampRun.mock.invocationCallOrder[0] ?? 0
+      expect(verdictOrder).toBeLessThan(stampOrder)
+    })
+
+    it('does not hand over a document that needs no signature', async () => {
+      db.findById.mockResolvedValue(record({ requiresSignature: false }))
+
+      await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      // Nothing else is queued behind the upload, so this is settled at once.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(db.autoStampRun).not.toHaveBeenCalled()
+    })
+
+    it('never fails the upload, whatever the runner does', async () => {
+      db.autoStampRun.mockRejectedValue(new Error('the stamp blew up'))
+      db.findById.mockResolvedValue(record({ requiresSignature: true }))
+
+      const result = await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+      expect(result).toBeDefined()
+      await afterBackground()
+      // And the rejection went nowhere: the process is still here to say so.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+  })
+
   it('stops a role that may upload but not replace from overwriting a file', async () => {
-    db.findById.mockResolvedValue(record({ originalFileName: 'old.pdf', status: DOCUMENT_STATUS.UPLOADED }))
+    db.findById.mockResolvedValue(
+      record({ originalFileName: 'old.pdf', status: DOCUMENT_STATUS.UPLOADED }),
+    )
 
     await expect(
       documentService.uploadFile(5, uploadedFile(), uploadInput, viewer, context),
@@ -460,7 +551,9 @@ describe('uploadFile', () => {
 
 describe('verify', () => {
   it('verifies an uploaded document', async () => {
-    db.findById.mockResolvedValue(record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }))
+    db.findById.mockResolvedValue(
+      record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }),
+    )
 
     await documentService.verify(5, hr, context)
 
@@ -484,7 +577,9 @@ describe('verify', () => {
   })
 
   it('reports a conflict when someone else changed the status first', async () => {
-    db.findById.mockResolvedValue(record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }))
+    db.findById.mockResolvedValue(
+      record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }),
+    )
     // The UPDATE matched no row because Status was no longer what was read.
     db.setStatus.mockResolvedValue(false)
 
@@ -495,7 +590,9 @@ describe('verify', () => {
 
 describe('reject', () => {
   it('rejects an uploaded document with its reason', async () => {
-    db.findById.mockResolvedValue(record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }))
+    db.findById.mockResolvedValue(
+      record({ status: DOCUMENT_STATUS.UPLOADED, originalFileName: 'pan.pdf' }),
+    )
 
     await documentService.reject(5, 'The scan is unreadable.', hr, context)
 

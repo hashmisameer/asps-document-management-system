@@ -14,7 +14,13 @@ import {
   type SignatureStatus,
   type TextSource,
 } from '@asps-dms/shared'
-import { todayDateOnly } from '@asps-dms/shared'
+import {
+  todayDateOnly,
+  type AutoStampMode,
+  type StampBoxDecision,
+  type StampDecisionSummary,
+  type StampOutcome,
+} from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
 import { escapeLike } from '../utils/sqlLike.js'
 import { COUNTABLE_DOCUMENT } from './employeeScope.js'
@@ -76,6 +82,13 @@ interface EmployeeDocumentRow {
   VerifiedAt: Date | null
   RejectionReason: string | null
   IdentityCheckStatus: string | null
+  StampMode: string | null
+  StampOutcome: string | null
+  StampSummary: string | null
+  StampStampedCount: number | null
+  StampSkippedCount: number | null
+  StampBoxesJson: string | null
+  StampDecidedAt: Date | null
   IdentityCheckSource: string | null
   IdentityCheckDetail: string | null
   IdentityCheckedAt: Date | null
@@ -99,6 +112,9 @@ const SELECT_EMPLOYEE_DOCUMENT = `
             d.IdentityCheckStatus, d.IdentityCheckSource, d.IdentityCheckDetail,
             d.IdentityCheckedAt, ov.FullName AS IdentityOverrideByName,
             d.IdentityOverrideReason,
+            sd.Mode AS StampMode, sd.Outcome AS StampOutcome, sd.Summary AS StampSummary,
+            sd.StampedCount AS StampStampedCount, sd.SkippedCount AS StampSkippedCount,
+            sd.BoxesJson AS StampBoxesJson, sd.DecidedAt AS StampDecidedAt,
             d.CreatedAt, d.UpdatedAt
     FROM    dbo.EmployeeDocuments AS d
     INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
@@ -106,7 +122,15 @@ const SELECT_EMPLOYEE_DOCUMENT = `
     LEFT JOIN dbo.Users AS up ON up.UserId = d.UploadedBy
     LEFT JOIN dbo.Users AS nr ON nr.UserId = d.NotRequiredBy
     LEFT JOIN dbo.Users AS vf ON vf.UserId = d.VerifiedBy
-    LEFT JOIN dbo.Users AS ov ON ov.UserId = d.IdentityOverrideBy`
+    LEFT JOIN dbo.Users AS ov ON ov.UserId = d.IdentityOverrideBy
+    /* The decision that stands: the latest. One row per document, or none. */
+    OUTER APPLY (
+        SELECT TOP 1 s.Mode, s.Outcome, s.Summary, s.StampedCount, s.SkippedCount,
+                     s.BoxesJson, s.DecidedAt
+        FROM   dbo.StampDecisions AS s
+        WHERE  s.DocumentId = d.DocumentId
+        ORDER BY s.DecidedAt DESC, s.StampDecisionId DESC
+    ) AS sd`
 
 /** A deadline unit as stored, or none. Anything unrecognised reads as none. */
 function toDeadlineUnit(value: string | null): DeadlineUnit | null {
@@ -125,6 +149,34 @@ function toSignatureStatus(value: string): SignatureStatus {
   return (Object.values(SIGNATURE_STATUS) as string[]).includes(value)
     ? (value as SignatureStatus)
     : SIGNATURE_STATUS.NOT_REQUIRED
+}
+
+/**
+ * The latest stamping-on-upload decision, or null when there has been none.
+ *
+ * The box detail is stored as JSON and read back whole; a row whose JSON
+ * cannot be read is shown with no boxes rather than not at all, because the
+ * sentence is what HR reads and it is a plain column.
+ */
+function toStampDecision(row: EmployeeDocumentRow): StampDecisionSummary | null {
+  if (row.StampOutcome === null || row.StampMode === null || row.StampDecidedAt === null) {
+    return null
+  }
+  let boxes: StampBoxDecision[] = []
+  try {
+    boxes = row.StampBoxesJson ? (JSON.parse(row.StampBoxesJson) as StampBoxDecision[]) : []
+  } catch {
+    boxes = []
+  }
+  return {
+    mode: row.StampMode as AutoStampMode,
+    outcome: row.StampOutcome as StampOutcome,
+    summary: row.StampSummary ?? '',
+    stampedCount: row.StampStampedCount ?? 0,
+    skippedCount: row.StampSkippedCount ?? 0,
+    boxes,
+    decidedAt: row.StampDecidedAt.toISOString(),
+  }
 }
 
 /**
@@ -214,6 +266,7 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     verifiedAt: row.VerifiedAt?.toISOString() ?? null,
     rejectionReason: row.RejectionReason,
     identityCheck: toIdentityCheck(row),
+    stampDecision: toStampDecision(row),
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }
@@ -278,9 +331,7 @@ export async function createChecklist(
  */
 export async function listForEmployee(employeeId: number): Promise<EmployeeDocumentRecord[]> {
   const request = await createRequest()
-  const result = await request
-    .input('employeeId', sql.Int, employeeId)
-    .query<EmployeeDocumentRow>(`
+  const result = await request.input('employeeId', sql.Int, employeeId).query<EmployeeDocumentRow>(`
       ${SELECT_EMPLOYEE_DOCUMENT}
       WHERE  d.EmployeeId = @employeeId AND d.IsActive = 1
       ORDER BY dt.SortOrder, dt.DocumentName`)
@@ -291,9 +342,9 @@ export async function listForEmployee(employeeId: number): Promise<EmployeeDocum
 /** The document type ids an employee already has an active row for. */
 export async function listDocumentTypeIdsForEmployee(employeeId: number): Promise<number[]> {
   const request = await createRequest()
-  const result = await request
-    .input('employeeId', sql.Int, employeeId)
-    .query<{ DocumentTypeId: number }>(`
+  const result = await request.input('employeeId', sql.Int, employeeId).query<{
+    DocumentTypeId: number
+  }>(`
       SELECT d.DocumentTypeId
       FROM   dbo.EmployeeDocuments AS d
       WHERE  d.EmployeeId = @employeeId AND d.IsActive = 1`)
@@ -303,9 +354,7 @@ export async function listDocumentTypeIdsForEmployee(employeeId: number): Promis
 
 export async function findById(documentId: number): Promise<EmployeeDocumentRecord | null> {
   const request = await createRequest()
-  const result = await request
-    .input('documentId', sql.Int, documentId)
-    .query<EmployeeDocumentRow>(`
+  const result = await request.input('documentId', sql.Int, documentId).query<EmployeeDocumentRow>(`
       ${SELECT_EMPLOYEE_DOCUMENT}
       WHERE  d.DocumentId = @documentId AND d.IsActive = 1`)
 
@@ -381,6 +430,51 @@ export interface StampCheckCandidate {
   originalFilePath: string
 }
 
+/** A document waiting for stamping on upload that never came: the backlog. */
+export interface SignatureBacklogRow {
+  documentId: number
+  documentCode: string
+  documentName: string
+  /** Who uploaded the file - whose authorising signature the HR box would carry. */
+  uploadedBy: number | null
+}
+
+/**
+ * Every document still in PendingDetection with a file on it.
+ *
+ * Before stamping on upload existed nothing ever moved a document out of
+ * PendingDetection, so every signed-document upload sits there. This is the
+ * list the backlog command works through, oldest first, so that the ones
+ * that have waited longest are decided about first.
+ *
+ * No employee columns: the command prints what it finds, and the printout
+ * names no employee.
+ */
+export async function listSignatureBacklog(limit: number): Promise<SignatureBacklogRow[]> {
+  const request = await createRequest()
+  const result = await request.input('limit', sql.Int, limit).query<{
+    DocumentId: number
+    DocumentCode: string
+    DocumentName: string
+    UploadedBy: number | null
+  }>(`
+      SELECT TOP (@limit)
+             d.DocumentId, dt.DocumentCode, dt.DocumentName, d.UploadedBy
+      FROM   dbo.EmployeeDocuments AS d
+      INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
+      WHERE  d.IsActive = 1
+        AND  d.OriginalFilePath IS NOT NULL
+        AND  d.SignatureStatus = 'PendingDetection'
+      ORDER BY d.UploadedAt, d.DocumentId`)
+
+  return result.recordset.map((row) => ({
+    documentId: row.DocumentId,
+    documentCode: row.DocumentCode,
+    documentName: row.DocumentName,
+    uploadedBy: row.UploadedBy,
+  }))
+}
+
 export async function listForStampCheck(filter: {
   documentCode?: string | undefined
   documentId?: number | undefined
@@ -390,18 +484,17 @@ export async function listForStampCheck(filter: {
   const result = await request
     .input('documentCode', sql.VarChar(50), filter.documentCode ?? null)
     .input('documentId', sql.Int, filter.documentId ?? null)
-    .input('limit', sql.Int, filter.limit)
-    .query<{
-      DocumentId: number
-      DocumentTypeId: number
-      DocumentCode: string
-      DocumentName: string
-      MimeType: string | null
-      PageCount: number | null
-      SignatureStatus: string
-      HasProcessedFile: number
-      OriginalFilePath: string
-    }>(`
+    .input('limit', sql.Int, filter.limit).query<{
+    DocumentId: number
+    DocumentTypeId: number
+    DocumentCode: string
+    DocumentName: string
+    MimeType: string | null
+    PageCount: number | null
+    SignatureStatus: string
+    HasProcessedFile: number
+    OriginalFilePath: string
+  }>(`
       SELECT TOP (@limit)
              d.DocumentId, d.DocumentTypeId, dt.DocumentCode, dt.DocumentName,
              d.MimeType, d.PageCount, d.SignatureStatus,
@@ -502,8 +595,7 @@ export async function attachFile(input: AttachFileInput): Promise<void> {
       input.identity.checks.length === 0 ? null : JSON.stringify(input.identity.checks),
     )
     .input('identityOverrideBy', sql.Int, input.identity.overrideBy)
-    .input('identityOverrideReason', sql.NVarChar(500), input.identity.overrideReason)
-    .query(`
+    .input('identityOverrideReason', sql.NVarChar(500), input.identity.overrideReason).query(`
       UPDATE dbo.EmployeeDocuments
       SET    OriginalFileName = @originalFileName,
              StoredFileName   = @storedFileName,

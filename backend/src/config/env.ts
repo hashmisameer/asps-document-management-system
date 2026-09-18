@@ -183,6 +183,22 @@ const envSchema = z
     STAMP_INK_EMPTY_MAX: z.coerce.number().min(0).max(1).default(0.015),
     STAMP_INK_OCCUPIED_MIN: z.coerce.number().min(0).max(1).default(0.035),
     STAMP_INK_MARGIN: z.coerce.number().int().min(1).max(200).default(40),
+    /**
+     * Whether an upload that matches its type's template is stamped on the
+     * spot, or only judged.
+     *
+     *   report  decide and record what would be stamped, and stamp nothing.
+     *           The default, and what a server runs for a few days after this
+     *           ships, so the decisions can be read against real uploads
+     *           before any of them is acted on.
+     *   stamp   decide, record, and stamp. No screen, no approval: the
+     *           signatures are the ones already on file, and a wrong one is a
+     *           wrong file in MMC's folder, not a question for HR.
+     *
+     * Either way every decision is a row in dbo.StampDecisions, and a document
+     * with any box left alone is marked for HR to look at.
+     */
+    AUTO_STAMP: z.enum(['report', 'stamp']).default('report'),
     REPORT_RECIPIENTS: z
       .string()
       .default('')

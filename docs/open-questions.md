@@ -117,8 +117,14 @@ Stated rather than silently adopted. Each is cheap to reverse if wrong.
    Sending is off until `REMINDER_ENABLED` is set, so a deployed server cannot
    start emailing the office by itself.
 7. **No Active Directory / LDAP / Entra ID.** Local `Users` table only (Section 84).
-8. **Detection is advisory.** No code path applies a signature from an OCR/CV
-   result without an explicit HR confirmation.
+8. **Detection is advisory; the template is not.** No code path applies a
+   signature from an OCR/CV result without an explicit HR confirmation - and
+   there is still no OCR/CV detection. Since 2026-09-18 a document whose type
+   has a template IS stamped on upload without approval, from the images
+   already on file, with every box left alone sent to HR with its reason. The
+   office asked for it that way: the employee's signature comes from MMC's own
+   folder, and a wrong one is MMC's mistake to fix, not a question for HR.
+   `AUTO_STAMP=report` (the default) decides and records without stamping.
 9. **Session and lockout policy**, none of which the specification fixes:
    sessions expire after 8 hours idle under a 24 hour absolute ceiling
    (`SESSION_IDLE_TTL_MINUTES`, `SESSION_ABSOLUTE_TTL_HOURS`), and five failed

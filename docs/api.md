@@ -251,6 +251,45 @@ joining date in the PDF's text. To test the refusal, change any one of them.
 Set `IDENTITY_CHECK_ENABLED=false` in `backend/.env` to switch the whole check
 off; the document is then recorded as `NotChecked`.
 
+### Stamping on upload
+
+A document that needs a signature is uploaded in `PendingDetection` ("Detecting")
+and leaves it a few seconds later, after the identity check has settled. If
+the type has a template and the file matches one of its forms, the boxes are
+stamped - the employee's enrolled signature, the uploader's own `/me/signature`
+in the HR box, the employee's photograph on the ESIC form - and the document
+becomes `Added`. Any box left alone (something already in it, an image not on
+file, no matching template, a JPG or PNG scan, a failed identity check) sends
+the document to `ReviewRequired` with the reason on the row:
+
+```jsonc
+// GET /documents/:documentId  - the latest decision travels with the document
+"stampDecision": {
+  "mode": "Stamp",                 // Report | Stamp - the server's AUTO_STAMP at the time
+  "outcome": "Partial",            // Stamped | Partial | Nothing | NoTemplate | NoVariant |
+                                   // AmbiguousVariant | NotPdf | Unreadable | IdentityFailed | Failed
+  "summary": "Stamped: employee signature. Not stamped: the hr signature - the person who uploaded it has no signature on file.",
+  "stampedCount": 1,
+  "skippedCount": 1,
+  "boxes": [
+    { "signerRole": "Employee",   "pageNumber": 1, "action": "stamp", "reason": null, "found": "empty" },
+    { "signerRole": "Authoriser", "pageNumber": 1, "action": "skip",
+      "reason": "the person who uploaded it has no signature on file", "found": "empty" }
+  ],
+  "decidedAt": "2026-09-18T04:11:00.000Z"
+}
+```
+
+`stampDecision` is `null` for a document uploaded before this existed or
+whose type needs no signature. With `AUTO_STAMP=report` (the default) the
+decision is recorded, `mode` is `Report`, nothing is stamped, and the document
+goes to `ReviewRequired` whatever the outcome says - the outcome is what
+*would* have happened. Placements stamped this way carry
+`detectionMethod: "Template"`; the audit trail records `AUTO_STAMP_DECIDED`
+for every decision and `SIGNATURE_PLACED_FROM_TEMPLATE` when boxes went on.
+There is no endpoint to trigger or approve it; `npm run auto-stamp` reports
+and works the backlog (see the deployment notes).
+
 ### Other document bodies
 
 ```jsonc

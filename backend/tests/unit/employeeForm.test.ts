@@ -104,6 +104,7 @@ function document(
     deadlineState: DEADLINE_STATE.NOT_DUE,
     daysRemaining: 5,
     identityCheck: null,
+    stampDecision: null,
     uploadedByName: null,
     uploadedAt: null,
     verifiedByName: null,

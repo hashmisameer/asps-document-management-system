@@ -7,6 +7,7 @@ export * from './constants/deadlines.js'
 export * from './constants/documentChecklist.js'
 export * from './constants/audit.js'
 export * from './constants/errors.js'
+export * from './constants/autoStamp.js'
 
 // Types
 export * from './types/domain.js'

@@ -27,6 +27,7 @@ import {
 } from '../../components/ui/icons.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
+import { describeStampDecision, signLabel } from './stampDecisionText.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
 import {
@@ -329,9 +330,14 @@ function ChecklistRow({
       show: canSign,
       done: false,
       disabled: !canSign,
-      label: canSign ? 'Sign' : 'You cannot sign this document',
+      label: canSign
+        ? signLabel('Sign', describeStampDecision(item))
+        : 'You cannot sign this document',
     }
   })()
+
+  // What stamping on upload decided, when it left something for HR to do.
+  const stampLine = describeStampDecision(item)
 
 
   return (
@@ -416,6 +422,16 @@ function ChecklistRow({
 
           {item.status === DOCUMENT_STATUS.REJECTED && item.rejectionReason ? (
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>
+          ) : null}
+
+          {/* Stamping on upload left something for HR: a box already written
+              in, an image not on file, a form no template matches - or, in
+              report mode, everything. A REASON, so it gets its own line, in
+              the server's own words; the Sign button beside it is the answer. */}
+          {stampLine ? (
+            <p className="mt-1 max-w-56 text-xs text-status-pending">
+              <span className="font-medium">{stampLine.heading}.</span> {stampLine.detail}
+            </p>
           ) : null}
 
           {/* A WARNING, not a refusal. The document is on file either way.

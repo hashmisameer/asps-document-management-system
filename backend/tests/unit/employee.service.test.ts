@@ -181,6 +181,7 @@ function checklistRecord(overrides: Partial<EmployeeDocumentRecord> = {}): Emplo
     verifiedAt: null,
     rejectionReason: null,
     identityCheck: null,
+    stampDecision: null,
     createdAt: '2026-09-01T04:00:00.000Z',
     updatedAt: '2026-09-01T04:00:00.000Z',
     ...overrides,

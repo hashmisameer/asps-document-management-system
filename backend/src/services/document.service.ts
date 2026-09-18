@@ -199,9 +199,7 @@ export async function completeIdentityCheck(
       return
     }
 
-    const failureReason = result.passed
-      ? null
-      : describeFailure(result, documentType.documentName)
+    const failureReason = result.passed ? null : describeFailure(result, documentType.documentName)
 
     await employeeDocumentRepository.recordIdentityCheck({
       documentId,
@@ -430,20 +428,66 @@ export async function uploadFile(
     })
   }
 
-  // Reading starts here and is NOT waited for. The upload is finished: the file
-  // is stored, the row points at it, and the audit entry is written. What is
-  // still to come is the verdict, which arrives on the row a few seconds later.
-  //
-  // Deliberately not awaited, and deliberately not able to reject: an unhandled
-  // rejection from a background task takes the process down, and a reading that
-  // goes wrong must never cost the upload that already succeeded.
-  if (identity.status === 'Checking') {
-    void completeIdentityCheck(documentId, stored.storedFileName, actor, context).catch((error) => {
-      logger.error({ err: error, documentId }, 'The background identity check threw')
-    })
-  }
+  // Reading and stamping start here and are NOT waited for. The upload is
+  // finished: the file is stored, the row points at it, and the audit entry is
+  // written. What is still to come arrives on the row a few seconds later.
+  settleInBackground({
+    documentId,
+    storedFileName: stored.storedFileName,
+    identityStatus: identity.status,
+    signatureStatus,
+    actor,
+    context,
+  })
 
   return getById(documentId)
+}
+
+/**
+ * What happens to an upload after it has been answered: the identity check,
+ * and then - for a document that needs a signature - stamping on upload.
+ *
+ * IN THAT ORDER, ALWAYS. A document filed against the wrong employee must
+ * never get this employee's signature on it, so nothing is stamped until the
+ * check has settled; the runner reads the verdict off the row and stamps
+ * nothing on a failure.
+ *
+ * Deliberately not awaited, and deliberately not able to reject: an unhandled
+ * rejection from a background task takes the process down, and neither a
+ * reading nor a stamping that goes wrong may cost the upload that already
+ * succeeded. Each step catches its own errors; the catches here are the net
+ * under the net.
+ *
+ * The runner is imported at the call rather than at the top: it reaches
+ * signature.service, which reaches back here, and a static cycle is a thing
+ * to avoid even where the runtime would tolerate it.
+ */
+function settleInBackground(job: {
+  documentId: number
+  storedFileName: string
+  identityStatus: AttachIdentityCheck['status']
+  signatureStatus: SignatureStatus
+  actor: AuthUser
+  context: RequestContext
+}): void {
+  const { documentId, actor, context } = job
+
+  const checked =
+    job.identityStatus === 'Checking'
+      ? completeIdentityCheck(documentId, job.storedFileName, actor, context).catch((error) => {
+          logger.error({ err: error, documentId }, 'The background identity check threw')
+        })
+      : Promise.resolve()
+
+  void checked
+    .then(async () => {
+      if (job.signatureStatus !== SIGNATURE_STATUS.PENDING_DETECTION) return
+      const autoStamp = await import('./autoStampRun.service.js')
+      await autoStamp.run(documentId, actor, context)
+    })
+    .catch((error) => {
+      logger.error({ err: error, documentId }, 'Stamping on upload threw')
+    })
 }
 
 /**
@@ -749,7 +793,8 @@ export async function openForDelivery(
 
   await audit.record({
     userId: actor.userId,
-    action: intent === 'download' ? AUDIT_ACTIONS.DOCUMENT_DOWNLOADED : AUDIT_ACTIONS.DOCUMENT_VIEWED,
+    action:
+      intent === 'download' ? AUDIT_ACTIONS.DOCUMENT_DOWNLOADED : AUDIT_ACTIONS.DOCUMENT_VIEWED,
     entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
     entityId: documentId,
     ipAddress: context.ipAddress,
@@ -871,9 +916,7 @@ export interface DocumentListItem extends DocumentListRecord {
  * Nobody who has left is in it, which is what makes the tile and the list agree
  * on the number.
  */
-export async function list(
-  query: DocumentListQuery,
-): Promise<Paginated<DocumentListItem>> {
+export async function list(query: DocumentListQuery): Promise<Paginated<DocumentListItem>> {
   const { rows, total } = await employeeDocumentRepository.listAll(query)
 
   return {
