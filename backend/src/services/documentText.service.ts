@@ -1,8 +1,8 @@
-import { createCanvas } from '@napi-rs/canvas'
 import sharp from 'sharp'
 import { TEXT_SOURCES, type TextSource } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { loadPdfjs, openPdf, renderPage } from './pdfRaster.service.js'
 
 /**
  * Reading the words out of an uploaded document.
@@ -56,32 +56,9 @@ export interface ExtractedText {
  */
 const MIN_USEFUL_TEXT_LENGTH = 60
 
-/**
- * Rendering scale for OCR. 2x a 72dpi page is ~144dpi, which Tesseract reads well.
- *
- * 3.5x (~252dpi) was tried, on the theory that 144dpi is half what Tesseract
- * asks for. Measured on the company's PF form it read exactly the same three
- * fields as 2x and took 35 seconds instead of 26 - and that time is spent
- * inside the upload request, five pages of it against a 90 second budget. Left
- * where it is until a document turns up that a higher one demonstrably rescues.
- */
-const OCR_RENDER_SCALE = 2
-
-type PdfModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
-
-let pdfjs: PdfModule | null = null
-
-/**
- * pdf.js, loaded on first use.
- *
- * The legacy build, because the modern one expects browser globals that Node
- * does not have. Imported lazily so that starting the API does not pay for a
- * library most requests never touch.
- */
-async function loadPdfjs(): Promise<PdfModule> {
-  pdfjs ??= await import('pdfjs-dist/legacy/build/pdf.mjs')
-  return pdfjs
-}
+// The rendering scale, the pdf.js loader and the page renderer live in
+// pdfRaster.service.ts, shared with the box-occupancy check so that both draw
+// the same page the same way.
 
 /**
  * The OCR worker.
@@ -286,29 +263,6 @@ function isImageType(mimeType: string): boolean {
 }
 
 /** Renders one page to a PNG for OCR. */
-async function renderPage(
-  page: import('pdfjs-dist/types/src/display/api.js').PDFPageProxy,
-): Promise<Buffer> {
-  const viewport = page.getViewport({ scale: OCR_RENDER_SCALE })
-  const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height))
-  const context = canvas.getContext('2d')
-
-  // White behind the page: a transparent background renders as black once
-  // flattened, and Tesseract reads black text on black as nothing at all.
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-
-  // pdf.js types its context against the DOM's CanvasRenderingContext2D, which
-  // does not exist in Node. @napi-rs/canvas implements the same surface, so the
-  // cast is the type system catching up with what is really being passed.
-  await page.render({
-    canvasContext: context as unknown as Parameters<typeof page.render>[0]['canvasContext'],
-    viewport,
-  }).promise
-
-  return canvas.toBuffer('image/png')
-}
-
 async function readPdf(
   buffer: Buffer,
   languages: string,
@@ -316,15 +270,7 @@ async function readPdf(
   scale: number | undefined,
   isEnough?: (text: string) => boolean,
 ): Promise<ExtractedText> {
-  const { getDocument } = await loadPdfjs()
-
-  const pdf = await getDocument({
-    data: new Uint8Array(buffer),
-    // A document is data, not a program: nothing in a PDF gets to run here.
-    isEvalSupported: false,
-    // The check reads words, and a missing font changes none of them.
-    useSystemFonts: false,
-  }).promise
+  const pdf = await openPdf(buffer)
 
   try {
     const pageCount = Math.min(pdf.numPages, env.IDENTITY_CHECK_MAX_PAGES)

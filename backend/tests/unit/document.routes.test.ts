@@ -27,6 +27,8 @@ const db = vi.hoisted(() => ({
   discardStoredFile: vi.fn(),
   findDocumentType: vi.fn(),
   findEmployee: vi.fn(),
+  readStoredFile: vi.fn(),
+  assessBoxes: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/session.repository.js', () => ({
@@ -53,6 +55,7 @@ vi.mock('../../src/services/storage.service.js', () => ({
   storeDocument: db.storeDocument,
   discardStoredFile: db.discardStoredFile,
   openStoredFile: db.openStoredFile,
+  readStoredFile: db.readStoredFile,
   storedFileExists: db.storedFileExists,
   ensureStorageReady: vi.fn(),
   checkStorageWritable: vi.fn().mockResolvedValue({ ok: true }),
@@ -60,6 +63,10 @@ vi.mock('../../src/services/storage.service.js', () => ({
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
+
+// The occupancy check is tested against real PDFs elsewhere; here it answers
+// whatever the test says, so these tests are about who may ask and what comes back.
+vi.mock('../../src/services/boxOccupancy.service.js', () => ({ assessBoxes: db.assessBoxes }))
 
 // The identity check's two reads. A document type that asks for no fields is
 // the uninteresting answer, which keeps these tests about routing.
@@ -282,6 +289,79 @@ describe('uploading', () => {
       .attach('file', PDF_BYTES, 'pan-card.pdf')
 
     expect(db.attachFile).toHaveBeenCalledWith(expect.objectContaining({ clearDueDate: false }))
+  })
+})
+
+describe('asking whether a box is already taken', () => {
+  const box = {
+    pageNumber: 1,
+    x: 0.1,
+    y: 0.8,
+    width: 0.2,
+    height: 0.08,
+    pageRotation: 0,
+    method: 'Manual',
+    detectionMethod: 'Manual',
+  }
+
+  beforeEach(() => {
+    db.readStoredFile.mockResolvedValue(PDF_BYTES)
+    db.assessBoxes.mockResolvedValue([
+      {
+        label: '0',
+        signerRole: 'Employee',
+        pageNumber: 1,
+        rect: { x: 0.1, y: 0.8, width: 0.2, height: 0.08 },
+        verdict: 'occupied',
+        decidedBy: 'image',
+        pageKind: 'digital',
+        overlap: { images: 1, coverage: 0.97 },
+        reason: 'an image covers 97% of the box',
+      },
+    ])
+  })
+
+  it('answers HR, box by box, without changing anything', async () => {
+    const response = await request(app)
+      .post('/api/documents/5/placements/check')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ placements: [box] })
+
+    expect(response.status).toBe(200)
+    expect(response.body.occupancy).toEqual([
+      expect.objectContaining({
+        index: 0,
+        signerRole: 'Employee',
+        pageNumber: 1,
+        verdict: 'occupied',
+        decidedBy: 'image',
+        overlap: { images: 1, coverage: 0.97 },
+      }),
+    ])
+    // The ORIGINAL was read, and nothing was written or recorded.
+    expect(db.readStoredFile).toHaveBeenCalledWith('documents/42/uuid.pdf')
+    expect(db.insertAudit).not.toHaveBeenCalled()
+    expect(db.setStatus).not.toHaveBeenCalled()
+  })
+
+  it('stops a Viewer asking: the answer only matters to someone who can stamp', async () => {
+    const response = await request(app)
+      .post('/api/documents/5/placements/check')
+      .set('Cookie', signedInAs(ROLES.VIEWER))
+      .send({ placements: [box] })
+
+    expect(response.status).toBe(403)
+    expect(db.assessBoxes).not.toHaveBeenCalled()
+  })
+
+  it('refuses a box that is not a box', async () => {
+    const response = await request(app)
+      .post('/api/documents/5/placements/check')
+      .set('Cookie', signedInAs(ROLES.HR))
+      .send({ placements: [{ ...box, width: 0 }] })
+
+    expect(response.status).toBe(400)
+    expect(db.assessBoxes).not.toHaveBeenCalled()
   })
 })
 

@@ -22,7 +22,8 @@
     "user:list": "tsx src/database/cli.ts list-users",
     "send-reminders": "tsx src/scripts/sendReminders.ts",
     "import-employees": "tsx src/scripts/importEmployees.ts",
-    "attach-mmc-images": "tsx src/scripts/attachMmcImages.ts"
+    "attach-mmc-images": "tsx src/scripts/attachMmcImages.ts",
+    "stamp-check": "tsx src/scripts/stampCheck.ts"
   },
   "dependencies": {
     "@asps-dms/shared": "*",

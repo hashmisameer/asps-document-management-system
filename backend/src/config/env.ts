@@ -149,6 +149,29 @@ const envSchema = z
      */
     MMC_PHOTO_DIR: absoluteDirectory.optional(),
     MMC_SIGNATURE_DIR: absoluteDirectory.optional(),
+
+    /**
+     * Whether a box already has something in it, before a stamp goes there.
+     *
+     * Two kinds of evidence, and these say where the lines are. Every
+     * measurement is logged with its verdict, so these are tuned from real
+     * documents - see services/boxOccupancy.service.ts and `stamp-check`.
+     *
+     *   FULL_PAGE_MIN   an image covering at least this much of the page is a
+     *                   scan's background, not a signature
+     *   OVERLAP_MIN     an image covering at least this much of the BOX means
+     *                   the box is occupied
+     *   INK_EMPTY_MAX   on a scanned page, ink at or below this is an empty box
+     *   INK_OCCUPIED_MIN  ... and at or above this is an occupied one; between
+     *                   the two the box is uncertain and goes to a person
+     *   INK_MARGIN      how much darker than the page's own background a pixel
+     *                   must be to count as ink, 0-255
+     */
+    STAMP_FULL_PAGE_MIN: z.coerce.number().min(0.1).max(1).default(0.5),
+    STAMP_OVERLAP_MIN: z.coerce.number().min(0.01).max(1).default(0.25),
+    STAMP_INK_EMPTY_MAX: z.coerce.number().min(0).max(1).default(0.015),
+    STAMP_INK_OCCUPIED_MIN: z.coerce.number().min(0).max(1).default(0.035),
+    STAMP_INK_MARGIN: z.coerce.number().int().min(1).max(200).default(40),
     REPORT_RECIPIENTS: z
       .string()
       .default('')

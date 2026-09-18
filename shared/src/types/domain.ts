@@ -415,6 +415,35 @@ export interface SignaturePlacement {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Box occupancy: is anything already in the box a stamp would go in?          */
+/* -------------------------------------------------------------------------- */
+
+export type BoxVerdict = 'empty' | 'occupied' | 'uncertain'
+
+/**
+ * One box, judged before a stamp goes there.
+ *
+ * On a digital page an image on the box decides it. On a scanned page the
+ * smaller images are checked first, then the box's ink is measured against
+ * the page's own background. The numbers travel with the verdict so the
+ * person seeing the warning sees why.
+ */
+export interface BoxOccupancy {
+  /** The position of the box in the request, so the answer can be matched to it. */
+  index: number
+  signerRole: SignerRole
+  pageNumber: number
+  verdict: BoxVerdict
+  decidedBy: 'image' | 'ink' | 'none'
+  pageKind: 'digital' | 'scanned'
+  /** The largest fraction of the box any one image covers, and how many touch it. */
+  overlap: { images: number; coverage: number }
+  /** Present only when the ink check ran. */
+  ink?: { percent: number; background: number; cutoff: number }
+  reason: string
+}
+
+/* -------------------------------------------------------------------------- */
 /* Placement templates: where the boxes go on every document of a type         */
 /* -------------------------------------------------------------------------- */
 

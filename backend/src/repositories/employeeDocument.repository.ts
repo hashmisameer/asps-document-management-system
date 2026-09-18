@@ -363,6 +363,73 @@ export async function findStoredFile(documentId: number): Promise<StoredFileLoca
   }
 }
 
+/**
+ * A document the stamp-check report can look at: it has a file, and its type
+ * has a template. Deliberately WITHOUT the employee - not their id, code or
+ * name - because the report is printed, and a printout of who has not signed
+ * what is not something this command should be able to produce.
+ */
+export interface StampCheckCandidate {
+  documentId: number
+  documentTypeId: number
+  documentCode: string
+  documentName: string
+  mimeType: string | null
+  pageCount: number | null
+  signatureStatus: string
+  hasProcessedFile: boolean
+  originalFilePath: string
+}
+
+export async function listForStampCheck(filter: {
+  documentCode?: string | undefined
+  documentId?: number | undefined
+  limit: number
+}): Promise<StampCheckCandidate[]> {
+  const request = await createRequest()
+  const result = await request
+    .input('documentCode', sql.VarChar(50), filter.documentCode ?? null)
+    .input('documentId', sql.Int, filter.documentId ?? null)
+    .input('limit', sql.Int, filter.limit)
+    .query<{
+      DocumentId: number
+      DocumentTypeId: number
+      DocumentCode: string
+      DocumentName: string
+      MimeType: string | null
+      PageCount: number | null
+      SignatureStatus: string
+      HasProcessedFile: number
+      OriginalFilePath: string
+    }>(`
+      SELECT TOP (@limit)
+             d.DocumentId, d.DocumentTypeId, dt.DocumentCode, dt.DocumentName,
+             d.MimeType, d.PageCount, d.SignatureStatus,
+             CASE WHEN d.ProcessedFilePath IS NULL THEN 0 ELSE 1 END AS HasProcessedFile,
+             d.OriginalFilePath
+      FROM   dbo.EmployeeDocuments AS d
+      INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
+      WHERE  d.IsActive = 1
+        AND  d.OriginalFilePath IS NOT NULL
+        AND  EXISTS (SELECT 1 FROM dbo.DocumentTypePlacements AS tp
+                     WHERE tp.DocumentTypeId = d.DocumentTypeId)
+        AND  (@documentCode IS NULL OR dt.DocumentCode = @documentCode)
+        AND  (@documentId IS NULL OR d.DocumentId = @documentId)
+      ORDER BY d.DocumentTypeId, d.DocumentId`)
+
+  return result.recordset.map((row) => ({
+    documentId: row.DocumentId,
+    documentTypeId: row.DocumentTypeId,
+    documentCode: row.DocumentCode,
+    documentName: row.DocumentName,
+    mimeType: row.MimeType,
+    pageCount: row.PageCount,
+    signatureStatus: row.SignatureStatus,
+    hasProcessedFile: row.HasProcessedFile === 1,
+    originalFilePath: row.OriginalFilePath,
+  }))
+}
+
 export interface AttachFileInput {
   documentId: number
   originalFileName: string

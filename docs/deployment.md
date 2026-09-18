@@ -188,6 +188,32 @@ npm run attach-mmc-images -- --limit 20 --as rakesh
   (default: the first administrator) with `source: MMC`, and on the form or
   import against whoever created the employee.
 
+### Is the box already signed? Checking the rule against real documents
+
+Before anything is stamped, the box is checked for something already there
+(the `STAMP_*` settings in section 8). This prints what that check says about
+every document that has a template, box by box, and changes nothing:
+
+```
+npm run stamp-check                          # every document with a template
+npm run stamp-check -- --type PF_FORM        # one document type, by code
+npm run stamp-check -- --document 1234       # one document, by id
+npm run stamp-check -- --limit 50
+npm run stamp-check -- --cutoffs 128,160,200 # fixed cut-offs to show alongside
+```
+
+Each box gets its verdict, what decided it, and the measurements: the largest
+image overlap, and on a scanned page the ink percentage, the page's own
+background, and the cut-off used - plus the ink at fixed cut-offs (default
+128, 160, 200) so the background-relative rule can be compared with the simpler
+one. A summary counts verdicts per document type, and lists the documents the
+report disagrees with itself about: a signed document with an empty box, or
+an unsigned one with an occupied box, is where a threshold wants looking at.
+
+**The report names no employee.** Document ids, types, statuses and numbers
+only - it is meant to be pasted into a message, and a list of who has not
+signed what is not.
+
 ---
 
 ## 5. Users
@@ -311,6 +337,13 @@ variable, never its value.
 | `LOG_DIR` | `./logs` | resolved against `backend/` |
 
 ### Optional, sensible defaults
+
+`STAMP_FULL_PAGE_MIN` (0.5), `STAMP_OVERLAP_MIN` (0.25), `STAMP_INK_EMPTY_MAX`
+(0.015), `STAMP_INK_OCCUPIED_MIN` (0.035), `STAMP_INK_MARGIN` (40) - whether a
+box already has a signature in it before one is stamped there. An image on the
+box decides a digital form; on a scan the box's ink is measured against the
+page's own background. `npm run stamp-check` prints the measurements for real
+documents so these can be tuned; every decision is also logged with its numbers.
 
 `DB_PORT` (1433), `DB_INSTANCE` (named instance - set this **or** `DB_PORT`,
 never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),

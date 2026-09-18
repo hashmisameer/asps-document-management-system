@@ -121,6 +121,15 @@ documentRouter.put(
   signatureController.savePlacements,
 )
 
+/* The same boxes, asked about before they are saved: is anything already
+   there? Needs the placing permission because the answer only matters to
+   someone about to stamp, and it reads the document to give it. */
+documentRouter.post(
+  '/:documentId/placements/check',
+  requirePermission(PERMISSIONS.SIGNATURE_PLACE),
+  signatureController.checkPlacements,
+)
+
 documentRouter.post(
   '/:documentId/skip-signature',
   requirePermission(PERMISSIONS.SIGNATURE_SKIP),

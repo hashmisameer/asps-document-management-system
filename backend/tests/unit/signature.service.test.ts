@@ -36,6 +36,7 @@ const db = vi.hoisted(() => ({
   storedFileExists: vi.fn(),
   openStoredFile: vi.fn(),
   stampSignature: vi.fn(),
+  assessBoxes: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -95,6 +96,10 @@ vi.mock('../../src/services/signatureStamp.service.js', () => ({
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
+
+// The occupancy check has its own tests against real PDFs; here it is an
+// oracle whose answer savePlacements has to respect.
+vi.mock('../../src/services/boxOccupancy.service.js', () => ({ assessBoxes: db.assessBoxes }))
 
 const signatureService = await import('../../src/services/signature.service.js')
 
@@ -178,6 +183,25 @@ const PNG_1X1 = Buffer.from(
 )
 
 const esicForm = { ...documentRecord, documentName: 'ESIC Form', documentCode: 'ESIC_FORM' }
+
+/** What the occupancy service says about a box, for the shape savePlacements reads. */
+function assessed(
+  verdict: 'empty' | 'occupied' | 'uncertain',
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    label: '0',
+    signerRole: 'Employee',
+    pageNumber: 1,
+    rect: { x: 0.1, y: 0.8, width: 0.2, height: 0.08 },
+    verdict,
+    decidedBy: verdict === 'empty' ? 'none' : 'image',
+    pageKind: 'digital',
+    overlap: { images: verdict === 'empty' ? 0 : 1, coverage: verdict === 'empty' ? 0 : 0.97 },
+    reason: verdict === 'empty' ? 'no image on the box' : 'an image covers 97% of the box',
+    ...extra,
+  }
+}
 const photoBox = { ...placement, signerRole: 'Photo' as const, y: 0.1, width: 0.15, height: 0.12 }
 
 beforeEach(() => {
@@ -200,6 +224,207 @@ beforeEach(() => {
   db.markApplied.mockResolvedValue(undefined)
   db.setSignatureStatus.mockResolvedValue(true)
   db.storedFileExists.mockResolvedValue(true)
+  db.assessBoxes.mockImplementation((_source: Buffer, _mime: string, boxes: unknown[]) =>
+    Promise.resolve(boxes.map(() => assessed('empty'))),
+  )
+})
+
+describe('checkPlacements', () => {
+  it('asks about the ORIGINAL file, never the signed copy', async () => {
+    db.findStoredFile.mockResolvedValue({
+      ...storedFile,
+      processedFilePath: 'processed/42/signed.pdf',
+    })
+
+    await signatureService.checkPlacements(5, { placements: [placement] })
+
+    expect(db.readStoredFile).toHaveBeenCalledWith('documents/42/original.pdf')
+    expect(db.readStoredFile).not.toHaveBeenCalledWith('processed/42/signed.pdf')
+    expect(db.assessBoxes).toHaveBeenCalledWith(
+      Buffer.from('bytes'),
+      'application/pdf',
+      [
+        {
+          label: '0',
+          signerRole: 'Employee',
+          pageNumber: 1,
+          rect: { x: 0.1, y: 0.8, width: 0.2, height: 0.08 },
+        },
+      ],
+    )
+  })
+
+  it('answers each box by its position in the request', async () => {
+    db.assessBoxes.mockResolvedValue([
+      assessed('empty'),
+      assessed('occupied', {
+        decidedBy: 'ink',
+        pageKind: 'scanned',
+        overlap: { images: 0, coverage: 0 },
+        ink: { percent: 6.1, background: 231, cutoff: 191 },
+        reason: 'ink covers 6.1% of the box',
+      }),
+    ])
+
+    const occupancy = await signatureService.checkPlacements(5, {
+      placements: [placement, { ...placement, signerRole: 'Authoriser', pageNumber: 2 }],
+    })
+
+    expect(occupancy).toEqual([
+      expect.objectContaining({ index: 0, signerRole: 'Employee', verdict: 'empty' }),
+      expect.objectContaining({
+        index: 1,
+        signerRole: 'Authoriser',
+        verdict: 'occupied',
+        decidedBy: 'ink',
+        ink: { percent: 6.1, background: 231, cutoff: 191 },
+      }),
+    ])
+    // No box was written; the answer is the whole of the effect.
+    expect(db.stampSignature).not.toHaveBeenCalled()
+    expect(db.replacePlacements).not.toHaveBeenCalled()
+    expect(db.insertAudit).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the document has no file to look at', async () => {
+    db.findDocument.mockResolvedValue({ ...documentRecord, originalFileName: null })
+    await expect(
+      signatureService.checkPlacements(5, { placements: [placement] }),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    expect(db.assessBoxes).not.toHaveBeenCalled()
+  })
+})
+
+describe('savePlacements over something already there', () => {
+  it('refuses to stamp a box that already has something in it', async () => {
+    db.assessBoxes.mockResolvedValue([assessed('occupied')])
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [placement] },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'The employee signature box on page 1 already has something in it (an image covers 97% of the box).',
+      details: {
+        occupancy: [expect.objectContaining({ index: 0, verdict: 'occupied', decidedBy: 'image' })],
+      },
+    })
+
+    expect(db.stampSignature).not.toHaveBeenCalled()
+    expect(db.replacePlacements).not.toHaveBeenCalled()
+    expect(db.insertAudit).not.toHaveBeenCalled()
+  })
+
+  it('treats a box it cannot decide about the same way', async () => {
+    db.assessBoxes.mockResolvedValue([
+      assessed('uncertain', {
+        decidedBy: 'ink',
+        pageKind: 'scanned',
+        overlap: { images: 0, coverage: 0 },
+        ink: { percent: 2.4, background: 231, cutoff: 191 },
+        reason: 'ink covers 2.4% of the box, between the empty and occupied lines',
+      }),
+    ])
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [placement] },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    expect(db.stampSignature).not.toHaveBeenCalled()
+  })
+
+  it('counts the boxes when more than one is in question', async () => {
+    db.assessBoxes.mockResolvedValue([assessed('occupied'), assessed('empty'), assessed('occupied')])
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        {
+          acknowledgeOccupied: false,
+          placements: [placement, { ...placement, y: 0.5 }, { ...placement, y: 0.3 }],
+        },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({ message: '2 of the boxes already have something in them.' })
+  })
+
+  it('stamps anyway when HR has seen the numbers and said so, and records it', async () => {
+    db.assessBoxes.mockResolvedValue([
+      assessed('empty'),
+      assessed('occupied', {
+        pageNumber: 2,
+        decidedBy: 'ink',
+        pageKind: 'scanned',
+        overlap: { images: 0, coverage: 0 },
+        ink: { percent: 6.123, background: 231, cutoff: 191 },
+        reason: 'ink covers 6.1% of the box',
+      }),
+    ])
+
+    await signatureService.savePlacements(
+      5,
+      {
+        acknowledgeOccupied: true,
+        placements: [placement, { ...placement, pageNumber: 2 }],
+      },
+      hr,
+      context,
+    )
+
+    expect(db.stampSignature).toHaveBeenCalledTimes(1)
+    const entry = db.insertAudit.mock.calls[0]?.[0]
+    const metadata = JSON.parse(entry.metadataJson ?? '{}') as {
+      acknowledgedOccupied: unknown[]
+    }
+    // Only the box that was in question, with what was measured - not the
+    // empty one, and not a bare 'yes'.
+    expect(metadata.acknowledgedOccupied).toEqual([
+      {
+        index: 1,
+        signerRole: 'Employee',
+        page: 2,
+        verdict: 'occupied',
+        decidedBy: 'ink',
+        coverage: 0,
+        inkPercent: 6.12,
+      },
+    ])
+  })
+
+  it('records nothing acknowledged when every box was empty', async () => {
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: true, placements: [placement] },
+      hr,
+      context,
+    )
+    const metadata = JSON.parse(db.insertAudit.mock.calls[0]?.[0].metadataJson ?? '{}') as {
+      acknowledgedOccupied: unknown[]
+    }
+    expect(metadata.acknowledgedOccupied).toEqual([])
+  })
+
+  it('checks before it reads the signature images, so a refusal costs nothing', async () => {
+    db.assessBoxes.mockResolvedValue([assessed('occupied')])
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [placement] },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    expect(db.readStoredFile).not.toHaveBeenCalledWith('signatures/42/sig.png')
+  })
 })
 
 describe('savePlacements', () => {
@@ -209,7 +434,7 @@ describe('savePlacements', () => {
       processedFilePath: 'processed/42/an-earlier-signed-copy.pdf',
     })
 
-    await signatureService.savePlacements(5, { placements: [placement] }, hr, context)
+    await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context)
 
     // Signing again after a correction must start from the unsigned document,
     // or both signatures end up on the page.
@@ -218,7 +443,7 @@ describe('savePlacements', () => {
   })
 
   it('records the signed copy and marks the placements applied', async () => {
-    await signatureService.savePlacements(5, { placements: [placement] }, hr, context)
+    await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context)
 
     expect(db.setProcessedFile).toHaveBeenCalledWith(
       5,
@@ -232,7 +457,7 @@ describe('savePlacements', () => {
     db.findActiveSignature.mockResolvedValue(null)
 
     await expect(
-      signatureService.savePlacements(5, { placements: [placement] }, hr, context),
+      signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context),
     ).rejects.toMatchObject({ statusCode: 409 })
 
     expect(db.stampSignature).not.toHaveBeenCalled()
@@ -243,7 +468,7 @@ describe('savePlacements', () => {
     db.findDocument.mockResolvedValue({ ...documentRecord, originalFileName: null })
 
     await expect(
-      signatureService.savePlacements(5, { placements: [placement] }, hr, context),
+      signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context),
     ).rejects.toMatchObject({ statusCode: 409 })
   })
 
@@ -257,7 +482,7 @@ describe('savePlacements', () => {
     })
 
     it('hands the photograph to the stamper under its own role', async () => {
-      await signatureService.savePlacements(5, { placements: [placement, photoBox] }, hr, context)
+      await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement, photoBox] }, hr, context)
 
       const [input] = db.stampSignature.mock.calls[0] ?? []
       expect(input.signatures.Photo).toEqual({ data: PNG_1X1, mimeType: 'image/png' })
@@ -268,7 +493,7 @@ describe('savePlacements', () => {
     })
 
     it('does NOT mark the document signed when only a photograph was placed', async () => {
-      await signatureService.savePlacements(5, { placements: [photoBox] }, hr, context)
+      await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox] }, hr, context)
 
       // The PDF is rebuilt and the box is kept - a photograph is a valid stamp.
       expect(db.stampSignature).toHaveBeenCalled()
@@ -286,7 +511,7 @@ describe('savePlacements', () => {
     })
 
     it('marks it signed when a signature box is placed alongside the photograph', async () => {
-      await signatureService.savePlacements(5, { placements: [photoBox, placement] }, hr, context)
+      await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox, placement] }, hr, context)
 
       expect(db.setProcessedFile).toHaveBeenCalledWith(
         5,
@@ -299,7 +524,7 @@ describe('savePlacements', () => {
       db.findDocument.mockResolvedValue(documentRecord)
 
       await expect(
-        signatureService.savePlacements(5, { placements: [placement, photoBox] }, hr, context),
+        signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement, photoBox] }, hr, context),
       ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('ESIC') })
 
       expect(db.stampSignature).not.toHaveBeenCalled()
@@ -310,7 +535,7 @@ describe('savePlacements', () => {
       db.findPhoto.mockResolvedValue(null)
 
       await expect(
-        signatureService.savePlacements(5, { placements: [photoBox] }, hr, context),
+        signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox] }, hr, context),
       ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('photograph') })
 
       expect(db.stampSignature).not.toHaveBeenCalled()
@@ -320,7 +545,7 @@ describe('savePlacements', () => {
       db.storedFileExists.mockImplementation(async (path: string) => path !== 'photos/42/photo.png')
 
       await expect(
-        signatureService.savePlacements(5, { placements: [photoBox] }, hr, context),
+        signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [photoBox] }, hr, context),
       ).rejects.toMatchObject({ statusCode: 409 })
     })
   })
@@ -331,7 +556,7 @@ describe('savePlacements', () => {
       processedFilePath: 'processed/42/signed.pdf',
     })
 
-    await signatureService.savePlacements(5, { placements: [] }, hr, context)
+    await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [] }, hr, context)
 
     expect(db.replacePlacements).toHaveBeenCalledWith(5, 42, [], 3)
     // The processed file shows a signature that is no longer placed, and it is
@@ -347,14 +572,14 @@ describe('savePlacements', () => {
     db.replacePlacements.mockRejectedValue(new Error('database is down'))
 
     await expect(
-      signatureService.savePlacements(5, { placements: [placement] }, hr, context),
+      signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context),
     ).rejects.toThrow()
 
     expect(db.discardStoredFile).toHaveBeenCalledWith('processed/42/signed.pdf')
   })
 
   it('records where the signature was put, not merely that one was', async () => {
-    await signatureService.savePlacements(5, { placements: [placement] }, hr, context)
+    await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [placement] }, hr, context)
 
     const entry = db.insertAudit.mock.calls[0]?.[0]
     expect(entry.action).toBe(AUDIT_ACTIONS.SIGNATURE_PLACED_MANUALLY)
@@ -367,7 +592,7 @@ describe('savePlacements', () => {
   it('tells accepting a detection apart from adjusting one', async () => {
     await signatureService.savePlacements(
       5,
-      { placements: [{ ...placement, method: 'Automatic', detectionMethod: 'CV', confidence: 0.9 }] },
+      { acknowledgeOccupied: false, placements: [{ ...placement, method: 'Automatic', detectionMethod: 'CV', confidence: 0.9 }] },
       hr,
       context,
     )
@@ -378,7 +603,7 @@ describe('savePlacements', () => {
 
     await signatureService.savePlacements(
       5,
-      { placements: [{ ...placement, method: 'Adjusted', detectionMethod: 'CV', confidence: 0.9 }] },
+      { acknowledgeOccupied: false, placements: [{ ...placement, method: 'Adjusted', detectionMethod: 'CV', confidence: 0.9 }] },
       hr,
       context,
     )
