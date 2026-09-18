@@ -19,6 +19,7 @@ import * as userRepository from '../repositories/user.repository.js'
 import { generateTemporaryPassword, hashPassword } from '../services/password.service.js'
 import { closePool, getPool } from './pool.js'
 import { getStatus, runMigrations, runSeeds } from './migrate.js'
+import { describeUser } from './userText.js'
 
 type Command =
   | 'status'
@@ -199,38 +200,21 @@ async function resetPassword(argv: string[]): Promise<void> {
   console.log('  not by email or chat. They must change it at their next sign-in.')
 }
 
-/** Who has a login. No passwords, no hashes - those never leave the database. */
+/**
+ * Who has a login. No passwords, no hashes - those never leave the database.
+ *
+ * Reads through the repository like the other two commands. This one used to
+ * carry its own SQL, and it named a column dbo.Users does not have.
+ */
 async function listUsers(): Promise<void> {
-  const pool = await getPool()
-  const result = await pool.request().query<{
-    Username: string
-    FullName: string
-    Role: string
-    IsActive: boolean
-    MustChangePassword: boolean
-    LastLoginAt: Date | null
-  }>(`
-    SELECT Username, FullName, Role, IsActive, MustChangePassword, LastLoginAt
-    FROM   dbo.Users
-    ORDER BY IsActive DESC, Role, Username`)
+  const users = await userRepository.listAll()
 
-  if (result.recordset.length === 0) {
+  if (users.length === 0) {
     console.log('There are no users yet. Create the first with: npm run user:add')
     return
   }
 
-  for (const row of result.recordset) {
-    const notes = [
-      row.IsActive ? null : 'disabled',
-      row.MustChangePassword ? 'must change password' : null,
-      row.LastLoginAt ? null : 'never signed in',
-    ].filter(Boolean)
-
-    console.log(
-      `${row.Username.padEnd(20)} ${row.Role.padEnd(7)} ${row.FullName}` +
-        (notes.length > 0 ? `  (${notes.join(', ')})` : ''),
-    )
-  }
+  for (const user of users) console.log(describeUser(user))
 }
 
 async function main(): Promise<void> {
