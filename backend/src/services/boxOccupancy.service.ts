@@ -63,6 +63,13 @@ export interface InkEvidence {
   background: number
   /** background minus the margin, floored - the brightness below which a pixel is ink. */
   cutoff: number
+  /**
+   * The same box at fixed cut-offs, for comparison only. Never decides
+   * anything; present when `compareCutoffs` was asked for (the stamp-check
+   * report), so the background-relative rule can be judged against the
+   * simpler one it replaced on real documents.
+   */
+  atCutoff?: { cutoff: number; percent: number }[]
 }
 
 export interface BoxAssessment extends BoxToAssess {
@@ -89,6 +96,8 @@ export interface OccupancySettings {
   inkMargin: number
   /** The cut-off never rises above this, so a very dark scan is not all ink. */
   inkCutoffCeiling: number
+  /** Fixed cut-offs to measure alongside, for a report. Not used for any verdict. */
+  compareCutoffs?: readonly number[] | undefined
 }
 
 export function settingsFromEnv(): OccupancySettings {
@@ -233,7 +242,7 @@ export async function toGrey(png: Buffer, orient: boolean = false): Promise<Grey
 export function inkFraction(
   pixels: GreyPixels,
   box: NormalizedRect,
-  settings: Pick<OccupancySettings, 'inkMargin' | 'inkCutoffCeiling'>,
+  settings: Pick<OccupancySettings, 'inkMargin' | 'inkCutoffCeiling' | 'compareCutoffs'>,
 ): InkEvidence {
   const x0 = Math.max(0, Math.floor(box.x * pixels.width))
   const y0 = Math.max(0, Math.floor(box.y * pixels.height))
@@ -264,10 +273,20 @@ export function inkFraction(
   }
 
   const cutoff = Math.min(settings.inkCutoffCeiling, background - settings.inkMargin)
-  let ink = 0
-  for (let v = 0; v < cutoff; v += 1) ink += histogram[v] ?? 0
+  const below = (limit: number): number => {
+    let ink = 0
+    for (let v = 0; v < limit; v += 1) ink += histogram[v] ?? 0
+    return (100 * ink) / total
+  }
 
-  return { percent: (100 * ink) / total, background, cutoff }
+  const evidence: InkEvidence = { percent: below(cutoff), background, cutoff }
+  if (settings.compareCutoffs && settings.compareCutoffs.length > 0) {
+    evidence.atCutoff = settings.compareCutoffs.map((fixed) => ({
+      cutoff: fixed,
+      percent: below(fixed),
+    }))
+  }
+  return evidence
 }
 
 /* -------------------------------------------------------------------------- */
