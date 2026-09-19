@@ -16,8 +16,8 @@ own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 > real SQL Server 2014 Express instance**, and the signing path has been driven
 > end to end against it: an upload that passes the identity check, an employee
 > and an authoriser signature, placements saved, and the signed PDF regenerated.
-> Reports are built. User administration remains a placeholder: accounts are
-> made, listed and reset from the command line (see Authentication).
+> Reports are built, and so is the Users screen (Admin only): add, reset a
+> password, deactivate, change a role - the command line remains as a fallback.
 >
 > The API starts and serves requests without a database: it reports the
 > connection failure at boot and answers `GET /api/health/ready` with 503 until

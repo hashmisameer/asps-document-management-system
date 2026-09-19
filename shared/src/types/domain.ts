@@ -23,6 +23,25 @@ export interface AuthUser {
 }
 
 /**
+ * A user as the Users screen lists them. No password material, ever.
+ *
+ * `hasSignature` is the column the screen exists for: an HR or Admin user
+ * with none has no authorising signature to stamp, and every document they
+ * upload comes out partly stamped. `mustChangePassword` still set means the
+ * temporary password was never changed - they have never really signed in.
+ */
+export interface UserListItem {
+  userId: number
+  username: string
+  fullName: string
+  role: Role
+  isActive: boolean
+  mustChangePassword: boolean
+  lastLoginAt: string | null
+  hasSignature: boolean
+}
+
+/**
  * The signed-in user as the BROWSER receives them: the account, plus the
  * server settings a screen needs in order to warn before the server refuses.
  *
