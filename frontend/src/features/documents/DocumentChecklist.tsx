@@ -27,7 +27,7 @@ import {
 } from '../../components/ui/icons.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
-import { describeStampDecision, signLabel } from './stampDecisionText.js'
+import { describeStampDecision } from './stampDecisionText.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
 import {
@@ -330,13 +330,12 @@ function ChecklistRow({
       show: canSign,
       done: false,
       disabled: !canSign,
-      label: canSign
-        ? signLabel('Sign', describeStampDecision(item))
-        : 'You cannot sign this document',
+      label: canSign ? 'Sign' : 'You cannot sign this document',
     }
   })()
 
-  // What stamping on upload decided, when it left something for HR to do.
+  // Whether stamping on upload stamped this document: three words, no
+  // reasons, and nothing at all in report mode. See stampDecisionText.
   const stampLine = describeStampDecision(item)
 
 
@@ -424,15 +423,11 @@ function ChecklistRow({
             <p className="mt-1 max-w-56 text-xs text-status-rejected">{item.rejectionReason}</p>
           ) : null}
 
-          {/* Stamping on upload left something for HR: a box already written
-              in, an image not on file, a form no template matches - or, in
-              report mode, everything. A REASON, so it gets its own line, in
-              the server's own words; the Sign button beside it is the answer. */}
-          {stampLine ? (
-            <p className="mt-1 max-w-56 text-xs text-status-pending">
-              <span className="font-medium">{stampLine.heading}.</span> {stampLine.detail}
-            </p>
-          ) : null}
+          {/* Whether the template stamped this document. A fact about the
+              document, not a problem with it: a box left alone because it
+              already had a signature in it is normal, so this is grey and
+              three words, and the why stays in the decision row. */}
+          {stampLine ? <p className="mt-1 text-xs text-slate-500">{stampLine}</p> : null}
 
           {/* A WARNING, not a refusal. The document is on file either way.
               Amber rather than red, and with one button: every identity card

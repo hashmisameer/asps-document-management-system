@@ -260,7 +260,10 @@ stamped - the employee's enrolled signature, the uploader's own `/me/signature`
 in the HR box, the employee's photograph on the ESIC form - and the document
 becomes `Added`. Any box left alone (something already in it, an image not on
 file, no matching template, a JPG or PNG scan, a failed identity check) sends
-the document to `ReviewRequired` with the reason on the row:
+the document to `ReviewRequired` with the decision on the row. The checklist
+shows only whether it was stamped - 'Stamped automatically', 'Partly stamped',
+'Not stamped', and nothing at all in report mode; the reasons stay in the
+decision row and the report:
 
 ```jsonc
 // GET /documents/:documentId  - the latest decision travels with the document
