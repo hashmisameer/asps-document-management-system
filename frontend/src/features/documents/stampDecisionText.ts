@@ -1,48 +1,38 @@
 import { SIGNATURE_STATUS, STAMP_OUTCOMES, type EmployeeDocument } from '@asps-dms/shared'
 
 /**
- * What the checklist says about stamping on upload, beside the Sign button.
+ * What the checklist says about stamping on upload: whether it happened,
+ * and nothing else.
  *
- * Said only when it is something HR has to act on: a document that is still
- * waiting for a signature and was not fully stamped when it was uploaded. A
- * document that was stamped whole says so through the Sign button's tick,
- * and one that needs no signature says nothing here at all.
+ * It used to say why - four lines of amber under every document - and a
+ * person glancing at the page read it as something gone wrong, when in most
+ * cases nothing had: a box already had a signature in it, which is normal.
+ * So: three words, in a quiet tone, and no reasons anywhere on the screen.
+ * The decision row keeps everything, and npm run auto-stamp -- --report
+ * prints it for whoever wants to look.
  *
- * Kept apart from the table so the sentences can be tested without a row
- * on screen.
+ * NOTHING IN REPORT MODE. Nothing is stamped in report mode by definition,
+ * so 'Not stamped' under every document for the whole trial would be noise
+ * and not news. The line starts appearing when AUTO_STAMP is set to stamp
+ * and it says something about that document.
  */
 
-export interface StampDecisionLine {
-  /** 'Not stamped automatically' or 'Partly stamped automatically'. */
-  heading: string
-  /** The server's own sentence: what went on, what did not, and why. */
-  detail: string
-  /** True in report mode: nothing was stamped, however the decision read. */
-  reportOnly: boolean
-}
+export type StampDecisionLine = 'Stamped automatically' | 'Partly stamped' | 'Not stamped'
 
 export function describeStampDecision(
   item: Pick<EmployeeDocument, 'signatureStatus' | 'stampDecision'>,
 ): StampDecisionLine | null {
   const decision = item.stampDecision
-  if (!decision) return null
-  // Only while something is still to be done. Once signed - by the stamp or
-  // by HR in the editor - or set aside, the decision is history.
-  if (item.signatureStatus !== SIGNATURE_STATUS.REVIEW_REQUIRED) return null
+  if (!decision || decision.mode !== 'Stamp') return null
 
-  const reportOnly = decision.mode === 'Report'
-  const partly = !reportOnly && decision.outcome === STAMP_OUTCOMES.PARTIAL
-
-  return {
-    heading: partly ? 'Partly stamped automatically' : 'Not stamped automatically',
-    detail: reportOnly
-      ? `Stamping on upload is in report mode, so nothing was stamped. It would have decided: ${decision.summary}`
-      : decision.summary,
-    reportOnly,
+  if (item.signatureStatus === SIGNATURE_STATUS.ADDED) {
+    // Signed by the template, not by HR in the editor: only a decision that
+    // stamped every box leaves a document Added on its own.
+    return decision.outcome === STAMP_OUTCOMES.STAMPED ? 'Stamped automatically' : null
   }
-}
-
-/** The Sign button's tooltip, with the decision folded in when there is one. */
-export function signLabel(base: string, line: StampDecisionLine | null): string {
-  return line ? `${base} - ${line.heading.toLowerCase()}` : base
+  if (item.signatureStatus === SIGNATURE_STATUS.REVIEW_REQUIRED) {
+    return decision.outcome === STAMP_OUTCOMES.PARTIAL ? 'Partly stamped' : 'Not stamped'
+  }
+  // Skipped, not required, or moved on by hand: the decision is history.
+  return null
 }

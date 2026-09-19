@@ -257,8 +257,12 @@ the employee's signature from their record (MMC's folder), the uploader's own
 "My signature", and on the ESIC form the employee's photograph. No screen and
 no approval. A box is left alone when something is already in it, when the
 image it needs is not on file, or when the file matches no template; a
-document with any box left alone goes to HR with the reason beside the Sign
-button, and the "documents to sign" count now counts exactly those.
+document with any box left alone goes to HR, and the "documents to sign"
+count now counts exactly those. The checklist says only whether a document
+was stamped - "Stamped automatically", "Partly stamped", "Not stamped" - in a
+quiet grey, and nothing at all in report mode; a box left alone because it
+already has a signature in it is normal, not a problem. The reasons stay in
+the decision row and in `npm run auto-stamp -- --report`.
 
 Nothing is stamped on a document whose identity check failed, and nothing is
 stamped until the check has settled. A JPG or PNG scan never matches a
