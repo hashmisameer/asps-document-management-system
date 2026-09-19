@@ -2,7 +2,7 @@
 
 Internal employee document management for **ASPS International**.
 
-Manages employee records, a configurable document checklist, submission
+Manages employee records, a fixed document checklist (decided in code), submission
 deadlines, and signature placement on scanned documents. Runs on the company's
 own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 
@@ -12,11 +12,12 @@ own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 > upload and compares it with the employee record, pen-tablet signature capture
 > for both the employee and the authorising user, placement and PDF stamping,
 > shared business rules and safety checks run and are unit-tested.
-> The schema, all three migrations and the seeds **have now been applied to a
+> The schema, its migrations (37 so far) and the seeds **have now been applied to a
 > real SQL Server 2014 Express instance**, and the signing path has been driven
 > end to end against it: an upload that passes the identity check, an employee
 > and an authoriser signature, placements saved, and the signed PDF regenerated.
-> Reports and user administration remain placeholders (Milestone 6).
+> Reports are built. User administration remains a placeholder: accounts are
+> made, listed and reset from the command line (see Authentication).
 >
 > The API starts and serves requests without a database: it reports the
 > connection failure at boot and answers `GET /api/health/ready` with 503 until
@@ -31,7 +32,7 @@ own Windows server against Microsoft SQL Server 2014, over the internal LAN.
 | Database | Microsoft SQL Server 2014 via `mssql`/`tedious` (pure JS, no ODBC) |
 | Auth | Server-side revocable sessions, httpOnly cookie, `crypto.scrypt` hashing |
 | PDF | `pdf-lib` (stamping), `pdfjs-dist` + `@napi-rs/canvas` (rasterising) |
-| OCR / CV | `tesseract.js` (WASM) and a pure-JS morphology detector, behind a provider interface |
+| OCR | `tesseract.js` (WASM), reading a document's text for the identity check. There is no signature detector; boxes come from per-type templates. |
 | Storage | Secure folder on the company server, outside the web root |
 
 No MongoDB. No native build toolchain required on the server.
@@ -111,9 +112,9 @@ trusted, so a caller cannot choose its own log correlation id.
 | `POST /api/employees/:id/archive` | Archives. There is no DELETE. |
 | `POST /api/employees/:id/restore` | Restores an archived employee. |
 | `GET /api/employees/:id/documents` | The checklist, with deadline state derived at read time. |
-| `GET /api/document-types` | The configured checklist. Read-only until Settings. |
+| `GET /api/document-types` | The checklist's document types. Read-only: the list is decided in code. |
 | `GET /api/documents/:id` | One document, with its deadline state. |
-| `POST /api/documents/:id/file` | Uploads or replaces the file (multipart). Refused with 422 `IDENTITY_CHECK_FAILED` unless a reason is given. |
+| `POST /api/documents/:id/file` | Uploads or replaces the file (multipart). Stored at once; the identity check and stamping on upload run afterwards and land on the row. |
 | `POST /api/documents/:id/verify` | Marks it verified. |
 | `POST /api/documents/:id/reject` | Rejects it. A reason is required. |
 | `PATCH /api/documents/:id/deadline` | Overrides this document's deadline. |
@@ -122,7 +123,6 @@ trusted, so a caller cannot choose its own log correlation id.
 | `GET /api/me/signature` | The signed-in user's own authorising signature. |
 | `POST /api/me/signature` | Saves it, as drawn on the pad (multipart). |
 | `GET /api/me/signature/image` | Streams it. |
-| `POST /api/reminders/send` | Emails the pending-documents digest now. `?dryRun=true` renders it without sending. |
 | `GET /api/employees/:id/signature` | Whether a signature is on file, and its size. |
 | `POST /api/employees/:id/signature` | Uploads or replaces it (multipart). |
 | `GET /api/employees/:id/signature/image` | Streams the signature image. |
@@ -204,11 +204,16 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
 
 ## Employee records
 
-- **The employee code is generated, never typed.** `dbo.EmployeeCodeSeq` yields
-  EMP001..EMP999 and then EMP1000 onwards inside the creation transaction, so it
-  keeps working past 999 without renumbering, and the UNIQUE constraint is the
-  final guarantee. The API accepts no code from the client, and there is no
-  route that can change one afterwards.
+- **The employee code is typed, and required.** It is the company's own
+  eight-digit number, because the identity check compares the code printed ON a
+  document with the code on the record - a generated EMP003 would never match a
+  real service card. The UNIQUE constraint is the final guarantee, and there is
+  no route that can change one afterwards.
+- **Who may add an employee is decided by the joining date.** HR may add
+  somebody who joined within the last `JOINING_DATE_WINDOW_DAYS` dates (default
+  7: today and the six before); anybody earlier is an administrator's to add; a
+  joining date in the future is refused for everybody. The same rule applies to
+  the form, the bulk import, and an edit that changes the date.
 - **An employee and their checklist are created together or not at all.** The
   document types are read inside the same transaction as the insert, and one row
   per active type is materialised as `Pending`. A record with no checklist would
@@ -271,8 +276,10 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
   document must confirm is configuration held on the document type, not a rule
   in code: a service card asks for the name, code and Aadhaar number, while a
   qualification certificate asks for the name only.
-- **The file is read before it is stored.** A document that is going to be
-  refused should never have been written to the store in the first place.
+- **The file is stored first and read afterwards.** Reading takes up to a
+  minute, and an upload that waited for it looked hung. The row says `Checking`
+  until the verdict lands; nothing is ever refused - a document that fails is
+  kept, marked `Failed`, and a person confirms it with one click.
 - **Two ways of reading, and which one was used is recorded.** A PDF's own text
   layer is exact - those are the characters the file contains. A scan or a
   photograph has no text layer, so its pages are rendered and OCR'd, which is
@@ -290,16 +297,14 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
   `MissingOnRecord` and is reported. Refusing a document because an employee's
   phone number was never typed in would send HR to rescan a document that was
   always fine, while reporting the gap makes the real fix the obvious one.
-- **A failure can be overridden by a person, in their own name.** A real
-  document can fail because a scan is too poor for OCR to read a digit, so the
-  refusal is a 422 `IDENTITY_CHECK_FAILED` carrying the per-field outcome, and
-  the same upload succeeds when it names a reason. The outcome, the reason and
-  who gave it are stored **on the document**, not only in the audit trail:
-  "this service card was accepted although its Aadhaar number could not be
-  read" has to be visible months later without knowing to go looking.
-- **A refusal is audited even though nothing was stored.** An upload that was
-  turned away is exactly the event this control exists to make visible, and it
-  leaves no other trace - there is no document row to look at afterwards.
+- **A failure is confirmed by a person, in their own name.** Every identity
+  card at this company is a low-contrast photocopy, so OCR failing to read a
+  name is the ordinary case, not a sign the document is wrong. The row carries
+  `Passed`, `Failed` or `Overridden`; an upload sent with a reason is accepted
+  as given and not read at all. The outcome, the reason and who gave it are
+  stored **on the document**, not only in the audit trail: "this service card
+  was accepted although its Aadhaar number could not be read" has to be visible
+  months later without knowing to go looking.
 - **An identity number is never echoed back.** A refusal names the detail that
   could not be found, and for a name or a joining date it says what was
   expected, because that is what makes the message useful. For an Aadhaar, PAN,
@@ -319,12 +324,14 @@ Local accounts only - no Active Directory, LDAP or Entra ID (Section 84).
   it. `SignerRole` on a placement is what says which, and the authoriser is
   always the user saving the placements - never a user id the request names - so
   nobody can sign a document off in a colleague's name.
-- **Both signatures are drawn on a pen tablet**, not uploaded as files. The pad
+- **Both signatures are drawn on a pen tablet or uploaded as a scan.** The pad
   is an ordinary canvas driven by pointer events, so it needs no vendor SDK and
   no bridge process: with its Windows driver installed, the tablet is just a pen
   device. Pen pressure varies the stroke width, and the ink is cropped to its
   own bounds and stored as a transparent PNG - an uncropped canvas would stamp a
-  small signature floating in a large empty box.
+  small signature floating in a large empty box. An uploaded scan has its paper
+  made transparent the same way. Employee images also arrive on their own from
+  MMC's folders (see `docs/deployment.md`).
 - **One signature per employee**, enrolled once and reused on everything they
   sign (Section 24). Each HR user has their own, in `dbo.UserSignatures`, so a
   signed document records who authorised it. Replacing either does *not*
@@ -361,10 +368,11 @@ in the tests rather than round-tripped.
 
 ## Reminders
 
-- **One email, to several people, listing who still owes what.** Each entry is
-  the employee's code and name and the documents with no file against them,
-  worst deadline first. `REMINDER_RECIPIENTS` is a comma-separated list, because
-  who gets chased is an office decision rather than a code change.
+- **One email, to several people, with the overdue list attached.** The body
+  says how many employees have how many overdue documents; the list is an
+  `.xlsx` - one row per overdue document - because 491 rows in an email body
+  was a table nobody could read. `REPORT_RECIPIENTS` is a comma-separated list,
+  because who gets chased is an office decision rather than a code change.
 - **It repeats until the file is uploaded.** The digest is rebuilt from the
   current state on every run and nothing is stored about a reminder having been
   sent, so there is no record to drift out of step with the checklist. A
@@ -372,22 +380,18 @@ in the tests rather than round-tripped.
 - **Pending means no file, not a status.** A rejected document still has no
   acceptable file against it, and a reminder that stopped at `Rejected` would
   drop exactly the documents most in need of chasing.
-- **A document that is not due yet is left out**, unless
-  `REMINDER_INCLUDE_NOT_YET_DUE` says otherwise. Every new employee starts with
-  ten future documents, and listing them from day one makes the digest a copy of
-  the checklist that nobody reads. A document with no deadline at all is still
-  included: it is genuinely outstanding.
-- **Nothing is sent when nothing is outstanding.** A daily email saying all is
+- **Overdue only.** A document due today or later is not in it; a reminder is
+  about what is late, and what is coming up is on the dashboard.
+- **Nothing is sent when nothing is overdue.** A daily email saying all is
   well teaches people to delete it unread, and takes the one that mattered with
   it.
-- **The daily run is a separate process**, `npm run send-reminders`, scheduled
-  by Windows Task Scheduler - not a timer inside the API, which would stop at
-  the next restart and would send twice if the API were ever run as two
-  processes. A hung mail server cannot wedge the API either. `-- --dry-run`
-  prints what would go out and sends nothing.
-- **Sending is off until `REMINDER_ENABLED` is set**, so a freshly deployed
-  server cannot start emailing the office by itself. A dry run works regardless,
-  which is how the wording gets checked before anyone is on the receiving end.
+- **The API sends it itself**, once a day at `REPORT_SEND_TIME` on the server's
+  clock, skipping a day it has already sent. `npm run send-reminders` sends one
+  by hand, and `-- --dry-run` prints the email and the first rows of the sheet
+  and sends nothing.
+- **There is no on/off switch.** It sends when there is somewhere to send to -
+  `REPORT_RECIPIENTS` and `SMTP_HOST` - and not when there is not, which is what
+  a fresh checkout has.
 
 ## Checks
 

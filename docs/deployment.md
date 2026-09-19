@@ -550,7 +550,24 @@ first time somebody needs to add a user.
 
 ## 10. Where to build
 
-**On the laptop, then copy.** The server has no internet, and:
+> **How deploys are actually done now.** This section describes how the server
+> was first set up. Since then it has `node_modules` and a working `npm` (only
+> the registry is unreachable), and every deploy has been a pull and a build on
+> the server itself:
+>
+> ```
+> pm2 stop asps-dms
+> git pull --ff-only origin feat/identity-check-and-signing
+> npm run build
+> pm2 start asps-dms
+> ```
+>
+> plus `npm run db:migrate` when the pull brought a migration. The app runs
+> under pm2 as `asps-dms` from `D:ppssps-document-management-system`.
+> Anything that needs `npm install` - a new dependency - still has to come
+> across by hand as section 9 describes.
+
+**On the laptop, then copy** - the first-time setup. The server has no internet, and:
 
 - `npm run build` needs `node_modules` present, which section 9 has already
   moved by hand;
