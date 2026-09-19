@@ -159,9 +159,15 @@ G:\MMC SOFTWARE\Debug\Signature\00005696.jpg
 ```
 
 Set `MMC_PHOTO_DIR` and `MMC_SIGNATURE_DIR` in `backend/.env` to those folders
-and two things happen. Every employee created from then on - on the form or by
-import - gets whatever MMC holds for their code attached at once. And this
-attaches them to the employees already there:
+and three things happen. Every employee created from then on - on the form or
+by import - gets whatever MMC holds for their code attached at once. **The API
+watches the folders**, so a photograph or a signature MMC writes later - the
+usual case: minutes, hours or days after the employee was created, and rarely
+both at once - is taken in the moment it appears, and the stamp decision is
+run again on that employee's documents still waiting for a signature (a
+document left alone for "the employee has no signature on file" is decided
+about once more, now that they have). And this attaches them to the employees
+already there, by hand, as a fallback:
 
 ```
 npm run attach-mmc-images -- --dry-run     # what WOULD happen, per employee, with totals
@@ -186,7 +192,36 @@ npm run attach-mmc-images -- --limit 20 --as rakesh
   later and it picks those up.
 - Attachments are recorded in the audit trail against the user named by `--as`
   (default: the first administrator) with `source: MMC`, and on the form or
-  import against whoever created the employee.
+  import against whoever created the employee. The watcher records them against
+  `MMC_WATCH_AS`, or the first active administrator.
+
+**How the watcher behaves.** It listens to both folders (`fs.watch`), waits
+until a new file has stopped growing before reading it (two looks two seconds
+apart), and works through files one at a time. Sixty-five signatures arriving
+at once are sixty-five quiet jobs in a row, each re-deciding a handful of
+documents with a short pause between - a few minutes of background work, not a
+spike. A file MMC still has open is retried at 5 s, 30 s, 2 min and 10 min,
+then left to the sweep. An employee who already has the image is left alone;
+a corrected file in MMC does not follow through (the "never replace" rule).
+Archived and left employees are skipped.
+
+**A watcher on a network share can miss files.** Windows delivers folder
+change notifications over SMB as best it can: a burst can overflow the buffer,
+some servers do not forward changes made locally on the share's host, and when
+the connection drops the watcher stops and does not restart by itself. So a
+**sweep** lists both folders every `MMC_SWEEP_MINUTES` (default 10, and once at
+startup) and queues every file for an employee who still lacks that image.
+When a folder becomes unreachable the watcher pauses that folder with one
+warning, retries at 30 s, 1 min and then every 5 min, and **sweeps first** when
+it is back, so nothing that arrived meanwhile is lost - late by minutes, never
+missed. `MMC_WATCH=false` turns the pickup off; `MMC_SWEEP_MINUTES=0` turns the
+net off (not advised on a share).
+
+**If the API is ever run as a Windows service**, `G:` may not exist for the
+service's account - mapped drives belong to the login that mapped them. Today
+the app runs under pm2 from an interactive login and `G:` is there; if that
+changes, put the UNC path in `.env` instead (`\\server\share\MMC SOFTWARE\Debug\Image`),
+which needs no mapping.
 
 ### Is the box already signed? Checking the rule against real documents
 
@@ -263,12 +298,21 @@ A4-shaped. Before drawing any:
 ```
 npm run stamp-check -- --shapes                 # every type
 npm run stamp-check -- --shapes --type PF_FORM  # one type
+npm run stamp-check -- --list                   # the templates saved, and what they cover
 ```
 
-prints each type's shapes with how many documents are each, the sizes seen,
-and whether a template is saved for it - and how many templates would cover
-everything. The template editor shows the same for the sample on screen, and
-warns when the sample is a shape only a few documents have.
+`--shapes` prints each type's shapes with how many documents are each, the
+sizes seen, and whether a template is saved for it - and how many templates
+would cover everything. `--list` is the Templates screen on the console: for
+every type, the templates saved (shape, boxes, who set it and when, how many
+documents it covers) and the shapes still without one, ending with how many
+documents that leaves uncovered. Both name no employee.
+
+The template editor shows the same for the type on screen: a summary line
+("3 shapes: 2 with a template, 1 without. Templates cover 118 of 121 stored
+Appointment Letters (98%)."), a shape filter on the sample list that opens on
+the largest shape with no template and moves on to the next after a save,
+and a warning when the sample is a shape only a few documents have.
 
 **The backlog.** Every document uploaded before this existed is still marked
 "Detecting" - nothing ever moved it on. Once, after migrating:
@@ -423,6 +467,9 @@ box already has a signature in it before one is stamped there. An image on the
 box decides a digital form; on a scan the box's ink is measured against the
 page's own background. `npm run stamp-check` prints the measurements for real
 documents so these can be tuned; every decision is also logged with its numbers.
+
+`MMC_WATCH` (true), `MMC_SWEEP_MINUTES` (10), `MMC_WATCH_AS` (unset - the
+first active administrator) - the MMC pickup, section 4.
 
 `AUTO_STAMP` (`report`) - whether an upload that matches its type's template
 is stamped on the spot (`stamp`) or only decided about and recorded

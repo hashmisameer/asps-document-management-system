@@ -5,6 +5,7 @@ import { closePool, getPool } from './database/pool.js'
 import { closeOcrWorker } from './services/documentText.service.js'
 import { ensureStorageReady } from './services/storage.service.js'
 import { startDailyReport, stopDailyReport } from './services/reportSchedule.service.js'
+import { startMmcWatch, stopMmcWatch } from './services/mmcWatch.service.js'
 import { logger } from './utils/logger.js'
 import { describeError } from './utils/errors.js'
 
@@ -78,6 +79,7 @@ function registerShutdown(server: Server): void {
       const finish = async (): Promise<void> => {
         try {
           stopDailyReport()
+          stopMmcWatch()
           await closePool()
         } catch (err) {
           logger.error({ err }, 'Failed to close the SQL Server pool')
@@ -145,6 +147,11 @@ async function main(): Promise<void> {
   // The daily report. Armed after the database is warm, because the first thing
   // it does is read the outstanding documents.
   startDailyReport()
+
+  // The MMC pickup: photographs and signatures taken in as they appear in
+  // MMC's folders, and the stamp decision run again for the employee. After
+  // the database and the store, because that is where the images go.
+  startMmcWatch()
 }
 
 void main()

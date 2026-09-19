@@ -462,6 +462,33 @@ export async function listStoredFilesOfType(documentTypeId: number): Promise<Sto
   }))
 }
 
+/**
+ * An employee's documents still waiting for a signature, with who uploaded
+ * each - whose authorising signature the HR box would carry when the stamp
+ * decision is run again.
+ */
+export interface AwaitingSignatureRow {
+  documentId: number
+  uploadedBy: number | null
+}
+
+export async function listAwaitingSignature(employeeId: number): Promise<AwaitingSignatureRow[]> {
+  const request = await createRequest()
+  const result = await request.input('employeeId', sql.Int, employeeId).query<{
+    DocumentId: number
+    UploadedBy: number | null
+  }>(`
+      SELECT d.DocumentId, d.UploadedBy
+      FROM   dbo.EmployeeDocuments AS d
+      WHERE  d.EmployeeId = @employeeId
+        AND  d.IsActive = 1
+        AND  d.OriginalFilePath IS NOT NULL
+        AND  d.SignatureStatus IN ('PendingDetection', 'ReviewRequired')
+      ORDER BY d.DocumentId`)
+
+  return result.recordset.map((row) => ({ documentId: row.DocumentId, uploadedBy: row.UploadedBy }))
+}
+
 /** A document waiting for stamping on upload that never came: the backlog. */
 export interface SignatureBacklogRow {
   documentId: number
