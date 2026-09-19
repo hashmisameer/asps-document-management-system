@@ -204,13 +204,13 @@ describe('serving a document', () => {
     expect(response.headers['x-content-type-options']).toBe('nosniff')
   })
 
-  it('stops a Viewer downloading it', async () => {
+  it('lets a Viewer download it too - Management sees, downloads and prints everything', async () => {
     const response = await request(app)
       .get('/api/documents/5/download')
       .set('Cookie', signedInAs(ROLES.VIEWER))
 
-    expect(response.status).toBe(403)
-    expect(db.openStoredFile).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(response.headers['content-disposition']).toContain('attachment')
   })
 
   it('lets HR download it as an attachment', async () => {
@@ -244,7 +244,11 @@ describe('serving a document', () => {
 describe('uploading', () => {
   it('accepts a PDF from HR and returns the updated document', async () => {
     db.findById
-      .mockResolvedValueOnce({ ...documentRecord, status: DOCUMENT_STATUS.PENDING, originalFileName: null })
+      .mockResolvedValueOnce({
+        ...documentRecord,
+        status: DOCUMENT_STATUS.PENDING,
+        originalFileName: null,
+      })
       .mockResolvedValue(documentRecord)
 
     const response = await request(app)
@@ -279,7 +283,11 @@ describe('uploading', () => {
 
   it("reads 'false' from a form field as false", async () => {
     db.findById
-      .mockResolvedValueOnce({ ...documentRecord, status: DOCUMENT_STATUS.PENDING, originalFileName: null })
+      .mockResolvedValueOnce({
+        ...documentRecord,
+        status: DOCUMENT_STATUS.PENDING,
+        originalFileName: null,
+      })
       .mockResolvedValue(documentRecord)
 
     await request(app)

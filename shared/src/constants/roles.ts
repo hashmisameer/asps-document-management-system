@@ -93,16 +93,25 @@ const HR_PERMISSIONS: readonly Permission[] = [
 ]
 
 /**
- * Management / Viewer is read-only.
+ * Management / Viewer: sees, downloads and prints everything, and changes
+ * nothing.
  *
- * ASSUMPTION (pending company confirmation, see docs/open-questions.md Q6):
- * Viewers may PREVIEW documents but may NOT download them. Flip by adding
- * PERMISSIONS.DOCUMENT_DOWNLOAD to this list — no other change is required.
+ * DECIDED 2026-09-19 by Sameer Hashmi for the office (docs/open-questions.md
+ * Q6): Viewers may download. That opens exactly two surfaces they lacked -
+ * a document as an attachment, and an employee's whole file as one PDF, the
+ * Aadhaar and PAN scans inside it. The office knows, and it is what
+ * 'download everything' means here; every one of those documents could
+ * already be previewed on screen. The exports and the checklist print were
+ * always open to them.
+ *
+ * Not a single writing route is on this list, and none may be added without
+ * the office asking: 'change nothing' is the other half of the rule.
  */
 const VIEWER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.EMPLOYEE_READ,
   PERMISSIONS.DOCUMENT_READ,
   PERMISSIONS.DOCUMENT_PREVIEW,
+  PERMISSIONS.DOCUMENT_DOWNLOAD,
   PERMISSIONS.SIGNATURE_READ,
   PERMISSIONS.DOCUMENT_TYPE_READ,
   PERMISSIONS.REPORT_READ,
