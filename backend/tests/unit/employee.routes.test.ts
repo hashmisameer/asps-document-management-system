@@ -439,15 +439,17 @@ describe('the whole employee list', () => {
 })
 
 describe('printing the employee form', () => {
-  it('refuses a Viewer, who may read documents and not take them away', async () => {
-    // The print is now the employee's details followed by their DOCUMENTS, so
-    // it takes DOCUMENT_DOWNLOAD. Enforced on the route and not by hiding the
-    // button: a Viewer who types the URL gets the same answer.
+  it('lets a Viewer print one too - Management sees, downloads and prints everything', async () => {
+    // The print is the employee's details followed by their DOCUMENTS, so it
+    // takes DOCUMENT_DOWNLOAD - which a Viewer holds since 2026-09-19. The
+    // route enforces the permission, not the hidden button, so a Viewer who
+    // types the URL gets the same answer as one who clicks.
     const response = await request(app)
       .get('/api/employees/42/print')
       .set('Cookie', signedInAs(ROLES.VIEWER))
 
-    expect(response.status).toBe(403)
+    expect(response.status).toBe(200)
+    expect(response.headers['content-type']).toContain('application/pdf')
   })
 
   it('lets HR print one employee, and names the file after them', async () => {

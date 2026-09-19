@@ -121,6 +121,13 @@ skipped with the reason), and an edit that _changes_ the date. Refusal is a
 field-level refusal in this API. Test fixtures therefore use dates relative to
 today, or an Admin actor, never hard-coded old dates.
 
+**Viewer = Management: sees, downloads and prints everything, changes
+nothing** (decided 2026-09-19). `VIEWER_PERMISSIONS` holds every read
+permission including `document:download`, and not one writing permission. An
+audit on 2026-09-19 confirmed every writing route refuses a Viewer and no
+button is hidden-but-accepted by the API. Do not add a writing permission to
+that list without the office asking.
+
 Other rules worth knowing before you touch them:
 
 - The checklist (which documents, mandatory or not, deadlines) is **decided in
@@ -205,7 +212,13 @@ typecheck, SQL safety, secret scan and unit tests.
    `DocumentChecklist.tsx`, `TemplateEditorPage.tsx`, a few tests). Not
    reformatted so diffs stay honest; a separate `npm run format` commit would
    clear it. New files are always prettier-clean.
-6. **`docs/api.md` employees example** still says the code is server-assigned
+6. **`GET /employees/:id` returns `aadhaarNumber`, `panNumber`, `uanNumber`,
+   `esiNumber` in clear to anyone with `employee:read` - including Viewers.**
+   Harmless today: as of 2026-09-19 all 588 employees have those four fields
+   blank (checked by Sameer), and no screen renders them. Close it - null them
+   for Viewers, or drop them from the profile response - **before those fields
+   ever start being filled.** The list endpoints already null them.
+7. **`docs/api.md` employees example** still says the code is server-assigned
    (README was fixed 2026-09-19; api.md's example JSON was not).
 
 ## How Sameer likes to work - follow this

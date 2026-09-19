@@ -45,7 +45,7 @@ Permissions are what the server actually checks; roles are bundles of them.
 |---|---|
 | `ADMIN` | Everything HR can do, plus `user:manage`. |
 | `HR` | Full employee, document, deadline and signature workflow, plus reports, audit and settings. |
-| `VIEWER` | Read-only: employees, documents, signatures, document types, reports. **Preview but not download** (open question Q6). |
+| `VIEWER` | Management. Sees, downloads and prints everything - employees, documents, signatures, document types, reports, the employee file - and changes nothing (decided 2026-09-19, Q6). |
 
 A request whose role lacks the permission gets **403 `FORBIDDEN`**.
 
@@ -183,7 +183,7 @@ Read-only until the Settings screen exists. Ten types are seeded; each carries
 | POST | `/documents/:documentId/reject` | `document:reject` | Admin, HR |
 | PATCH | `/documents/:documentId/deadline` | `deadline:update` | Admin, HR |
 | GET | `/documents/:documentId/preview` | `document:preview` | Admin, HR, Viewer |
-| GET | `/documents/:documentId/download` | `document:download` | Admin, HR |
+| GET | `/documents/:documentId/download` | `document:download` | Admin, HR, Viewer |
 
 Documents are **not created** by the API. Creating an employee materialises one
 checklist row per active document type; you upload a file onto an existing row.

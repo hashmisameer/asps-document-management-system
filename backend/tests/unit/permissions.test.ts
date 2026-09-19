@@ -57,14 +57,23 @@ describe('requirePermission', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
-  it('allows a Viewer to preview but not download, per the standing assumption', () => {
+  it('lets a Viewer preview and download, and stops them changing anything', () => {
+    // Decided 2026-09-19: Management sees, downloads and prints everything.
     const viewer = fakeUser({ role: ROLES.VIEWER })
 
     expect(run(requirePermission(PERMISSIONS.DOCUMENT_PREVIEW), viewer)).toHaveBeenCalledWith()
-    expect(
-      (run(requirePermission(PERMISSIONS.DOCUMENT_DOWNLOAD), viewer).mock.calls[0]?.[0] as AppError)
-        .statusCode,
-    ).toBe(403)
+    expect(run(requirePermission(PERMISSIONS.DOCUMENT_DOWNLOAD), viewer)).toHaveBeenCalledWith()
+    for (const writes of [
+      PERMISSIONS.DOCUMENT_UPLOAD,
+      PERMISSIONS.DOCUMENT_REPLACE,
+      PERMISSIONS.EMPLOYEE_UPDATE,
+      PERMISSIONS.SIGNATURE_PLACE,
+      PERMISSIONS.DEADLINE_UPDATE,
+    ]) {
+      expect(
+        (run(requirePermission(writes), viewer).mock.calls[0]?.[0] as AppError).statusCode,
+      ).toBe(403)
+    }
   })
 
   it('fails closed when no user is attached', () => {
