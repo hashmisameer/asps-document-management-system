@@ -11,7 +11,7 @@ import { EmployeeListPage } from './features/employees/EmployeeListPage.js'
 import { ImportEmployeesPage } from './features/employees/ImportEmployeesPage.js'
 import { TemplateEditorPage } from './features/templates/TemplateEditorPage.js'
 import { TemplatesPage } from './features/templates/TemplatesPage.js'
-import { ComingSoonPage } from './pages/ComingSoonPage.js'
+import { UsersPage } from './features/users/UsersPage.js'
 import { ReportsPage } from './pages/ReportsPage.js'
 import { DocumentEmployeesPage } from './pages/DocumentEmployeesPage.js'
 import { DocumentsPage } from './pages/DocumentsPage.js'
@@ -144,7 +144,7 @@ export default function App() {
           path="users"
           element={
             <ProtectedRoute permission={PERMISSIONS.USER_MANAGE}>
-              <ComingSoonPage title="Users" milestone="Milestone 2" />
+              <UsersPage />
             </ProtectedRoute>
           }
         />

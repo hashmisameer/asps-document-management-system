@@ -198,10 +198,12 @@ typecheck, SQL safety, secret scan and unit tests.
      `Passed`, and for the wrong document assert 200 + `Failed` + file kept.
    - `reminders` "refuses to send for a Viewer": tests `POST /api/reminders/send`,
      removed in `95cd86e`. Delete it.
-2. **Users screen** - does not exist. `/users` is a "Milestone 2" placeholder.
-   `user:add`, `user:reset`, `user:list` are CLI only; **deactivating a user and
-   changing a role have no way at all** short of SQL. Sameer has asked what is
-   missing (answer given 2026-09-19) and may ask for the screen next.
+2. **Close self-registration** (`/register`, capped at 5) now that the Users
+   screen exists (built 2026-09-19: list with the Signature column, add, reset
+   password, deactivate/reactivate, change role, all audited). Sameer asked
+   for this as a SEPARATE change so that if something goes wrong he knows
+   which change did it. Not started. The CLI (`user:add/reset/list`) stays as
+   a fallback.
 3. **`dbo.EmployeeDocuments.PageCount` is NULL on every row** - nothing fills it.
    Agreed plan, not built: fill it at upload (the validator already opens the
    PDF and counts pages) plus a one-off `fill-page-counts` command; do NOT fill

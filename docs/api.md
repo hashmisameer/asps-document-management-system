@@ -310,6 +310,53 @@ Status changes go through a state machine. One it does not allow is **409
 
 ---
 
+## Users
+
+| Method | URL | Permission | Roles |
+|---|---|---|---|
+| GET | `/users` | `user:manage` | Admin |
+| POST | `/users` | `user:manage` | Admin |
+| PATCH | `/users/:userId` | `user:manage` | Admin |
+| POST | `/users/:userId/reset-password` | `user:manage` | Admin |
+
+The Users screen. **There is no DELETE**: a user is deactivated, never
+removed, because documents were signed in their name and the audit trail
+carries it. **Passwords are never seen or set by an administrator**: creating
+and resetting both generate a temporary password, return it **once** as
+`temporaryPassword`, and set `mustChangePassword`, so the person changes it at
+their next sign-in. There is no self-service "forgot password"; the
+administrator resets it for whoever asks.
+
+```jsonc
+// GET /users  - no password material, ever
+{ "users": [ {
+  "userId": 3, "username": "hr1", "fullName": "Priya Sharma", "role": "HR",
+  "isActive": true,
+  "mustChangePassword": false,      // true = given an account, never signed in
+  "lastLoginAt": "2026-09-18T04:11:00.000Z",
+  "hasSignature": false             // no authorising signature: their uploads come out partly stamped
+} ] }
+
+// POST /users  -> 201 { user, temporaryPassword }
+{ "username": "new.hr", "fullName": "New Person", "role": "HR" }
+
+// PATCH /users/:userId  - any of fullName, role, isActive. Username is immutable.
+{ "role": "ADMIN" }
+{ "isActive": false }               // ends every session the account has
+
+// POST /users/:userId/reset-password  -> 200 { temporaryPassword }; ends every session
+```
+
+Two refusals answer **409 `CONFLICT`** with the reason: you cannot deactivate
+or demote your own account, and the last active administrator cannot be
+deactivated or moved off `ADMIN`. Every change is audited: `USER_CREATED`,
+`USER_PASSWORD_RESET`, `USER_DEACTIVATED`, `USER_REACTIVATED`, `USER_UPDATED`
+(with `changes: { role: { from, to } }`). Making somebody an administrator
+also lets them add an employee with any past joining date; the role dialog
+says so.
+
+---
+
 ## Placement templates
 
 | Method | URL | Permission | Roles |

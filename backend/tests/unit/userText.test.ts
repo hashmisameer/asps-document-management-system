@@ -19,6 +19,7 @@ function user(overrides: Partial<UserListing> = {}): UserListing {
     isActive: true,
     mustChangePassword: false,
     lastLoginAt: new Date('2026-09-01T04:00:00.000Z'),
+    hasSignature: true,
     ...overrides,
   }
 }
