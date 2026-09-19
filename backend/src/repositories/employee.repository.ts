@@ -472,9 +472,7 @@ export async function listAll(query: EmployeeListAllQuery): Promise<EmployeeList
 export async function findById(employeeId: number): Promise<EmployeeProfile | null> {
   const request = bindCountParams(await createRequest(), todayDateOnly())
 
-  const result = await request
-    .input('employeeId', sql.Int, employeeId)
-    .query<EmployeeProfileRow>(`
+  const result = await request.input('employeeId', sql.Int, employeeId).query<EmployeeProfileRow>(`
       SELECT ${SELECT_EMPLOYEE_COLUMNS},
              c.Total, c.Completed, c.Overdue, c.SignatureReview,
              s.UpdatedAt AS SignatureUpdatedAt
@@ -540,9 +538,9 @@ export async function create(
     )
     .input('suppliedCode', sql.VarChar(20), input.employeeCode ?? null)
     .input('createdBy', sql.Int, createdBy).query<{
-      EmployeeId: number
-      EmployeeCode: string
-    }>(`
+    EmployeeId: number
+    EmployeeCode: string
+  }>(`
       DECLARE @employeeCode VARCHAR(20) = @suppliedCode;
 
       IF @employeeCode IS NULL
@@ -617,7 +615,11 @@ export async function update(employeeId: number, input: UpdateEmployeeInput): Pr
   }
   if ('dateOfBirth' in input) {
     assignments.push('DateOfBirth = @dateOfBirth')
-    request.input('dateOfBirth', sql.Date, input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null)
+    request.input(
+      'dateOfBirth',
+      sql.Date,
+      input.dateOfBirth ? parseDateOnly(input.dateOfBirth) : null,
+    )
   }
   if ('postAppliedFor' in input) {
     assignments.push('PostAppliedFor = @postAppliedFor')
@@ -789,7 +791,9 @@ export async function listFacets(): Promise<{ departments: string[]; designation
       ORDER BY Kind, Value`)
 
   return {
-    departments: result.recordset.filter((row) => row.Kind === 'department').map((row) => row.Value),
+    departments: result.recordset
+      .filter((row) => row.Kind === 'department')
+      .map((row) => row.Value),
     designations: result.recordset
       .filter((row) => row.Kind === 'designation')
       .map((row) => row.Value),
@@ -809,6 +813,66 @@ export interface StoredPhoto {
  * one is ever served, and the earlier copy is there if a replacement turns out
  * to have been the wrong picture.
  */
+/**
+ * An employee as the MMC pickup sees them: who they are and which of the two
+ * images they still lack. Only employees who are on the books - not archived,
+ * not left - because nobody stamps a leaver's paperwork.
+ */
+export interface MmcCandidate {
+  employeeId: number
+  employeeCode: string
+  hasPhoto: boolean
+  hasSignature: boolean
+}
+
+const MMC_CANDIDATE_SELECT = `
+    SELECT e.EmployeeId, e.EmployeeCode,
+           CASE WHEN e.PhotoFilePath IS NULL THEN 0 ELSE 1 END AS HasPhoto,
+           CASE WHEN ${HAS_SIGNATURE} THEN 1 ELSE 0 END AS HasSignature
+    FROM   dbo.Employees AS e
+    WHERE  e.IsActive = 1
+      AND  (e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today)`
+
+interface MmcCandidateRow {
+  EmployeeId: number
+  EmployeeCode: string
+  HasPhoto: number
+  HasSignature: number
+}
+
+function toMmcCandidate(row: MmcCandidateRow): MmcCandidate {
+  return {
+    employeeId: row.EmployeeId,
+    employeeCode: row.EmployeeCode,
+    hasPhoto: row.HasPhoto === 1,
+    hasSignature: row.HasSignature === 1,
+  }
+}
+
+/** The employee an MMC file is for, by the eight-digit code in its name. */
+export async function findMmcCandidateByCode(employeeCode: string): Promise<MmcCandidate | null> {
+  const request = await createRequest()
+  const result = await request
+    .input('today', sql.Date, parseDateOnly(todayDateOnly()))
+    .input('employeeCode', sql.NVarChar(20), employeeCode)
+    .query<MmcCandidateRow>(`${MMC_CANDIDATE_SELECT} AND e.EmployeeCode = @employeeCode`)
+  const row = result.recordset[0]
+  return row ? toMmcCandidate(row) : null
+}
+
+/** Every employee on the books still lacking a photograph or a signature: the sweep's list. */
+export async function listMmcCandidatesMissingImages(): Promise<MmcCandidate[]> {
+  const request = await createRequest()
+  const result = await request
+    .input('today', sql.Date, parseDateOnly(todayDateOnly()))
+    .query<MmcCandidateRow>(
+      `${MMC_CANDIDATE_SELECT}
+       AND (e.PhotoFilePath IS NULL OR NOT ${HAS_SIGNATURE})
+       ORDER BY e.EmployeeCode`,
+    )
+  return result.recordset.map(toMmcCandidate)
+}
+
 export async function setPhoto(employeeId: number, photo: StoredPhoto): Promise<void> {
   const request = await createRequest()
   await request

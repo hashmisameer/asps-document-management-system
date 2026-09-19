@@ -160,6 +160,27 @@ const envSchema = z
      */
     MMC_PHOTO_DIR: absoluteDirectory.optional(),
     MMC_SIGNATURE_DIR: absoluteDirectory.optional(),
+    /**
+     * Whether the API watches the MMC folders and takes a photograph or a
+     * signature in the moment it appears - for an employee created a minute
+     * ago or a year ago - and then runs the stamp decision again on that
+     * employee's waiting documents. On by default when a folder is set.
+     * Off, and the folders are only looked in when an employee is created
+     * and when npm run attach-mmc-images is run by hand.
+     */
+    MMC_WATCH: booleanish.default('true'),
+    /**
+     * How often the folders are listed as a net under the watcher, in
+     * minutes. A watcher on a network share can miss a file; the sweep does
+     * not. 0 switches the sweep off. Runs once at startup either way.
+     */
+    MMC_SWEEP_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
+    /**
+     * Whose name the watcher attaches in, and who signs the HR box when a
+     * waiting document's uploader is gone. The first active administrator
+     * when unset - the same rule the command-line tools use.
+     */
+    MMC_WATCH_AS: z.string().trim().min(1).optional(),
 
     /**
      * Whether a box already has something in it, before a stamp goes there.
