@@ -4,7 +4,7 @@ import {
   AUTO_STAMP_MODES,
   SIGNATURE_STATUS,
   STAMP_OUTCOMES,
-  variantKey,
+  exactVariantKey,
   type AuthUser,
   type AutoStampMode,
   type SignatureStatus,
@@ -46,6 +46,12 @@ import { checkDocument } from './stampCheck.service.js'
  * document still goes to REVIEW_REQUIRED, exactly as it would have with a box
  * left alone, and HR signs it as before. The rows are what the office reads
  * for a few days before AUTO_STAMP is set to stamp.
+ *
+ * ONLY THE TYPES IN AUTO_STAMP_TYPES ARE CANDIDATES. MMC prints the
+ * employee's signature and the HR stamp on every form it generates except the
+ * ESIC form, so every other type is decided 'NotInList' - recorded once, the
+ * file and the template never read - and goes to REVIEW_REQUIRED for HR to
+ * sign by hand or skip. An empty list stamps nothing whatever the mode.
  */
 
 export interface RunResult {
@@ -59,6 +65,10 @@ export interface RunResult {
 
 function modeFromEnv(): AutoStampMode {
   return env.AUTO_STAMP === 'stamp' ? AUTO_STAMP_MODES.STAMP : AUTO_STAMP_MODES.REPORT
+}
+
+function typesFromEnv(): ReadonlySet<string> {
+  return env.AUTO_STAMP_TYPES
 }
 
 /** Where a document that has been decided about, but not fully stamped, goes. */
@@ -107,6 +117,29 @@ export async function run(
     const employee = await employeeRepository.findById(document.employeeId)
     if (employee) await attachQuietly(employee, actor, context)
 
+    // A type not in the list is decided here, with nothing read: not the
+    // file, not the template, not the images. The MMC watcher re-decides an
+    // employee's waiting documents each time something arrives for them, so
+    // the same 'NotInList' is recorded once and not on every visit.
+    const autoStampTypes = typesFromEnv()
+    if (!autoStampTypes.has(document.documentCode)) {
+      const decision = decide({
+        documentCode: document.documentCode,
+        documentName: document.documentName,
+        autoStampTypes,
+        identityCheck: document.identityCheck?.status ?? 'NotChecked',
+        check: null,
+        templateRows: [],
+        images: { employeeSignature: false, authoriserSignature: false, photo: false },
+      })
+      const latest = await stampDecisionRepository.findLatestForDocument(documentId)
+      if (latest?.outcome !== STAMP_OUTCOMES.NOT_IN_LIST) {
+        await recordDecision(documentId, mode, decision, actor, context)
+      }
+      await settle(documentId, startedFrom, SIGNATURE_STATUS.REVIEW_REQUIRED)
+      return { documentId, mode, decision, stamped: 0, status: SIGNATURE_STATUS.REVIEW_REQUIRED }
+    }
+
     const [location, templateRows, employeeSignature, authoriserSignature, photo] =
       await Promise.all([
         employeeDocumentRepository.findStoredFile(documentId),
@@ -138,6 +171,7 @@ export async function run(
     const decision = decide({
       documentCode: document.documentCode,
       documentName: document.documentName,
+      autoStampTypes,
       identityCheck: document.identityCheck?.status ?? 'NotChecked',
       check,
       templateRows,
@@ -184,7 +218,7 @@ export async function run(
         context,
         auditAction: AUDIT_ACTIONS.SIGNATURE_PLACED_FROM_TEMPLATE,
         auditMetadata: {
-          variant: decision.variant ? variantKey(decision.variant) : null,
+          variant: decision.variant ? exactVariantKey(decision.variant) : null,
           leftAlone: decision.boxes
             .filter((box) => box.action === 'skip')
             .map((box) => ({
@@ -303,7 +337,7 @@ async function recordDecision(
     documentId,
     mode,
     outcome: decision.outcome,
-    variantKey: decision.variant ? variantKey(decision.variant) : null,
+    variantKey: decision.variant ? exactVariantKey(decision.variant) : null,
     stampedCount: decision.toStamp.length,
     skippedCount: decision.boxes.length - decision.toStamp.length,
     summary: decision.summary,
@@ -322,7 +356,7 @@ async function recordDecision(
     metadata: {
       mode,
       outcome: decision.outcome,
-      variant: decision.variant ? variantKey(decision.variant) : null,
+      variant: decision.variant ? exactVariantKey(decision.variant) : null,
       toStamp: decision.toStamp.length,
       leftAlone: decision.boxes.length - decision.toStamp.length,
       summary: decision.summary,

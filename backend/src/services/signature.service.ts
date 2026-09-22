@@ -356,7 +356,13 @@ export async function savePlacements(
   }
 
   if (input.placements.length === 0) {
-    return removePlacements(document, actor, context)
+    await removeStamp(document, actor, context, {
+      nextStatus: document.requiresSignature
+        ? SIGNATURE_STATUS.REVIEW_REQUIRED
+        : SIGNATURE_STATUS.NOT_REQUIRED,
+      source: 'editor',
+    })
+    return documentService.getById(documentId)
   }
 
   // Only the signatures this set actually calls for. A document that carries an
@@ -667,11 +673,44 @@ function round(value: number): number {
   return Math.round(value * 10_000) / 10_000
 }
 
-async function removePlacements(
+export interface RemoveStampOptions {
+  /** Where the document's signature status goes once nothing is stamped on it. */
+  nextStatus: SignatureStatus
+  /** Who asked: the editor's empty save, or the unstamp command. */
+  source: 'editor' | 'unstamp command'
+  /** Why, in the words of whoever asked. Recorded in the audit trail. */
+  reason?: string
+}
+
+/**
+ * Takes the application's stamp off a document.
+ *
+ * Deletes the placement rows and the processed file - the processed file
+ * shows a signature that is no longer placed, and it is served in preference
+ * to the original - so the original is what is served again, and moves the
+ * signature status where the caller says. Two callers: the editor, when HR
+ * saves an empty set (back to ReviewRequired: the document is still to be
+ * signed), and the unstamp command, for a document that was signed outside
+ * the application before it was stamped (to Skipped: nothing queues it for
+ * stamping again). The rows go before the status and the status before the
+ * file, so a failure part-way leaves a document that is honest about itself.
+ */
+export async function removeStamp(
   document: EmployeeDocument,
   actor: AuthUser,
   context: RequestContext,
-): Promise<EmployeeDocument> {
+  options: RemoveStampOptions,
+): Promise<{ placementsRemoved: number; processedFileRemoved: boolean }> {
+  if (
+    document.signatureStatus !== options.nextStatus &&
+    !canTransitionSignature(document.signatureStatus, options.nextStatus)
+  ) {
+    throw new ConflictError(
+      `A document whose signature is '${document.signatureStatus}' cannot be moved to '${options.nextStatus}'.`,
+    )
+  }
+
+  const placements = await signaturePlacementRepository.listForDocument(document.documentId)
   await signaturePlacementRepository.replaceForDocument(
     document.documentId,
     document.employeeId,
@@ -679,14 +718,8 @@ async function removePlacements(
     actor.userId,
   )
 
-  // The processed file is dropped rather than kept: it shows a signature that
-  // is no longer placed, and it is served in preference to the original.
   const location = await employeeDocumentRepository.findStoredFile(document.documentId)
-  const nextStatus: SignatureStatus = document.requiresSignature
-    ? SIGNATURE_STATUS.REVIEW_REQUIRED
-    : SIGNATURE_STATUS.NOT_REQUIRED
-
-  await employeeDocumentRepository.setProcessedFile(document.documentId, null, nextStatus)
+  await employeeDocumentRepository.setProcessedFile(document.documentId, null, options.nextStatus)
 
   if (location?.processedFilePath) {
     await storage.discardStoredFile(location.processedFilePath)
@@ -698,10 +731,22 @@ async function removePlacements(
     entityType: AUDIT_ENTITY_TYPES.SIGNATURE_PLACEMENT,
     entityId: document.documentId,
     ipAddress: context.ipAddress,
-    metadata: { employeeCode: document.employeeCode, documentName: document.documentName },
+    metadata: {
+      employeeCode: document.employeeCode,
+      documentName: document.documentName,
+      source: options.source,
+      ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      previousStatus: document.signatureStatus,
+      newStatus: options.nextStatus,
+      placementsRemoved: placements.length,
+      processedFileRemoved: location?.processedFilePath != null,
+    },
   })
 
-  return documentService.getById(document.documentId)
+  return {
+    placementsRemoved: placements.length,
+    processedFileRemoved: location?.processedFilePath != null,
+  }
 }
 
 /**

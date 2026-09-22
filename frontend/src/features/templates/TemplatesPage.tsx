@@ -12,6 +12,7 @@ import { Badge } from '../../components/ui/Badge.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatDateTime } from '../../lib/format.js'
 import { fetchTemplateSummaries, templateKeys } from './api.js'
+import { savedTemplatesNote } from './shapeText.js'
 
 /**
  * Where the signatures and the photograph go on each document type.
@@ -53,6 +54,11 @@ function VariantLine({ variant }: { variant: TemplateVariantSummary }) {
         ) : null}
         {variant.setByName ? ` - set by ${variant.setByName} ${formatDateTime(variant.setAt)}` : null}
       </span>
+      {savedTemplatesNote(variant.savedTemplates) ? (
+        <span className="block text-xs text-slate-500">
+          {savedTemplatesNote(variant.savedTemplates)}
+        </span>
+      ) : null}
     </li>
   )
 }

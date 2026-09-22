@@ -42,6 +42,10 @@ process.env.CORS_ORIGIN = ''
 
 // Off during tests: the digest is exercised by building it, never by sending.
 process.env.REMINDER_ENABLED = 'false'
+// The types the stamping tests upload. Fixed here, not read from the
+// developer's .env: an empty list stamps nothing, and every stamping test
+// would then be testing the list instead of the stamp.
+process.env.AUTO_STAMP_TYPES = 'APPOINTMENT_LETTER,ESIC_FORM'
 delete process.env.SMTP_HOST
 delete process.env.REGISTRATION_SECRET
 

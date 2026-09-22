@@ -294,6 +294,26 @@ threshold wants looking at (section above); "no template for this form" means
 a template is missing or the form is a shape the template does not cover.
 When the decisions read right, set `AUTO_STAMP=stamp` and restart.
 
+**Only the types in `AUTO_STAMP_TYPES` are stamped at all.** MMC prints the
+employee's signature and the HR stamp on every form it generates except the
+ESIC form, and a form signed twice is worse than one HR signs by hand. So the
+setting lists the document codes that are auto-stamped, comma-separated -
+`AUTO_STAMP_TYPES=ESIC_FORM` today - and every other type is recorded as
+"Not in the auto-stamp list" and goes to HR, whatever `AUTO_STAMP` says: not
+a failure, and the report counts it apart. **Missing or empty means no type
+is stamped.** The upload run, the backlog and the MMC pickup's re-decide all
+obey it; HR's own signing in the editor is available for every type as
+before. The checklist shows nothing for such a document.
+
+**Several saved templates of one shape.** Templates saved before matching
+went by shape (before 18 Sept 2026) were keyed on the exact page size, so one
+form can have several saved templates that are now one shape. The stamper
+uses the **newest** of them and only that one; the Templates screen and
+`stamp-check -- --list` say "3 saved templates are this shape - the newest is
+used", and saving the shape once in the editor keeps only that one. (Before
+this was fixed the stamper collected the boxes of every one of them, and a
+form got the employee's signature twice.)
+
 **How many templates a type needs.** A template covers a SHAPE - page count,
 which way up, proportions to one per cent - not an exact size, so the twenty
 sizes a generated form comes out at are one template if they are all
@@ -335,6 +355,27 @@ is what makes the count right; in `stamp` mode it stamps.
 
 Every decision is a row in `dbo.StampDecisions` and an `AUTO_STAMP_DECIDED`
 entry in the audit trail. **The report and the backlog name no employee.**
+
+**Taking a stamp off again.** For a document the application stamped that
+had already been signed outside it - MMC's printed signature, say - the
+stamp is removed through the application's own code, never by SQL:
+
+```
+npm run unstamp -- --documents 5765,5767 --reason "signed by MMC before upload" --dry-run
+npm run unstamp -- --documents 5765,5767 --reason "signed by MMC before upload"
+npm run unstamp -- --file ids.txt --reason "..." --as <username>
+```
+
+For each document it deletes the placement rows and the processed file - so
+the original file is served again - sets the signature status to **Skipped**
+(a person decided this document gets no signature from the application, and
+nothing queues a Skipped document for stamping), and writes a
+`SIGNATURE_REMOVED` audit entry with the reason. It **refuses**, per document
+and saying why, anything with a placement a person put there (Manual,
+Adjusted, Accepted), anything with no placements or no processed file, and an
+id that is no document; the rest of the list is still done, and the exit
+code is 1 when anything was refused. `--dry-run` prints the same table and
+changes nothing. Names no employee.
 
 **Rebuild `shared` before running any script.** The scripts run with `tsx`
 against the built `shared/dist`, not the source; after pulling a change to
@@ -479,6 +520,10 @@ first active administrator) - the MMC pickup, section 4.
 is stamped on the spot (`stamp`) or only decided about and recorded
 (`report`). Run a new server in `report` for a few days and read
 `npm run auto-stamp -- --report` before switching (section 4).
+
+`AUTO_STAMP_TYPES` (unset - **nothing is stamped**) - the document codes that
+are auto-stamped at all, comma-separated: `ESIC_FORM`. Every other type is
+recorded as not in the list and left for HR (section 4).
 
 `DB_PORT` (1433), `DB_INSTANCE` (named instance - set this **or** `DB_PORT`,
 never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),

@@ -220,6 +220,29 @@ const envSchema = z
      * with any box left alone is marked for HR to look at.
      */
     AUTO_STAMP: z.enum(['report', 'stamp']).default('report'),
+    /**
+     * Which document types are stamped on upload at all, by document code,
+     * comma-separated: 'ESIC_FORM', or 'ESIC_FORM,PF_FORM'. Every other type
+     * is recorded as 'not in the auto-stamp list' and left for HR - not a
+     * failure, a decision. Missing or empty means NO type is auto-stamped,
+     * whatever AUTO_STAMP says.
+     *
+     * The list exists because MMC prints the employee's signature and the HR
+     * stamp on every form it generates except the ESIC form, and a form
+     * signed twice is worse than one HR signs by hand.
+     */
+    AUTO_STAMP_TYPES: z
+      .string()
+      .default('')
+      .transform(
+        (value) =>
+          new Set(
+            value
+              .split(',')
+              .map((code) => code.trim())
+              .filter((code) => code.length > 0),
+          ),
+      ),
     REPORT_RECIPIENTS: z
       .string()
       .default('')

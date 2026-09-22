@@ -92,6 +92,20 @@ export function sameVariant(a: TemplateVariant, b: TemplateVariant): boolean {
 }
 
 /**
+ * The key of one SAVED template: its page count and the exact size of the
+ * sample it was drawn on. This is what the rows record, and what tells two
+ * templates of one shape apart. Before matching went by shape, every template
+ * was keyed on this, and the ones saved then are still stored under it.
+ *
+ * The stamper collects a template's boxes by THIS key, never by variantKey:
+ * two templates that round to the same shape are two templates, and only one
+ * of them is stamped from.
+ */
+export function exactVariantKey(variant: TemplateVariant): string {
+  return `${variant.pageCount}p-${variant.widthPt}x${variant.heightPt}`
+}
+
+/**
  * Kept for the template editor's collision warning: a re-save that moved the
  * page by up to this many points is still, to a person, the same sample.
  */

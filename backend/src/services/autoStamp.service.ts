@@ -4,8 +4,8 @@ import {
   SIGNER_ROLES,
   SIGNER_ROLE_LABEL,
   STAMP_OUTCOMES,
+  exactVariantKey,
   isSignatureRole,
-  variantKey,
   type DocumentTypePlacement,
   type SignatureStatus,
   type SignerRole,
@@ -46,6 +46,12 @@ export type IdentityOutcome = 'Passed' | 'Overridden' | 'NotChecked' | 'Checking
 export interface DecideInput {
   documentCode: string
   documentName: string
+  /**
+   * The document codes the server is set to stamp - AUTO_STAMP_TYPES. A type
+   * not in it is decided 'NotInList' before anything else is looked at, and
+   * an empty set stamps nothing at all.
+   */
+  autoStampTypes: ReadonlySet<string>
   identityCheck: IdentityOutcome
   /**
    * The template match and every box's occupancy, from stampCheck. Null when
@@ -89,6 +95,7 @@ export const REASONS = {
   identityFailed:
     'the identity check failed, so this may not be the employee’s document; nothing is stamped on it',
   identityUnfinished: 'the identity check has not finished',
+  notInList: (documentName: string) => `${documentName} is not in the auto-stamp list`,
   noTemplate: (documentName: string) => `${documentName} has no template`,
   noVariant: 'the file matches none of the template’s forms',
   ambiguousVariant: 'the file matches more than one of the template’s forms',
@@ -111,19 +118,22 @@ function roleWord(role: SignerRole): string {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The boxes of the variant the file matched, each paired with what the
+ * The boxes of the saved template the file matched, each paired with what the
  * occupancy check found in it.
  *
- * stampCheck assesses the boxes in template-row order and labels each with
- * its index; the pairing is by that label, and a box the check did not
- * assess is paired with nothing - which the rules below treat as unknown,
- * never as empty.
+ * The template's rows are picked out by its EXACT key - the sample size it
+ * was drawn on - and never by the rounded shape key, which would gather the
+ * rows of every older template of the same shape as well and stamp each of
+ * their boxes. stampCheck chose the one template and assessed its boxes in
+ * row order, labelling each with its index; the pairing is by that label,
+ * and a box the check did not assess is paired with nothing - which the
+ * rules below treat as unknown, never as empty.
  */
 function boxesOf(check: StampCheckResult, rows: readonly DocumentTypePlacement[]) {
   if (!check.variant) return []
-  const key = variantKey(check.variant)
+  const key = exactVariantKey(check.variant)
   return rows
-    .filter((row) => variantKey(row.variant) === key)
+    .filter((row) => exactVariantKey(row.variant) === key)
     .map((template, index) => ({
       template,
       occupancy: check.boxes.find((box) => box.label === String(index)) ?? null,
@@ -194,7 +204,14 @@ function nothing(outcome: StampOutcome, reason: string): Decision {
  * finishing job rather than a signing job.
  */
 export function decide(input: DecideInput): Decision {
-  // The identity check first, before the file is even looked at. A document
+  // The list first: a type the server is not set to stamp is left for HR
+  // whatever else is true of the file. Not a failure - MMC signs most forms
+  // itself, and this is how the application knows which ones it does not.
+  if (!input.autoStampTypes.has(input.documentCode)) {
+    return nothing(STAMP_OUTCOMES.NOT_IN_LIST, REASONS.notInList(input.documentName))
+  }
+
+  // The identity check next, before the file is even looked at. A document
   // filed against the wrong employee must never get this employee's signature
   // on it, however well it matches a template.
   if (input.identityCheck === 'Failed') {
@@ -245,7 +262,11 @@ export function decide(input: DecideInput): Decision {
     boxes,
     toStamp,
     nextStatus: complete ? SIGNATURE_STATUS.ADDED : SIGNATURE_STATUS.REVIEW_REQUIRED,
-    summary: summarise(toStamp, skipped),
+    summary:
+      summarise(toStamp, skipped) +
+      (check.templatesInShape > 1
+        ? ` (${check.templatesInShape} saved templates are this shape; the newest was used.)`
+        : ''),
   }
 }
 

@@ -11,6 +11,7 @@ import {
 } from '../../src/services/boxOccupancy.service.js'
 import {
   checkDocument,
+  chooseTemplate,
   formatResult,
   formatSummary,
   summarise,
@@ -147,11 +148,58 @@ describe('checkDocument', () => {
     expect(result.detail).toContain('A4 portrait, 2 pages')
   })
 
-  it('reports a document two templates claim, and assesses neither', async () => {
-    // Two variants a point apart both match within the slack.
+  it('stamps from the NEWEST of several saved templates that are one shape, and from no other', async () => {
+    // Three templates saved under the old exact-size key - 595x841, 596x842,
+    // 594x840 - are all A4 and all one shape now. Every box of every one of
+    // them used to be handed to the stamper, and a form got two employee
+    // signatures. The newest wins; the rest are not assessed.
     const rows = [
-      templateRow(A4_ONE),
-      templateRow({ pageCount: 1, widthPt: 596, heightPt: 842 }, { documentTypePlacementId: 2 }),
+      templateRow(
+        { pageCount: 1, widthPt: 595, heightPt: 841 },
+        { documentTypePlacementId: 1, createdAt: '2026-09-01T00:00:00.000Z', x: 0.1 },
+      ),
+      templateRow(
+        { pageCount: 1, widthPt: 596, heightPt: 842 },
+        { documentTypePlacementId: 2, createdAt: '2026-09-10T00:00:00.000Z', x: BOX.x },
+      ),
+      templateRow(
+        { pageCount: 1, widthPt: 596, heightPt: 842 },
+        {
+          documentTypePlacementId: 3,
+          createdAt: '2026-09-10T00:00:00.000Z',
+          signerRole: 'Authoriser',
+          x: 0.2,
+        },
+      ),
+      templateRow(
+        { pageCount: 1, widthPt: 594, heightPt: 840 },
+        { documentTypePlacementId: 4, createdAt: '2026-09-05T00:00:00.000Z', x: 0.3 },
+      ),
+    ]
+    const result = await checkDocument(candidate, rows, {
+      settings: SETTINGS,
+      readFile: readFileOf(await makePdf({ imageOnBox: true })),
+    })
+
+    expect(result.outcome).toBe('checked')
+    expect(result.variant).toEqual({ pageCount: 1, widthPt: 596, heightPt: 842 })
+    expect(result.templatesInShape).toBe(3)
+    // The newest template's two boxes, in its row order - one employee box,
+    // not three.
+    expect(result.boxes.map((box) => [box.signerRole, box.rect.x])).toEqual([
+      ['Employee', BOX.x],
+      ['Authoriser', 0.2],
+    ])
+    expect(result.boxes[0]?.verdict).toBe('occupied')
+  })
+
+  it('reports a document two templates of DIFFERENT shapes both claim, and assesses neither', async () => {
+    // Each within one per cent of the document, but more than one per cent
+    // apart from each other: two forms, not one saved twice. Nothing picks
+    // the nearer.
+    const rows = [
+      templateRow({ pageCount: 1, widthPt: 595, heightPt: 836 }),
+      templateRow({ pageCount: 1, widthPt: 595, heightPt: 847 }, { documentTypePlacementId: 2 }),
     ]
     const result = await checkDocument(candidate, rows, {
       settings: SETTINGS,
@@ -159,6 +207,7 @@ describe('checkDocument', () => {
     })
 
     expect(result.outcome).toBe('ambiguousVariant')
+    expect(result.templatesInShape).toBe(2)
     expect(result.boxes).toEqual([])
   })
 
@@ -212,13 +261,79 @@ describe('the comparison cut-offs', () => {
 })
 
 describe('variantsOf', () => {
-  it('lists each variant once however many boxes it has', () => {
+  it('lists each saved template once however many boxes it has', () => {
     const rows = [
       templateRow(A4_ONE),
       templateRow(A4_ONE, { documentTypePlacementId: 2, signerRole: 'Authoriser' }),
       templateRow(A4_TWO, { documentTypePlacementId: 3 }),
     ]
-    expect(variantsOf(rows)).toEqual([A4_ONE, A4_TWO])
+    expect(variantsOf(rows).map((t) => t.variant)).toEqual([A4_ONE, A4_TWO])
+  })
+
+  it('keeps templates of one shape apart by their exact sample size', () => {
+    // 595x841 and 596x842 are one shape and were two saves. Grouped by the
+    // rounded shape key they fused, and both templates' boxes were stamped.
+    const rows = [
+      templateRow({ pageCount: 1, widthPt: 595, heightPt: 841 }),
+      templateRow({ pageCount: 1, widthPt: 596, heightPt: 842 }, { documentTypePlacementId: 2 }),
+    ]
+    expect(variantsOf(rows)).toHaveLength(2)
+    expect(variantsOf(rows).map((t) => t.key)).toEqual(['1p-595x841', '1p-596x842'])
+  })
+
+  it('dates a template by its newest row', () => {
+    const rows = [
+      templateRow(A4_ONE, { documentTypePlacementId: 1, createdAt: '2026-09-01T00:00:00.000Z' }),
+      templateRow(A4_ONE, { documentTypePlacementId: 2, createdAt: '2026-09-03T00:00:00.000Z' }),
+    ]
+    expect(variantsOf(rows)[0]).toMatchObject({
+      savedAt: '2026-09-03T00:00:00.000Z',
+      newestRowId: 2,
+    })
+  })
+})
+
+describe('chooseTemplate', () => {
+  const saved = (
+    variant: { pageCount: number; widthPt: number; heightPt: number },
+    savedAt: string,
+    id = 1,
+  ) => variantsOf([templateRow(variant, { documentTypePlacementId: id, createdAt: savedAt })])[0]!
+
+  it('chooses the one template that matches', () => {
+    const only = saved(A4_ONE, '2026-09-01T00:00:00.000Z')
+    const other = saved(A4_TWO, '2026-09-01T00:00:00.000Z', 2)
+    expect(chooseTemplate([only, other], A4_ONE).chosen).toBe(only)
+  })
+
+  it('chooses the newest when several of one shape match', () => {
+    const older = saved({ pageCount: 1, widthPt: 595, heightPt: 841 }, '2026-09-01T00:00:00.000Z', 1)
+    const newest = saved({ pageCount: 1, widthPt: 596, heightPt: 842 }, '2026-09-10T00:00:00.000Z', 2)
+    const middle = saved({ pageCount: 1, widthPt: 594, heightPt: 840 }, '2026-09-05T00:00:00.000Z', 3)
+    const result = chooseTemplate([older, newest, middle], A4_ONE)
+    expect(result.chosen).toBe(newest)
+    expect(result.matching).toHaveLength(3)
+  })
+
+  it('breaks a tie on time by the higher row id', () => {
+    const a = saved({ pageCount: 1, widthPt: 595, heightPt: 841 }, '2026-09-01T00:00:00.000Z', 5)
+    const b = saved({ pageCount: 1, widthPt: 596, heightPt: 842 }, '2026-09-01T00:00:00.000Z', 9)
+    expect(chooseTemplate([a, b], A4_ONE).chosen).toBe(b)
+  })
+
+  it('chooses nothing when the matches are different shapes', () => {
+    const tall = saved({ pageCount: 1, widthPt: 595, heightPt: 847 }, '2026-09-01T00:00:00.000Z', 1)
+    const short = saved({ pageCount: 1, widthPt: 595, heightPt: 836 }, '2026-09-10T00:00:00.000Z', 2)
+    const result = chooseTemplate([tall, short], A4_ONE)
+    expect(result.chosen).toBeNull()
+    expect(result.matching).toHaveLength(2)
+  })
+
+  it('chooses nothing when nothing matches', () => {
+    expect(chooseTemplate([saved(A4_TWO, '2026-09-01T00:00:00.000Z')], A4_ONE)).toEqual({
+      chosen: null,
+      matching: [],
+    })
   })
 })
 
@@ -232,6 +347,7 @@ describe('printing', () => {
     outcome: 'checked',
     measured: A4_ONE,
     variant: A4_ONE,
+    templatesInShape: 1,
     boxes: [
       {
         label: '0',
@@ -277,6 +393,7 @@ describe('printing', () => {
       'measured',
       'outcome',
       'signatureStatus',
+      'templatesInShape',
       'variant',
     ])
     const text = [...formatResult(checked), ...formatSummary(summarise([checked]), SETTINGS)].join('\n')

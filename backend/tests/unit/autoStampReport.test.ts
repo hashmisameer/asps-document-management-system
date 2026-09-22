@@ -175,4 +175,33 @@ describe('summarise', () => {
     expect(summarise([]).decisions).toBe(0)
     expect(formatSummary(summarise([]))[0]).toBe('0 decision(s): 0 recorded only, 0 stamped')
   })
+
+  it('counts a type not in the auto-stamp list apart, and never as a reason a box was left alone', () => {
+    const notInList = row({
+      documentId: 502,
+      documentCode: 'PF_FORM',
+      documentName: 'PF Form',
+      outcome: STAMP_OUTCOMES.NOT_IN_LIST,
+      variantKey: null,
+      stampedCount: 0,
+      skippedCount: 0,
+      boxes: [],
+      summary: 'Not stamped: PF Form is not in the auto-stamp list.',
+    })
+    const summary = summarise([...rows, notInList, { ...notInList, documentId: 503 }])
+
+    expect(summary.decisions).toBe(6)
+    expect(summary.notInList).toBe(2)
+    expect(summary.byOutcome[STAMP_OUTCOMES.NOT_IN_LIST]).toBe(2)
+    expect(summary.reasons.map((r) => r.reason)).not.toContain('Not in the auto-stamp list')
+    // The counts of what was stamped and left alone are unchanged by them.
+    expect(summary.boxesStamped).toBe(3)
+    expect(summary.boxesLeftAlone).toBe(3)
+
+    const lines = formatSummary(summary)
+    expect(lines[0]).toBe(
+      '6 decision(s): 3 recorded only, 1 stamped, 2 not in the auto-stamp list (left for HR on purpose)',
+    )
+    expect(lines).toContain('      2  Not in the auto-stamp list')
+  })
 })
