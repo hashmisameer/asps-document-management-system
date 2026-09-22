@@ -77,4 +77,14 @@ describe('describeStampDecision', () => {
     expect(line(SIGNATURE_STATUS.NOT_REQUIRED, decision())).toBeNull()
     expect(line(SIGNATURE_STATUS.REVIEW_REQUIRED, null)).toBeNull()
   })
+
+  it('says nothing for a type not in the auto-stamp list - it was never a candidate', () => {
+    const notInList = decision({
+      outcome: STAMP_OUTCOMES.NOT_IN_LIST,
+      summary: 'Not stamped: PF Form is not in the auto-stamp list.',
+      stampedCount: 0,
+    })
+    expect(line(SIGNATURE_STATUS.REVIEW_REQUIRED, notInList)).toBeNull()
+    expect(line(SIGNATURE_STATUS.ADDED, notInList)).toBeNull()
+  })
 })

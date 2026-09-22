@@ -94,3 +94,17 @@ export function sampleIsCovered(
   const group = groupFor(shapes, variant)
   return group ? group.documentIds.includes(documentId) : false
 }
+
+/**
+ * What the Templates screen says when a shape holds more than one saved
+ * template. Null when it holds one, which is the normal case.
+ *
+ * Templates saved when the key was the exact page size can be several to a
+ * shape; the stamper uses the newest, and saving the shape once in the editor
+ * replaces them all. Said plainly, as a fact and a one-click remedy - not as
+ * an error, because nothing is wrong with the newest.
+ */
+export function savedTemplatesNote(savedTemplates: number): string | null {
+  if (savedTemplates <= 1) return null
+  return `${savedTemplates} saved templates are this shape - the newest is used. Save it once to keep only that one.`
+}

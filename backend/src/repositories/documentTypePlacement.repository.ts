@@ -1,7 +1,6 @@
 import {
   IDENTITY_CARD_DOCUMENT_CODES,
   sameVariant,
-  variantKey,
   type DocumentTypePlacement,
   type DocumentTypeTemplateSummary,
   type SignerRole,
@@ -303,6 +302,7 @@ export async function summaries(): Promise<DocumentTypeTemplateSummary[]> {
         widthPt: row.SampleWidthPt,
         heightPt: row.SampleHeightPt,
       },
+      savedTemplates: 1,
       pageRotation: row.PageRotation ?? 0,
       boxes: row.Boxes ?? 0,
       roles: {
@@ -320,16 +320,27 @@ export async function summaries(): Promise<DocumentTypeTemplateSummary[]> {
     if (summary.status === 'unset') summary.status = 'set'
   }
 
-  // A defensive de-duplication: the GROUP BY makes variants distinct already,
-  // and the key is what the screen and the stamper compare on.
+  // One entry per SHAPE, carrying how many saved templates it really holds.
+  // Templates saved under the old exact-size key can be several to a shape;
+  // the stamper uses the newest, so the entry shows the newest one's boxes and
+  // says how many stand behind it - never silently one, which is what let
+  // three PF templates look like one on this screen while all three stamped.
   for (const summary of byType.values()) {
-    const seen = new Set<string>()
-    summary.variants = summary.variants.filter((v) => {
-      const key = variantKey(v.variant)
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+    const folded: TemplateVariantSummary[] = []
+    for (const candidate of summary.variants) {
+      const existing = folded.find((entry) => sameVariant(entry.variant, candidate.variant))
+      if (!existing) {
+        folded.push(candidate)
+        continue
+      }
+      const newer = (candidate.setAt ?? '') > (existing.setAt ?? '')
+      const kept = newer ? candidate : existing
+      folded[folded.indexOf(existing)] = {
+        ...kept,
+        savedTemplates: existing.savedTemplates + 1,
+      }
+    }
+    summary.variants = folded
   }
 
   return [...byType.values()]

@@ -598,6 +598,7 @@ describe('savePlacements', () => {
       ...storedFile,
       processedFilePath: 'processed/42/signed.pdf',
     })
+    db.listPlacements.mockResolvedValue([{ signaturePlacementId: 1 }, { signaturePlacementId: 2 }])
 
     await signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [] }, hr, context)
 
@@ -606,9 +607,18 @@ describe('savePlacements', () => {
     // served in preference to the original, so it must not be left behind.
     expect(db.setProcessedFile).toHaveBeenCalledWith(5, null, SIGNATURE_STATUS.REVIEW_REQUIRED)
     expect(db.discardStoredFile).toHaveBeenCalledWith('processed/42/signed.pdf')
-    expect(db.insertAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: AUDIT_ACTIONS.SIGNATURE_REMOVED }),
-    )
+    const entry = db.insertAudit.mock.calls.find(
+      (call) => (call[0] as { action: string }).action === AUDIT_ACTIONS.SIGNATURE_REMOVED,
+    )?.[0] as { metadataJson: string } | undefined
+    expect(entry).toBeDefined()
+    // The trail says who asked and what went: the editor, two rows, the file.
+    expect(JSON.parse(entry!.metadataJson)).toMatchObject({
+      source: 'editor',
+      previousStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
+      newStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
+      placementsRemoved: 2,
+      processedFileRemoved: true,
+    })
   })
 
   it('deletes the generated file when the rows cannot be saved', async () => {

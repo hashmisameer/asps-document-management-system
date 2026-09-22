@@ -64,6 +64,12 @@ export function formatDecision(row: StampDecisionReportRow): string[] {
 
 export interface ReportSummary {
   decisions: number
+  /**
+   * Documents of a type the server is not set to stamp. Counted apart, and
+   * never among the reasons boxes were left alone: they were left for HR on
+   * purpose, and a report that listed them as failures would be wrong.
+   */
+  notInList: number
   byOutcome: Partial<Record<StampOutcome, number>>
   /** Boxes that were, or in report mode would have been, stamped. */
   boxesStamped: number
@@ -83,9 +89,14 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
   let boxesLeftAlone = 0
   let reportMode = 0
   let stampMode = 0
+  let notInList = 0
 
   for (const row of rows) {
     byOutcome[row.outcome] = (byOutcome[row.outcome] ?? 0) + 1
+    if (row.outcome === STAMP_OUTCOMES.NOT_IN_LIST) {
+      notInList += 1
+      continue
+    }
     boxesStamped += row.stampedCount
     boxesLeftAlone += row.skippedCount
     if (row.mode === 'Report') reportMode += 1
@@ -104,6 +115,7 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
 
   return {
     decisions: rows.length,
+    notInList,
     byOutcome,
     boxesStamped,
     boxesLeftAlone,
@@ -117,7 +129,10 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
 
 export function formatSummary(summary: ReportSummary): string[] {
   const lines = [
-    `${summary.decisions} decision(s): ${summary.reportMode} recorded only, ${summary.stampMode} stamped`,
+    `${summary.decisions} decision(s): ${summary.reportMode} recorded only, ${summary.stampMode} stamped` +
+      (summary.notInList > 0
+        ? `, ${summary.notInList} not in the auto-stamp list (left for HR on purpose)`
+        : ''),
     `boxes: ${summary.boxesStamped} stamped (or would be), ${summary.boxesLeftAlone} left alone`,
     '',
     'by outcome:',

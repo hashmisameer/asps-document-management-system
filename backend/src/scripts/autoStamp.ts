@@ -132,6 +132,7 @@ async function backlog(flags: Map<string, string>): Promise<void> {
       (env.AUTO_STAMP === 'stamp'
         ? 'documents that match a template WILL be stamped.'
         : 'decisions are recorded and nothing is stamped.') +
+      `\nAUTO_STAMP_TYPES=${[...env.AUTO_STAMP_TYPES].join(',') || '(empty: no type is stamped)'}` +
       '\n',
   )
 
@@ -141,8 +142,19 @@ async function backlog(flags: Map<string, string>): Promise<void> {
   }
 
   if (dryRun) {
-    for (const row of rows) console.log(`#${row.documentId}  ${row.documentName}`)
-    console.log('\nDry run: nothing was decided, recorded or changed.')
+    let notInList = 0
+    for (const row of rows) {
+      const listed = env.AUTO_STAMP_TYPES.has(row.documentCode)
+      if (!listed) notInList += 1
+      console.log(
+        `#${row.documentId}  ${row.documentName}` + (listed ? '' : '  not in the auto-stamp list'),
+      )
+    }
+    console.log(
+      `\n${rows.length - notInList} would be decided against a template, ` +
+        `${notInList} recorded as not in the auto-stamp list.` +
+        '\nDry run: nothing was decided, recorded or changed.',
+    )
     return
   }
 

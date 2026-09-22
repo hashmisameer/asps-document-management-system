@@ -14,7 +14,7 @@ import { createRequest } from '../../src/database/pool.js'
 import * as documentTypePlacementRepository from '../../src/repositories/documentTypePlacement.repository.js'
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as employeeDocumentRepository from '../../src/repositories/employeeDocument.repository.js'
-import { runBacklog } from '../../src/services/autoStampRun.service.js'
+import { run, runBacklog } from '../../src/services/autoStampRun.service.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
 /**
@@ -92,6 +92,7 @@ describe('stamping on upload, end to end', () => {
   let adminUserId = 0
   let letterTypeId = 0
   const originalMode = env.AUTO_STAMP
+  const originalTypes = env.AUTO_STAMP_TYPES
 
   beforeAll(async () => {
     await ensureSchema()
@@ -119,6 +120,7 @@ describe('stamping on upload, end to end', () => {
 
   afterAll(async () => {
     ;(env as { AUTO_STAMP: string }).AUTO_STAMP = originalMode
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = originalTypes
     await closeDatabase()
   })
 
@@ -254,6 +256,76 @@ describe('stamping on upload, end to end', () => {
     const served = await agent.get(`/api/documents/${letter.documentId}/preview`)
     expect(served.status).toBe(200)
     expect(served.headers['content-type']).toContain('application/pdf')
+  })
+
+  it('leaves a type that is not in the auto-stamp list for HR, and stamps nothing on it', async () => {
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = new Set(['ESIC_FORM'])
+    try {
+      const hr = await createUser('hr.notlisted', 'HR')
+      const agent = await signIn(app(), hr)
+      const mine = await agent
+        .post('/api/me/signature')
+        .field('capture', 'Uploaded')
+        .attach('file', signaturePng(), { filename: 'mine.png', contentType: 'image/png' })
+      expect(mine.status).toBe(200)
+      const { employee, letter } = await employeeWithSignature(agent)
+
+      // Everything a stamp needs is there - the template, both signatures,
+      // stamp mode - and the type is not in the list, so nothing goes on.
+      const upload = await agent
+        .post(`/api/documents/${letter.documentId}/file`)
+        .attach('file', await letterFor('Ravi Kumar', employee.employeeCode, JOINED_ON_PAPER), {
+          filename: 'letter.pdf',
+          contentType: 'application/pdf',
+        })
+      expect(upload.status).toBe(200)
+
+      const document = await settled(agent, letter.documentId)
+
+      expect(document.signatureStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+      expect(document.hasProcessedFile).toBe(false)
+      expect(document.stampDecision).toMatchObject({
+        mode: 'Stamp',
+        outcome: STAMP_OUTCOMES.NOT_IN_LIST,
+        stampedCount: 0,
+        skippedCount: 0,
+        boxes: [],
+      })
+      expect(document.stampDecision?.summary).toBe(
+        'Not stamped: Appointment Letter is not in the auto-stamp list.',
+      )
+
+      const request = await createRequest()
+      const placements = await request.query<{ N: number }>(
+        `SELECT COUNT(*) AS N FROM dbo.SignaturePlacements WHERE DocumentId = ${letter.documentId}`,
+      )
+      expect(placements.recordset[0]?.N).toBe(0)
+
+      // The watcher's re-decide would find the same document waiting; a second
+      // run records nothing new.
+      const decisions = await request.query<{ N: number }>(
+        `SELECT COUNT(*) AS N FROM dbo.StampDecisions WHERE DocumentId = ${letter.documentId}`,
+      )
+      expect(decisions.recordset[0]?.N).toBe(1)
+      await run(
+        letter.documentId,
+        {
+          userId: hr.userId,
+          username: hr.username,
+          fullName: 'HR',
+          role: 'HR',
+          mustChangePassword: false,
+        },
+        { ipAddress: null, userAgent: 'test' },
+      )
+      const again = await request.query<{ N: number }>(
+        `SELECT COUNT(*) AS N FROM dbo.StampDecisions WHERE DocumentId = ${letter.documentId}`,
+      )
+      expect(again.recordset[0]?.N).toBe(1)
+    } finally {
+      ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = originalTypes
+    }
   })
 
   it('leaves a scan alone: not a PDF, so no template can match it', async () => {

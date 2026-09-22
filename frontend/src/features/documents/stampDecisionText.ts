@@ -15,6 +15,10 @@ import { SIGNATURE_STATUS, STAMP_OUTCOMES, type EmployeeDocument } from '@asps-d
  * so 'Not stamped' under every document for the whole trial would be noise
  * and not news. The line starts appearing when AUTO_STAMP is set to stamp
  * and it says something about that document.
+ *
+ * NOTHING FOR A TYPE NOT IN THE LIST. A document whose type the server is
+ * not set to stamp was never a candidate; 'Not stamped' under it would read
+ * as a problem where there is only a setting.
  */
 
 export type StampDecisionLine = 'Stamped automatically' | 'Partly stamped' | 'Not stamped'
@@ -24,6 +28,7 @@ export function describeStampDecision(
 ): StampDecisionLine | null {
   const decision = item.stampDecision
   if (!decision || decision.mode !== 'Stamp') return null
+  if (decision.outcome === STAMP_OUTCOMES.NOT_IN_LIST) return null
 
   if (item.signatureStatus === SIGNATURE_STATUS.ADDED) {
     // Signed by the template, not by HR in the editor: only a decision that

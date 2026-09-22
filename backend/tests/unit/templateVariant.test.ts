@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SHAPE_TOLERANCE,
+  exactVariantKey,
   findVariant,
   paperSizeLabel,
   sameShape,
@@ -54,6 +55,15 @@ describe('a variant', () => {
     expect(
       sameShape(shapeOf(FORM_11), shapeOf({ pageCount: 1, widthPt: 596, heightPt: 842 })),
     ).toBe(true)
+  })
+
+  it('has an exact key that tells two saved templates of one shape apart', () => {
+    // The stamper collects a template's boxes by this, never by the shape key:
+    // 595x841 and 596x842 are one shape and two saves.
+    expect(exactVariantKey(FORM_11)).toBe('1p-595x842')
+    expect(exactVariantKey({ pageCount: 1, widthPt: 595, heightPt: 841 })).toBe('1p-595x841')
+    expect(exactVariantKey({ pageCount: 1, widthPt: 596, heightPt: 842 })).toBe('1p-596x842')
+    expect(exactVariantKey({ pageCount: 2, widthPt: 595, heightPt: 842 })).toBe('2p-595x842')
   })
 })
 

@@ -99,6 +99,29 @@ without stamping - the office is running that trial now; `AUTO_STAMP=stamp`
 stamps. `npm run auto-stamp -- --report` prints the decisions; `-- --backlog`
 decides about documents stuck from before this existed.
 
+**Only the ESIC form is auto-stamped** (`AUTO_STAMP_TYPES=ESIC_FORM`, since
+2026-09-22). MMC now prints the employee's signature and the HR stamp on every
+form it generates _except_ the ESIC form. The application did not know that,
+saw the box as empty - MMC's signature sits just outside it - and stamped the
+employee's signature a second time on 26 PF and gratuity forms. So stamping on
+upload is confined to a list of document codes; every other type is decided
+`NotInList` (recorded once, nothing read, not a failure, nothing on the
+checklist) and goes to `ReviewRequired` for HR. **Missing or empty list = no
+type is stamped.** Those older documents are NOT auto-skipped: some are from
+before MMC printed signatures. `npm run unstamp` took the 26 back (placements
+and processed file removed through `removeStamp`, the editor's own path;
+status `Skipped`; audit entry with the reason; refuses anything a person
+placed).
+
+**Several saved templates of one shape.** Templates saved before shape
+matching (pre-18 Sept) were keyed on exact size, so one shape can hold several.
+The stamper uses the **newest** saved template per shape and only that one
+(`chooseTemplate` in `stampCheck.service.ts`; boxes collected by
+`exactVariantKey`, never by the rounded `variantKey`). The Templates screen and
+`--list` say how many a shape holds. Until 2026-09-22 the stamper collected
+every one of them - the bug that would have doubled signatures on its own had
+MMC's not got there first.
+
 **A template matches by page SHAPE, not size** (commit `0d29de2`). The
 generated forms come out at ~20 slightly different point sizes for one document
 type; keyed on exact size that was 82 templates for 15 forms. Boxes were always
@@ -172,8 +195,8 @@ reports; MMC pickup; joining-date rule; overdue reminder with spreadsheet;
 bulk employee import from xlsx; dashboard and reports; xlsx exports; TIFF/OCR
 hardening (sequentialRead, errorHandler on the Tesseract worker).
 
-Test counts at the time of writing: backend unit 823, frontend unit 153,
-integration 35 passing + 3 known failures (below). `npm run verify` runs lint,
+Test counts at the time of writing (2026-09-22): backend unit 883, frontend
+unit 167, integration 43 passing + 3 known failures (below). `npm run verify` runs lint,
 typecheck, SQL safety, secret scan and unit tests.
 
 ## What is open
@@ -261,6 +284,7 @@ npm run stamp-check -- --shapes      # shapes per type, templates needed
 npm run stamp-check -- --list        # templates saved and what they cover
 npm run auto-stamp -- --report       # stamping decisions (trial reading)
 npm run auto-stamp -- --backlog      # decide about documents stuck before auto-stamp
+npm run unstamp -- --documents 1,2 --reason "..." --dry-run   # take the app's stamp off
 npm run send-reminders -- --dry-run  # the overdue email and sheet, sent nowhere
 npm run attach-mmc-images -- --dry-run
 npm run user:add / user:list / user:reset

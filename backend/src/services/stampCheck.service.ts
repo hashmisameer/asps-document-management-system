@@ -1,8 +1,9 @@
 import {
-  findVariant,
+  exactVariantKey,
+  sameVariant,
   toVariant,
-  variantKey,
   variantLabel,
+  variantMatches,
   type DocumentTypePlacement,
   type TemplateVariant,
 } from '@asps-dms/shared'
@@ -54,8 +55,14 @@ export interface StampCheckResult {
   outcome: StampCheckOutcome
   /** What the document is, when it could be measured. */
   measured: TemplateVariant | null
-  /** The template variant it matched, when one did. */
+  /** The saved template it matched, when one did - the newest of its shape. */
   variant: TemplateVariant | null
+  /**
+   * How many saved templates are the matched shape. One, normally; more when
+   * templates saved under the old exact-size key have become one shape, in
+   * which case `variant` is the newest and the only one whose boxes count.
+   */
+  templatesInShape: number
   boxes: BoxAssessment[]
   detail?: string
 }
@@ -74,11 +81,79 @@ export async function measurePdf(source: Buffer): Promise<TemplateVariant> {
   }
 }
 
-/** The variants a type's template rows describe, each once. */
-export function variantsOf(rows: readonly DocumentTypePlacement[]): TemplateVariant[] {
-  const seen = new Map<string, TemplateVariant>()
-  for (const row of rows) seen.set(variantKey(row.variant), row.variant)
+/** One saved template: its exact key, its variant, and when it was saved. */
+export interface SavedTemplate {
+  key: string
+  variant: TemplateVariant
+  /** The newest row's time, so a re-save that moved one box counts as a save. */
+  savedAt: string
+  /** The newest row's id: the tie-break for two saves in one instant. */
+  newestRowId: number
+}
+
+/**
+ * The saved templates a type's rows describe, each once, BY EXACT SAMPLE
+ * SIZE - which is how the rows are stored and the only thing that tells two
+ * templates of one shape apart. Never grouped by the rounded shape key: that
+ * fused templates saved at 595x841 and 596x842 into one and handed the
+ * stamper the boxes of both, and a form got two employee signatures.
+ */
+export function variantsOf(rows: readonly DocumentTypePlacement[]): SavedTemplate[] {
+  const seen = new Map<string, SavedTemplate>()
+  for (const row of rows) {
+    const key = exactVariantKey(row.variant)
+    const current = seen.get(key)
+    if (!current) {
+      seen.set(key, {
+        key,
+        variant: row.variant,
+        savedAt: row.createdAt,
+        newestRowId: row.documentTypePlacementId,
+      })
+    } else if (
+      row.createdAt > current.savedAt ||
+      (row.createdAt === current.savedAt && row.documentTypePlacementId > current.newestRowId)
+    ) {
+      current.savedAt = row.createdAt
+      current.newestRowId = row.documentTypePlacementId
+    }
+  }
   return Array.from(seen.values())
+}
+
+/**
+ * The saved template a measured document is stamped from, out of every one
+ * that is its shape.
+ *
+ *   none match                        -> { chosen: null, matching: [] }
+ *   one matches                       -> that one
+ *   several match, all one shape      -> the NEWEST: they were always one
+ *                                        form, and a save would have replaced
+ *                                        the older ones already
+ *   several match, not all one shape  -> { chosen: null } - two genuinely
+ *                                        different templates both within the
+ *                                        tolerance of this file, and nothing
+ *                                        here picks the nearer
+ */
+export function chooseTemplate(
+  templates: readonly SavedTemplate[],
+  measured: TemplateVariant,
+): { chosen: SavedTemplate | null; matching: SavedTemplate[] } {
+  const matching = templates.filter((template) => variantMatches(template.variant, measured))
+  if (matching.length === 0) return { chosen: null, matching }
+
+  const oneShape = matching.every((template) =>
+    sameVariant(template.variant, (matching[0] as SavedTemplate).variant),
+  )
+  if (!oneShape) return { chosen: null, matching }
+
+  const newest = matching.reduce((best, template) =>
+    template.savedAt > best.savedAt ||
+    (template.savedAt === best.savedAt && template.newestRowId > best.newestRowId)
+      ? template
+      : best,
+  )
+  return { chosen: newest, matching }
 }
 
 /**
@@ -97,7 +172,10 @@ export async function checkDocument(
     readFile?: (relativePath: string) => Promise<Buffer>
   } = {},
 ): Promise<StampCheckResult> {
-  const base: Omit<StampCheckResult, 'outcome' | 'measured' | 'variant' | 'boxes'> = {
+  const base: Omit<
+    StampCheckResult,
+    'outcome' | 'measured' | 'variant' | 'templatesInShape' | 'boxes'
+  > = {
     documentId: candidate.documentId,
     documentCode: candidate.documentCode,
     documentName: candidate.documentName,
@@ -110,7 +188,14 @@ export async function checkDocument(
   }
 
   if ((candidate.mimeType ?? 'application/pdf') !== 'application/pdf') {
-    return { ...base, outcome: 'notPdf', measured: null, variant: null, boxes: [] }
+    return {
+      ...base,
+      outcome: 'notPdf',
+      measured: null,
+      variant: null,
+      templatesInShape: 0,
+      boxes: [],
+    }
   }
 
   let source: Buffer
@@ -124,30 +209,33 @@ export async function checkDocument(
       outcome: 'unreadable',
       measured: null,
       variant: null,
+      templatesInShape: 0,
       boxes: [],
       detail: error instanceof Error ? error.message : String(error),
     }
   }
 
-  const variants = variantsOf(rows)
-  const matching = variants.filter((variant) => findVariant([variant], measured) !== null)
-  if (matching.length !== 1) {
+  const templates = variantsOf(rows)
+  const { chosen, matching } = chooseTemplate(templates, measured)
+  if (!chosen) {
     return {
       ...base,
       outcome: matching.length === 0 ? 'noVariant' : 'ambiguousVariant',
       measured,
       variant: null,
+      templatesInShape: matching.length,
       boxes: [],
       detail:
         matching.length === 0
-          ? `templates: ${variants.map(variantLabel).join(', ') || 'none'}`
-          : `matches ${matching.map(variantLabel).join(' and ')}`,
+          ? `templates: ${templates.map((t) => variantLabel(t.variant)).join(', ') || 'none'}`
+          : `matches ${matching.map((t) => variantLabel(t.variant)).join(' and ')}`,
     }
   }
-  const variant = matching[0] as TemplateVariant
+  const variant = chosen.variant
 
+  // The chosen template's rows and no other's, by its exact key.
   const boxes = rows
-    .filter((row) => variantKey(row.variant) === variantKey(variant))
+    .filter((row) => exactVariantKey(row.variant) === chosen.key)
     .map((row, index) => ({
       label: String(index),
       signerRole: row.signerRole,
@@ -156,7 +244,14 @@ export async function checkDocument(
     }))
 
   const assessed = await assessBoxes(source, 'application/pdf', boxes, settings)
-  return { ...base, outcome: 'checked', measured, variant, boxes: assessed }
+  return {
+    ...base,
+    outcome: 'checked',
+    measured,
+    variant,
+    templatesInShape: matching.length,
+    boxes: assessed,
+  }
 }
 
 /* -------------------------------------------------------------------------- */

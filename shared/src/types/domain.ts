@@ -520,7 +520,14 @@ export interface DocumentTypePlacement {
 
 /** One variant of a type's template at a glance. */
 export interface TemplateVariantSummary {
+  /** The newest saved template of this shape - the one the stamper uses. */
   variant: TemplateVariant
+  /**
+   * How many saved templates are this shape. One, normally. More than one
+   * means templates saved when the key was the exact page size have since
+   * become one shape; the newest is used and a save replaces them all.
+   */
+  savedTemplates: number
   pageRotation: number
   boxes: number
   /** How many boxes carry each role. */

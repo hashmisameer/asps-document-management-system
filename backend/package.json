@@ -24,7 +24,8 @@
     "import-employees": "tsx src/scripts/importEmployees.ts",
     "attach-mmc-images": "tsx src/scripts/attachMmcImages.ts",
     "stamp-check": "tsx src/scripts/stampCheck.ts",
-    "auto-stamp": "tsx src/scripts/autoStamp.ts"
+    "auto-stamp": "tsx src/scripts/autoStamp.ts",
+    "unstamp": "tsx src/scripts/unstamp.ts"
   },
   "dependencies": {
     "@asps-dms/shared": "*",

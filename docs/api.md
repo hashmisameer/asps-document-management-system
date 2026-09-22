@@ -269,7 +269,7 @@ decision row and the report:
 // GET /documents/:documentId  - the latest decision travels with the document
 "stampDecision": {
   "mode": "Stamp",                 // Report | Stamp - the server's AUTO_STAMP at the time
-  "outcome": "Partial",            // Stamped | Partial | Nothing | NoTemplate | NoVariant |
+  "outcome": "Partial",            // Stamped | Partial | Nothing | NotInList | NoTemplate | NoVariant |
                                    // AmbiguousVariant | NotPdf | Unreadable | IdentityFailed | Failed
   "summary": "Stamped: employee signature. Not stamped: the hr signature - the person who uploaded it has no signature on file.",
   "stampedCount": 1,
@@ -292,6 +292,14 @@ goes to `ReviewRequired` whatever the outcome says - the outcome is what
 for every decision and `SIGNATURE_PLACED_FROM_TEMPLATE` when boxes went on.
 There is no endpoint to trigger or approve it; `npm run auto-stamp` reports
 and works the backlog (see the deployment notes).
+
+Only the document types in the server's `AUTO_STAMP_TYPES` are candidates
+(`ESIC_FORM` today - MMC prints the signatures on every other form itself).
+Any other type is decided `NotInList` - recorded once, nothing read, not a
+failure - and goes to `ReviewRequired`; the checklist shows nothing for it.
+`npm run unstamp` takes the application's stamp off a document that was
+signed outside it, through the same code the editor's empty save uses, and
+leaves it `Skipped` (deployment notes).
 
 ### Other document bodies
 

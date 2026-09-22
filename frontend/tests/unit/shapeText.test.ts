@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { DocumentTypeShapes } from '@asps-dms/shared'
-import { describeShape, sampleIsCovered } from '../../src/features/templates/shapeText.js'
+import {
+  describeShape,
+  sampleIsCovered,
+  savedTemplatesNote,
+} from '../../src/features/templates/shapeText.js'
 
 /**
  * What the template editor says beside a sample: which shape it is, how much
@@ -106,5 +110,18 @@ describe('sampleIsCovered', () => {
   it('does not know until measured, or without a sample on screen', () => {
     expect(sampleIsCovered(undefined, A4, 2)).toBeNull()
     expect(sampleIsCovered(shapes, null, 2)).toBeNull()
+  })
+})
+
+describe('savedTemplatesNote', () => {
+  it('says nothing for the normal case of one saved template', () => {
+    expect(savedTemplatesNote(1)).toBeNull()
+    expect(savedTemplatesNote(0)).toBeNull()
+  })
+
+  it('says how many saved templates a shape holds, which is used, and how to tidy it', () => {
+    expect(savedTemplatesNote(3)).toBe(
+      '3 saved templates are this shape - the newest is used. Save it once to keep only that one.',
+    )
   })
 })

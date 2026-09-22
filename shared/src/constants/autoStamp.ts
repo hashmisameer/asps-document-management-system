@@ -28,6 +28,8 @@ export const STAMP_OUTCOMES = {
   PARTIAL: 'Partial',
   /** The file matched a template and every box was left alone. */
   NOTHING: 'Nothing',
+  /** The document type is not one the server is set to stamp (AUTO_STAMP_TYPES). */
+  NOT_IN_LIST: 'NotInList',
   /** The document type has no template at all. */
   NO_TEMPLATE: 'NoTemplate',
   /** The type has templates, but none for this page count and page size. */
@@ -50,6 +52,7 @@ export const STAMP_OUTCOME_LABEL: Readonly<Record<StampOutcome, string>> = {
   [STAMP_OUTCOMES.STAMPED]: 'Stamped',
   [STAMP_OUTCOMES.PARTIAL]: 'Partly stamped',
   [STAMP_OUTCOMES.NOTHING]: 'Nothing stamped',
+  [STAMP_OUTCOMES.NOT_IN_LIST]: 'Not in the auto-stamp list',
   [STAMP_OUTCOMES.NO_TEMPLATE]: 'No template for this document type',
   [STAMP_OUTCOMES.NO_VARIANT]: 'No template for this form',
   [STAMP_OUTCOMES.AMBIGUOUS_VARIANT]: 'More than one template matches',

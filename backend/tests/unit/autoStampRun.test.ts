@@ -21,7 +21,9 @@ import {
 
 const mocks = vi.hoisted(() => ({
   autoStamp: 'report' as 'report' | 'stamp',
+  autoStampTypes: new Set<string>(['APPOINTMENT_LETTER']),
   findDocument: vi.fn(),
+  findLatestDecision: vi.fn(),
   findStoredFile: vi.fn(),
   setSignatureStatus: vi.fn(),
   findEmployee: vi.fn(),
@@ -42,7 +44,11 @@ vi.mock('../../src/config/env.js', async (importOriginal) => {
   return {
     env: new Proxy(actual.env, {
       get: (target, key) =>
-        key === 'AUTO_STAMP' ? mocks.autoStamp : (target as Record<string | symbol, unknown>)[key],
+        key === 'AUTO_STAMP'
+          ? mocks.autoStamp
+          : key === 'AUTO_STAMP_TYPES'
+            ? mocks.autoStampTypes
+            : (target as Record<string | symbol, unknown>)[key],
     }),
   }
 })
@@ -65,6 +71,7 @@ vi.mock('../../src/repositories/userSignature.repository.js', () => ({
 }))
 vi.mock('../../src/repositories/stampDecision.repository.js', () => ({
   insert: mocks.insertDecision,
+  findLatestForDocument: mocks.findLatestDecision,
 }))
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: mocks.insertAudit }))
 vi.mock('../../src/services/mmcImages.service.js', () => ({
@@ -153,6 +160,7 @@ function checkedEmpty() {
     outcome: 'checked',
     measured: A4,
     variant: A4,
+    templatesInShape: 1,
     boxes: rows.map((row, index) => ({
       label: String(index),
       signerRole: row.signerRole,
@@ -173,7 +181,9 @@ const userSignature = { relativePath: 'user-signatures/7/sig.png', mimeType: 'im
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.autoStamp = 'report'
+  mocks.autoStampTypes = new Set(['APPOINTMENT_LETTER'])
   mocks.findDocument.mockResolvedValue(document())
+  mocks.findLatestDecision.mockResolvedValue(null)
   mocks.findStoredFile.mockResolvedValue({
     documentId: 5,
     employeeId: 42,
@@ -212,7 +222,7 @@ describe('report mode', () => {
         documentId: 5,
         mode: 'Report',
         outcome: STAMP_OUTCOMES.STAMPED,
-        variantKey: '1p-portrait-1.42',
+        variantKey: '1p-595x842',
         stampedCount: 2,
         skippedCount: 0,
         decidedBy: 7,
@@ -340,6 +350,82 @@ describe('what it reads first', () => {
     expect(mocks.checkDocument).not.toHaveBeenCalled()
     expect(result?.decision.outcome).toBe(STAMP_OUTCOMES.NO_TEMPLATE)
     expect(result?.status).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+  })
+})
+
+describe('the auto-stamp list', () => {
+  it('records a type not in the list as such, reads nothing, and sends the document to HR', async () => {
+    mocks.autoStamp = 'stamp'
+    mocks.findDocument.mockResolvedValue(
+      document({ documentCode: 'PF_FORM', documentName: 'PF Form' }),
+    )
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.outcome).toBe(STAMP_OUTCOMES.NOT_IN_LIST)
+    expect(result?.stamped).toBe(0)
+    expect(result?.status).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+
+    // Nothing was read that a decision would need: not the file, not the
+    // template, not the images - and nothing was painted.
+    expect(mocks.findStoredFile).not.toHaveBeenCalled()
+    expect(mocks.listForType).not.toHaveBeenCalled()
+    expect(mocks.checkDocument).not.toHaveBeenCalled()
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+
+    expect(mocks.insertDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: STAMP_OUTCOMES.NOT_IN_LIST,
+        stampedCount: 0,
+        skippedCount: 0,
+        summary: 'Not stamped: PF Form is not in the auto-stamp list.',
+      }),
+    )
+    expect(mocks.setSignatureStatus).toHaveBeenCalledWith(
+      5,
+      SIGNATURE_STATUS.PENDING_DETECTION,
+      SIGNATURE_STATUS.REVIEW_REQUIRED,
+    )
+  })
+
+  it('still looks in the MMC folder first, whatever the type', async () => {
+    mocks.findDocument.mockResolvedValue(document({ documentCode: 'PF_FORM' }))
+    await run(5, actor, context)
+    expect(mocks.attachQuietly).toHaveBeenCalledTimes(1)
+  })
+
+  it('stamps nothing at all when the list is empty, even in stamp mode', async () => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set()
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.outcome).toBe(STAMP_OUTCOMES.NOT_IN_LIST)
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+  })
+
+  it('does not record the same "not in the list" twice for one document', async () => {
+    // The MMC watcher re-decides an employee's waiting documents on every
+    // arrival; the row is written once and the status still settles.
+    mocks.findDocument.mockResolvedValue(
+      document({ documentCode: 'PF_FORM', signatureStatus: SIGNATURE_STATUS.REVIEW_REQUIRED }),
+    )
+    mocks.findLatestDecision.mockResolvedValue({ outcome: STAMP_OUTCOMES.NOT_IN_LIST })
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.outcome).toBe(STAMP_OUTCOMES.NOT_IN_LIST)
+    expect(mocks.insertDecision).not.toHaveBeenCalled()
+    expect(mocks.insertAudit).not.toHaveBeenCalled()
+  })
+
+  it('records it again once some other decision has been taken since', async () => {
+    mocks.findDocument.mockResolvedValue(document({ documentCode: 'PF_FORM' }))
+    mocks.findLatestDecision.mockResolvedValue({ outcome: STAMP_OUTCOMES.NO_TEMPLATE })
+
+    await run(5, actor, context)
+
+    expect(mocks.insertDecision).toHaveBeenCalledTimes(1)
   })
 })
 

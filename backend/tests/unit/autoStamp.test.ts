@@ -79,6 +79,7 @@ function checked(
     outcome: 'checked',
     measured: A4,
     variant: A4,
+    templatesInShape: 1,
     boxes: rows.map((row, index) => assessed(index, row, verdicts[index] ?? 'empty')),
   }
 }
@@ -95,17 +96,22 @@ function unmatched(
     outcome,
     measured: null,
     variant: null,
+    templatesInShape: 0,
     boxes: [],
   }
 }
 
 const everything = { employeeSignature: true, authoriserSignature: true, photo: true }
 
+/** Every type these tests use is in the list unless a test says otherwise. */
+const LISTED: ReadonlySet<string> = new Set(['APPOINTMENT_LETTER', 'ESIC_FORM'])
+
 function input(overrides: Partial<DecideInput> = {}): DecideInput {
   const rows = [templateRow(SIGNER_ROLES.EMPLOYEE), templateRow(SIGNER_ROLES.AUTHORISER)]
   return {
     documentCode: 'APPOINTMENT_LETTER',
     documentName: 'Appointment Letter',
+    autoStampTypes: LISTED,
     identityCheck: 'Passed',
     templateRows: rows,
     check: checked(rows),
@@ -330,5 +336,72 @@ describe('the variant', () => {
 
     expect(decision.boxes).toHaveLength(2)
     expect(decision.boxes.map((box) => box.template.x)).toEqual([0.6, 0.6])
+  })
+
+  it('uses the boxes of the one saved template the check chose, not of every template of that shape', () => {
+    // Two templates saved under the old exact-size key, one shape: 595x841
+    // and 596x842 are both A4. The check chose the 596x842 one; only its
+    // rows are stamped. Collecting by the rounded shape key gathered both
+    // and a form got two employee signatures.
+    const older = { pageCount: 1, widthPt: 595, heightPt: 841 }
+    const newer = { pageCount: 1, widthPt: 596, heightPt: 842 }
+    const olderRows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { variant: older, x: 0.1 }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { variant: older, x: 0.1 }),
+    ]
+    const newerRows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { variant: newer, x: 0.7 }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { variant: newer, x: 0.7 }),
+    ]
+    const check = {
+      ...checked(newerRows),
+      measured: { pageCount: 1, widthPt: 595, heightPt: 842 },
+      variant: newer,
+      templatesInShape: 2,
+    }
+
+    const decision = decide(input({ templateRows: [...olderRows, ...newerRows], check }))
+
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(decision.boxes).toHaveLength(2)
+    expect(decision.boxes.map((box) => box.template.x)).toEqual([0.7, 0.7])
+    expect(decision.boxes.filter((box) => box.signerRole === 'Employee')).toHaveLength(1)
+    expect(decision.summary).toBe(
+      'Stamped: employee signature and hr signature. (2 saved templates are this shape; the newest was used.)',
+    )
+  })
+})
+
+describe('the auto-stamp list', () => {
+  it('leaves a type that is not in the list for HR, before looking at anything else', () => {
+    const decision = decide(
+      input({
+        documentCode: 'PF_FORM',
+        documentName: 'PF Form',
+        // Even a file that would otherwise fail: the list is first.
+        identityCheck: 'Failed',
+      }),
+    )
+
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.NOT_IN_LIST)
+    expect(decision.toStamp).toEqual([])
+    expect(decision.boxes).toEqual([])
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+    expect(decision.summary).toBe('Not stamped: PF Form is not in the auto-stamp list.')
+  })
+
+  it('stamps nothing at all when the list is empty', () => {
+    const decision = decide(input({ autoStampTypes: new Set() }))
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.NOT_IN_LIST)
+    expect(decision.toStamp).toEqual([])
+  })
+
+  it('is matched on the document code exactly', () => {
+    expect(decide(input({ autoStampTypes: new Set(['ESIC_FORM']) })).outcome).toBe(
+      STAMP_OUTCOMES.NOT_IN_LIST,
+    )
+    expect(
+      decide(input({ documentCode: 'ESIC_FORM', autoStampTypes: new Set(['ESIC_FORM']) })).outcome,
+    ).toBe(STAMP_OUTCOMES.STAMPED)
   })
 })

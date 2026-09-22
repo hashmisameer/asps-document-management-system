@@ -151,6 +151,12 @@ async function printList(documentCode: string | undefined): Promise<void> {
           (template.pageRotation ? `, rotated ${template.pageRotation}` : '') +
           `  set by ${template.setByName ?? 'unknown'} ${when(template.setAt)}  ${covers}`,
       )
+      if (template.savedTemplates > 1) {
+        console.log(
+          `        ${template.savedTemplates} saved templates are this shape - the newest is used. ` +
+            'Save it once in the editor to keep only that one.',
+        )
+      }
     }
 
     for (const group of shapes.groups.filter((g) => !g.hasTemplate)) {
