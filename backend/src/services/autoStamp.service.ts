@@ -7,6 +7,8 @@ import {
   exactVariantKey,
   isSignatureRole,
   type DocumentTypePlacement,
+  type NormalizedRect,
+  type PlacementMethod,
   type SignatureStatus,
   type SignerRole,
   type StampBoxDecision,
@@ -33,11 +35,20 @@ import type { StampCheckResult } from './stampCheck.service.js'
  * boxes are still stamped, and the document is marked for HR to look at, with
  * the reason on it, so nothing is silently half done.
  *
+ * WHAT IS ALREADY ON THE DOCUMENT STAYS. A document is decided about again
+ * when the employee's signature or photograph arrives later, and by then HR
+ * may have placed something by hand, or an earlier run may have stamped part
+ * of it. Every placement already there is KEPT - its rectangle, its method,
+ * its signer - and a template box is stamped only where no placement of that
+ * role is on that page. Never a second employee signature on a page; never a
+ * template box painted over a box a person put there.
+ *
  * THIS MODULE IS PURE. It takes what was measured - the template match and
- * the occupancy of each box, from stampCheck - and what is on file, and says
- * what to do. Reading the database, the folder and the file, and the stamping
- * itself, happen in the runner; the rules that HR would argue about are here,
- * testable against plain values with no PDF in sight.
+ * the occupancy of each box, from stampCheck - what is on file, and what is
+ * already placed, and says what to do. Reading the database, the folder and
+ * the file, and the stamping itself, happen in the runner; the rules that HR
+ * would argue about are here, testable against plain values with no PDF in
+ * sight.
  */
 
 /** What the identity check had settled on when the decision was made. */
@@ -67,7 +78,27 @@ export interface DecideInput {
     authoriserSignature: boolean
     photo: boolean
   }
+  /**
+   * The placements already on the document, every one of which is kept.
+   * Empty for a fresh upload.
+   */
+  existing: readonly ExistingPlacement[]
 }
+
+/** A placement already on the document, as the decision needs to see it. */
+export interface ExistingPlacement {
+  signerRole: SignerRole
+  pageNumber: number
+  rect: NormalizedRect
+  method: PlacementMethod
+}
+
+/**
+ * How much of a template box may lie under a box already placed before the
+ * template box is left alone. A tenth: two boxes that touch at a corner are
+ * neighbours; two that share more than that are the same place.
+ */
+export const OVERLAP_KEEP_OFF = 0.1
 
 /** One box of the matched variant, with what to do about it. */
 export interface BoxPlan extends StampBoxDecision {
@@ -81,6 +112,8 @@ export interface Decision {
   boxes: BoxPlan[]
   /** The boxes to stamp, in template order. Empty unless something is. */
   toStamp: BoxPlan[]
+  /** Template boxes whose role is already placed on that page: done, not stamped. */
+  kept: BoxPlan[]
   /** Where the document's signature status ends up, whatever the mode. */
   nextStatus: SignatureStatus
   /** One sentence, written for HR. */
@@ -104,6 +137,10 @@ export const REASONS = {
   occupied: (found: string) => `the box already has something in it (${found})`,
   uncertain: (found: string) => `it is not clear whether the box is empty (${found})`,
   noEmployeeSignature: 'the employee has no signature on file',
+  alreadyPlaced: (method: PlacementMethod) =>
+    method === 'Automatic' ? 'already stamped earlier' : 'already on the page, placed by hand',
+  overlapsPlaced: (role: SignerRole) =>
+    `it would lie over the ${SIGNER_ROLE_LABEL[role].toLowerCase()} box placed by hand`,
   noAuthoriserSignature: 'the person who uploaded it has no signature on file',
   photoElsewhere: 'a photograph goes on the ESIC form only',
   noPhoto: 'the employee has no photograph on file',
@@ -140,7 +177,16 @@ function boxesOf(check: StampCheckResult, rows: readonly DocumentTypePlacement[]
     }))
 }
 
-/** What to do with one box: stamp it, or leave it alone and say why. */
+/** The share of `box` that lies under `other`. */
+export function overlapShare(box: NormalizedRect, other: NormalizedRect): number {
+  const width = Math.min(box.x + box.width, other.x + other.width) - Math.max(box.x, other.x)
+  const height = Math.min(box.y + box.height, other.y + other.height) - Math.max(box.y, other.y)
+  if (width <= 0 || height <= 0) return 0
+  const area = box.width * box.height
+  return area > 0 ? (width * height) / area : 0
+}
+
+/** What to do with one box: stamp it, keep what is there, or leave it alone and say why. */
 function planBox(
   template: DocumentTypePlacement,
   occupancy: BoxAssessment | null,
@@ -154,6 +200,17 @@ function planBox(
     found: occupancy?.verdict ?? null,
   }
   const skip = (reason: string): BoxPlan => ({ ...base, action: 'skip', reason })
+
+  // What is already on the document comes first. A placement of this role on
+  // this page - HR's by hand, or an earlier stamp - is the box, and stays;
+  // a box of another role lying where this one would go is somebody's
+  // decision about the page, and this does not paint over it.
+  const onPage = input.existing.filter((placed) => placed.pageNumber === template.pageNumber)
+  const sameRole = onPage.find((placed) => placed.signerRole === template.signerRole)
+  if (sameRole) return { ...base, action: 'keep', reason: REASONS.alreadyPlaced(sameRole.method) }
+  const rect = { x: template.x, y: template.y, width: template.width, height: template.height }
+  const under = onPage.find((placed) => overlapShare(rect, placed.rect) > OVERLAP_KEEP_OFF)
+  if (under) return skip(REASONS.overlapsPlaced(under.signerRole))
 
   // Nothing is painted over something already there, and nothing is painted
   // where it is not clear. A person can see the box; this cannot.
@@ -188,6 +245,7 @@ function nothing(outcome: StampOutcome, reason: string): Decision {
     variant: null,
     boxes: [],
     toStamp: [],
+    kept: [],
     nextStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
     summary: `Not stamped: ${reason}.`,
   }
@@ -243,8 +301,11 @@ export function decide(input: DecideInput): Decision {
     planBox(template, occupancy, input),
   )
   const toStamp = boxes.filter((box) => box.action === 'stamp')
+  const kept = boxes.filter((box) => box.action === 'keep')
   const skipped = boxes.filter((box) => box.action === 'skip')
 
+  // A kept box is done. The outcome and the status are about what is on the
+  // document once this is through, not about who put it there.
   const outcome: StampOutcome =
     skipped.length === 0
       ? STAMP_OUTCOMES.STAMPED
@@ -254,16 +315,18 @@ export function decide(input: DecideInput): Decision {
 
   // Added only when nothing is left to do. A stamped photograph alone is not
   // a signed document, exactly as on the manual path.
-  const complete = skipped.length === 0 && toStamp.some((box) => isSignatureRole(box.signerRole))
+  const complete =
+    skipped.length === 0 && [...toStamp, ...kept].some((box) => isSignatureRole(box.signerRole))
 
   return {
     outcome,
     variant: check.variant,
     boxes,
     toStamp,
+    kept,
     nextStatus: complete ? SIGNATURE_STATUS.ADDED : SIGNATURE_STATUS.REVIEW_REQUIRED,
     summary:
-      summarise(toStamp, skipped) +
+      summarise(toStamp, kept, skipped) +
       (check.templatesInShape > 1
         ? ` (${check.templatesInShape} saved templates are this shape; the newest was used.)`
         : ''),
@@ -276,11 +339,24 @@ export function decide(input: DecideInput): Decision {
  * Reasons are given once each with the boxes they apply to, so two boxes
  * refused for the same cause read as one fact rather than two complaints.
  */
-function summarise(toStamp: readonly BoxPlan[], skipped: readonly BoxPlan[]): string {
+function summarise(
+  toStamp: readonly BoxPlan[],
+  kept: readonly BoxPlan[],
+  skipped: readonly BoxPlan[],
+): string {
   const parts: string[] = []
 
   if (toStamp.length > 0) {
     parts.push(`Stamped: ${listRoles(toStamp)}.`)
+  }
+  if (kept.length > 0) {
+    const byHand = kept.filter((box) => box.reason === REASONS.alreadyPlaced('Manual'))
+    const earlier = kept.filter((box) => box.reason !== REASONS.alreadyPlaced('Manual'))
+    const clauses = [
+      ...(byHand.length > 0 ? [`${listRoles(byHand)} (placed by hand)`] : []),
+      ...(earlier.length > 0 ? [`${listRoles(earlier)} (stamped earlier)`] : []),
+    ]
+    parts.push(`Kept: ${clauses.join('; ')}.`)
   }
 
   if (skipped.length > 0) {

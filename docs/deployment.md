@@ -356,6 +356,34 @@ is what makes the count right; in `stamp` mode it stamps.
 Every decision is a row in `dbo.StampDecisions` and an `AUTO_STAMP_DECIDED`
 entry in the audit trail. **The report and the backlog name no employee.**
 
+**When the image arrives after the upload.** A document is stamped at
+upload with whatever is on file then. When the employee's signature or
+photograph is saved later - from MMC's folder by the pickup, by hand on the
+record, or on the pad - their documents still waiting for a signature are
+decided about again, in stamp mode and for the listed types only, each in
+the name of the person who uploaded it. **Whatever is already on a document
+stays**: every placement - HR's by hand, or an earlier stamp - is kept with
+its rectangle, its method and its signer, and only the roles missing from a
+page are added; a template box that would lie over a box HR placed is left
+alone with that reason; a document with nothing to add is left exactly as it
+is. A kept HR box means the run acts as its signer, so the box keeps that
+person's signature; if that account has no signature now, the document is
+left alone rather than lose the box, and the report says so.
+
+For the documents that waited before this existed - decided in report mode
+and never stamped, or stamped before the employee had a signature:
+
+```
+npm run auto-stamp -- --redecide --type ESIC_FORM --dry-run
+npm run auto-stamp -- --redecide --type ESIC_FORM
+npm run auto-stamp -- --redecide --type ESIC_FORM --limit 100 --as <username>
+```
+
+`--dry-run` reads and decides and prints, per document, what would be
+added, kept and left - and writes nothing, not even to the record. The live
+run follows `AUTO_STAMP` like everything else; the type must be in
+`AUTO_STAMP_TYPES`. Names no employee.
+
 **Taking a stamp off again.** For a document the application stamped that
 had already been signed outside it - MMC's printed signature, say - the
 stamp is removed through the application's own code, never by SQL:

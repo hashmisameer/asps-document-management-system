@@ -8,6 +8,7 @@ import {
   type MmcJobOutcome,
   type MmcWatchDeps,
 } from '../../src/services/mmcWatch.service.js'
+import type { RedecideOutcome } from '../../src/services/autoStampRun.service.js'
 
 /**
  * The MMC pickup, with the folders, the clock and everything it calls stood
@@ -29,7 +30,6 @@ const admin: AuthUser = {
   role: ROLES.ADMIN,
   mustChangePassword: false,
 }
-const uploader: AuthUser = { ...admin, userId: 9, username: 'hr.original', role: ROLES.HR }
 
 /** A fake folder pair: names in each, sizes per file, and the watch emitters. */
 class FakeFolders {
@@ -93,9 +93,7 @@ class FakeFolders {
         async (id: number) => ({ employeeId: id, employeeCode: '00006100' }) as never,
       ),
       attachMissing: vi.fn(async () => ({ photo: 'alreadyHad', signature: 'attached' }) as never),
-      listAwaitingSignature: vi.fn(async () => []),
-      runStampDecision: vi.fn(async () => null),
-      resolveUser: vi.fn(async (id: number) => (id === 9 ? uploader : null)),
+      redecide: vi.fn(async () => []),
       actor: async () => admin,
       sweepMinutes: 10,
       ...overrides,
@@ -157,12 +155,26 @@ describe('a file name', () => {
 })
 
 describe('a signature that appears', () => {
-  it('is taken in, and the stamp decision run again for the waiting documents in their uploaders’ names', async () => {
+  it('is taken in, and the waiting documents are decided about again through the shared re-decide', async () => {
     const deps = folders.deps({
       onOutcome: (o) => outcomes.push(o),
-      listAwaitingSignature: vi.fn(async () => [
-        { documentId: 501, uploadedBy: 9 },
-        { documentId: 502, uploadedBy: 404 },
+      // The re-decide itself - stamp mode only, listed types only, in the
+      // uploaders' names, a breath between - is pinned in autoStampRun.test.ts.
+      redecide: vi.fn(async (): Promise<RedecideOutcome[]> => [
+        {
+          documentId: 501,
+          documentName: 'Appointment Letter',
+          kind: 'decided',
+          result: {} as never,
+        },
+        { documentId: 502, documentName: 'ESIC Form', kind: 'decided', result: {} as never },
+        {
+          documentId: 503,
+          documentName: 'PF Form',
+          kind: 'left',
+          reason: 'nothingToAdd',
+          detail: '',
+        },
       ]),
     })
     waiting(deps)
@@ -175,11 +187,15 @@ describe('a signature that appears', () => {
     await watcher.idle()
 
     expect(deps.attachMissing).toHaveBeenCalledTimes(1)
+    // Two decided, one left alone: 'decided' counts what was decided.
     expect(outcomes.at(-1)).toMatchObject({ result: 'attached', decided: 2 })
-    // The first document in its uploader's name; the second's uploader is
-    // gone, so the pickup's own account signs for the HR box.
-    expect(deps.runStampDecision).toHaveBeenCalledWith(501, uploader, expect.anything())
-    expect(deps.runStampDecision).toHaveBeenCalledWith(502, admin, expect.anything())
+    expect(deps.redecide).toHaveBeenCalledTimes(1)
+    expect(deps.redecide).toHaveBeenCalledWith(
+      expect.any(Number),
+      admin,
+      expect.anything(),
+      'MMC pickup',
+    )
     watcher.stop()
   })
 
@@ -232,7 +248,7 @@ describe('a signature that appears', () => {
 
     expect(outcomes.at(-1)?.result).toBe('alreadyHad')
     expect(deps.attachMissing).not.toHaveBeenCalled()
-    expect(deps.runStampDecision).not.toHaveBeenCalled()
+    expect(deps.redecide).not.toHaveBeenCalled()
     watcher.stop()
   })
 
@@ -317,7 +333,7 @@ describe('a file still being written', () => {
     await watcher.idle()
 
     expect(outcomes.at(-1)?.result).toBe('notSettled')
-    expect(deps.runStampDecision).not.toHaveBeenCalled()
+    expect(deps.redecide).not.toHaveBeenCalled()
     watcher.stop()
   })
 })

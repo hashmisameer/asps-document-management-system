@@ -3,13 +3,12 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { ROLES, type AuthUser } from '@asps-dms/shared'
 import { env } from '../config/env.js'
-import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as userRepository from '../repositories/user.repository.js'
 import { describeError } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
 import type { RequestContext } from './auth.service.js'
-import { run as runStampDecision } from './autoStampRun.service.js'
+import { redecideForEmployee } from './autoStampRun.service.js'
 import {
   attachMissing,
   configuredDirectories,
@@ -40,9 +39,10 @@ import {
  * the books, not archived, not left - attach whichever of the two images they
  * lack through the same attachMissing the creation hook uses, and if anything
  * was attached run the stamp decision again on their documents still waiting
- * for a signature, each in the name of the person who uploaded it. A document
- * left alone for 'the employee has no signature on file' is decided about
- * once more now that they have.
+ * for a signature - the same redecideForEmployee a save by hand or on the pad
+ * runs: stamp mode only, the listed types only, each in the name of the
+ * person who uploaded it. A document left alone for 'the employee has no
+ * signature on file' is decided about once more now that they have.
  *
  * NEVER REPLACES. An employee who already has the image is left as they are,
  * exactly as the creation hook and the command leave them. A corrected file
@@ -71,8 +71,6 @@ const SETTLE_MS = 2_000
 const RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000]
 /** How long the watcher waits before trying an unreachable folder again. */
 const RECONNECT_DELAYS_MS = [30_000, 60_000, 300_000]
-/** A breath between documents, so a burst of stamp decisions shares the thread. */
-const BETWEEN_DOCUMENTS_MS = 250
 
 export interface MmcWatchJob {
   kind: MmcImageKind
@@ -108,9 +106,7 @@ export interface MmcWatchDeps {
   listCandidatesMissingImages: typeof employeeRepository.listMmcCandidatesMissingImages
   findEmployee: typeof employeeRepository.findById
   attachMissing: typeof attachMissing
-  listAwaitingSignature: typeof employeeDocumentRepository.listAwaitingSignature
-  runStampDecision: typeof runStampDecision
-  resolveUser: (userId: number) => Promise<AuthUser | null>
+  redecide: typeof redecideForEmployee
   actor: () => Promise<AuthUser>
   sweepMinutes: number
   onOutcome?: (outcome: MmcJobOutcome) => void
@@ -146,11 +142,6 @@ async function defaultActor(): Promise<AuthUser> {
   return userRepository.toAuthUser(admin)
 }
 
-async function activeUser(userId: number): Promise<AuthUser | null> {
-  const user = await userRepository.findById(userId)
-  return user && user.isActive ? userRepository.toAuthUser(user) : null
-}
-
 export function realDeps(): MmcWatchDeps {
   return {
     dirs: configuredDirectories(),
@@ -168,9 +159,7 @@ export function realDeps(): MmcWatchDeps {
     listCandidatesMissingImages: employeeRepository.listMmcCandidatesMissingImages,
     findEmployee: employeeRepository.findById,
     attachMissing,
-    listAwaitingSignature: employeeDocumentRepository.listAwaitingSignature,
-    runStampDecision,
-    resolveUser: activeUser,
+    redecide: redecideForEmployee,
     actor: defaultActor,
     sweepMinutes: env.MMC_SWEEP_MINUTES,
   }
@@ -328,16 +317,10 @@ export function createMmcWatcher(deps: MmcWatchDeps): MmcWatcher {
       // Now that the image is on file, every document of theirs still waiting
       // for a signature is decided about again - one at a time, with a breath
       // between, so sixty-five signatures arriving at once is a few quiet
-      // minutes of work rather than a spike.
-      const waiting = await deps.listAwaitingSignature(candidate.employeeId)
-      let decided = 0
-      for (const document of waiting) {
-        if (stopped) break
-        const uploader = document.uploadedBy ? await deps.resolveUser(document.uploadedBy) : null
-        await deps.runStampDecision(document.documentId, uploader ?? actor, CONTEXT)
-        decided += 1
-        await sleep(BETWEEN_DOCUMENTS_MS)
-      }
+      // minutes of work rather than a spike. Nothing in report mode, and
+      // nothing for a type not in the list; the runner knows both.
+      const outcomes = await deps.redecide(candidate.employeeId, actor, CONTEXT, 'MMC pickup')
+      const decided = outcomes.filter((outcome) => outcome.kind === 'decided').length
 
       return { job, result: 'attached', attached, decided }
     } catch (error) {

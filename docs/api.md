@@ -275,6 +275,8 @@ decision row and the report:
   "stampedCount": 1,
   "skippedCount": 1,
   "boxes": [
+    // action: stamp | skip | keep - 'keep' is a placement already on the
+    // document for that role and page, kept as it is when the rest went on
     { "signerRole": "Employee",   "pageNumber": 1, "action": "stamp", "reason": null, "found": "empty" },
     { "signerRole": "Authoriser", "pageNumber": 1, "action": "skip",
       "reason": "the person who uploaded it has no signature on file", "found": "empty" }
@@ -300,6 +302,12 @@ failure - and goes to `ReviewRequired`; the checklist shows nothing for it.
 `npm run unstamp` takes the application's stamp off a document that was
 signed outside it, through the same code the editor's empty save uses, and
 leaves it `Skipped` (deployment notes).
+
+Saving an employee's signature (`POST /employees/:id/signature`) or
+photograph (`POST /employees/:id/photo`) decides again about that employee's
+documents still waiting for a signature, after the response and never
+failing it: in stamp mode, for the listed types, keeping every placement
+already on the document and adding only the roles missing from a page.
 
 ### Other document bodies
 

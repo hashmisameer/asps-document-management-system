@@ -6,7 +6,12 @@ import {
   type DocumentTypePlacement,
   type SignerRole,
 } from '@asps-dms/shared'
-import { REASONS, decide, type DecideInput } from '../../src/services/autoStamp.service.js'
+import {
+  REASONS,
+  decide,
+  overlapShare,
+  type DecideInput,
+} from '../../src/services/autoStamp.service.js'
 import type { BoxAssessment, Verdict } from '../../src/services/boxOccupancy.service.js'
 import type { StampCheckResult } from '../../src/services/stampCheck.service.js'
 
@@ -116,6 +121,7 @@ function input(overrides: Partial<DecideInput> = {}): DecideInput {
     templateRows: rows,
     check: checked(rows),
     images: everything,
+    existing: [],
     ...overrides,
   }
 }
@@ -369,6 +375,130 @@ describe('the variant', () => {
     expect(decision.summary).toBe(
       'Stamped: employee signature and hr signature. (2 saved templates are this shape; the newest was used.)',
     )
+  })
+})
+
+describe('what is already on the document', () => {
+  const esicRows = () => [
+    templateRow(SIGNER_ROLES.PHOTO, { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }),
+    templateRow(SIGNER_ROLES.EMPLOYEE, { x: 0.4, y: 0.8 }),
+    templateRow(SIGNER_ROLES.AUTHORISER, { x: 0.7, y: 0.8 }),
+  ]
+  const esic = (existing: DecideInput['existing'], rows = esicRows()) =>
+    input({
+      documentCode: 'ESIC_FORM',
+      documentName: 'ESIC Form',
+      templateRows: rows,
+      check: checked(rows),
+      existing,
+    })
+  const byHand = (
+    signerRole: SignerRole,
+    rect = { x: 0.15, y: 0.15, width: 0.2, height: 0.2 },
+    method: 'Manual' | 'Automatic' = 'Manual',
+  ) => ({ signerRole, pageNumber: 1, rect, method })
+
+  it('keeps a photograph HR placed by hand and adds the two signatures', () => {
+    const decision = decide(esic([byHand(SIGNER_ROLES.PHOTO)]))
+
+    expect(decision.boxes.map((box) => [box.signerRole, box.action])).toEqual([
+      ['Photo', 'keep'],
+      ['Employee', 'stamp'],
+      ['Authoriser', 'stamp'],
+    ])
+    expect(decision.kept[0]?.reason).toBe('already on the page, placed by hand')
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual(['Employee', 'Authoriser'])
+    // Kept is done: the document is complete and signed.
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(decision.summary).toBe(
+      'Stamped: employee signature and hr signature. Kept: employee photo (placed by hand).',
+    )
+  })
+
+  it('never puts a second box of a role already on the page - by hand or by an earlier stamp', () => {
+    const decision = decide(
+      esic([
+        byHand(SIGNER_ROLES.EMPLOYEE, { x: 0.5, y: 0.5, width: 0.2, height: 0.1 }, 'Automatic'),
+        byHand(SIGNER_ROLES.PHOTO),
+      ]),
+    )
+
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    expect(decision.kept.map((box) => [box.signerRole, box.reason])).toEqual([
+      ['Photo', 'already on the page, placed by hand'],
+      ['Employee', 'already stamped earlier'],
+    ])
+    expect(decision.summary).toBe(
+      'Stamped: hr signature. Kept: employee photo (placed by hand); employee signature (stamped earlier).',
+    )
+  })
+
+  it('is by page: a box of the same role on another page does not count', () => {
+    const decision = decide(esic([{ ...byHand(SIGNER_ROLES.EMPLOYEE), pageNumber: 2 }]))
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual([
+      'Photo',
+      'Employee',
+      'Authoriser',
+    ])
+    expect(decision.kept).toEqual([])
+  })
+
+  it('a kept signature makes the document complete even when nothing new is a signature', () => {
+    const decision = decide(
+      esic([
+        byHand(SIGNER_ROLES.EMPLOYEE, { x: 0.4, y: 0.8, width: 0.25, height: 0.08 }),
+        byHand(SIGNER_ROLES.AUTHORISER, { x: 0.7, y: 0.8, width: 0.25, height: 0.08 }),
+      ]),
+    )
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual(['Photo'])
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+  })
+
+  it('does not paint a template box over a box HR placed there for another role', () => {
+    // HR put the employee signature where the template's photograph goes.
+    const decision = decide(
+      esic([byHand(SIGNER_ROLES.EMPLOYEE, { x: 0.12, y: 0.12, width: 0.2, height: 0.2 })]),
+    )
+
+    const photo = decision.boxes.find((box) => box.signerRole === 'Photo')
+    expect(photo?.action).toBe('skip')
+    expect(photo?.reason).toBe('it would lie over the employee signature box placed by hand')
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.PARTIAL)
+  })
+
+  it('lets boxes that merely touch stand side by side', () => {
+    // A tenth overlapping is the line: five per cent is a neighbour.
+    const decision = decide(
+      esic([byHand(SIGNER_ROLES.EMPLOYEE, { x: 0.29, y: 0.1, width: 0.2, height: 0.2 })]),
+    )
+    expect(decision.boxes.find((box) => box.signerRole === 'Photo')?.action).toBe('stamp')
+  })
+
+  it('leaves alone what the template does not know about', () => {
+    // A box on page 3, where the template has nothing: not the decision's
+    // business; the runner keeps every existing row regardless.
+    const decision = decide(esic([{ ...byHand(SIGNER_ROLES.EMPLOYEE), pageNumber: 3 }]))
+    expect(decision.boxes).toHaveLength(3)
+    expect(decision.boxes.every((box) => box.action === 'stamp')).toBe(true)
+  })
+
+  it('changes nothing for a fresh upload', () => {
+    const decision = decide(esic([]))
+    expect(decision.kept).toEqual([])
+    expect(decision.boxes.every((box) => box.action === 'stamp')).toBe(true)
+    expect(decision.summary).toBe('Stamped: employee photo, employee signature and hr signature.')
+  })
+})
+
+describe('overlapShare', () => {
+  it('is the share of the first box under the second', () => {
+    const box = { x: 0, y: 0, width: 0.2, height: 0.2 }
+    expect(overlapShare(box, { x: 0.1, y: 0, width: 0.2, height: 0.2 })).toBeCloseTo(0.5)
+    expect(overlapShare(box, { x: 0.2, y: 0, width: 0.2, height: 0.2 })).toBe(0)
+    expect(overlapShare(box, { x: 0, y: 0, width: 1, height: 1 })).toBeCloseTo(1)
+    expect(overlapShare(box, { x: 0.5, y: 0.5, width: 0.1, height: 0.1 })).toBe(0)
   })
 })
 

@@ -36,6 +36,7 @@ import * as employeeService from './employee.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
 import { prepareForPdf } from './imagePrep.service.js'
 import { stampSignature, type SignatureImage } from './signatureStamp.service.js'
+import { redecideInBackground } from './redecideHook.service.js'
 import * as storage from './storage.service.js'
 
 /**
@@ -100,6 +101,17 @@ export async function uploadSignature(
   file: UploadedFile,
   actor: AuthUser,
   context: RequestContext,
+  options: {
+    /**
+     * Whether the employee's waiting documents are decided about again once
+     * the signature is on file. On by default - a save by hand or on the pad
+     * is exactly when they should be. Off for the MMC pickup, which decides
+     * again itself once BOTH images it found are on the record, and for the
+     * look in the folder a decision makes on its way, which must not start
+     * a second decision about the same document.
+     */
+    redecide?: boolean
+  } = {},
 ): Promise<EmployeeSignatureSummary> {
   // 404s here rather than failing on the foreign key three statements later.
   await employeeService.getById(employeeId)
@@ -143,6 +155,10 @@ export async function uploadSignature(
       heightPx: measured.heightPx,
     },
   })
+
+  if (options.redecide !== false) {
+    redecideInBackground(employeeId, actor, context, 'signature saved')
+  }
 
   return getSignatureSummary(employeeId)
 }
@@ -501,6 +517,13 @@ export interface StampBox {
   method: PlacementMethod
   detectionMethod: DetectionMethod
   confidence: number | null
+  /**
+   * For an 'Authoriser' box already on the document and kept through a
+   * repaint: whose signature it is. Left out, the box is the actor's - which
+   * is right for a box being placed now and wrong for one placed earlier by
+   * somebody else.
+   */
+  signerUserId?: number | null
 }
 
 export interface ApplyPlacementsInput {
@@ -607,7 +630,9 @@ export async function applyPlacements(input: ApplyPlacementsInput): Promise<void
         // Recorded rather than looked up on the next rebuild: regenerating a
         // signed PDF a year from now must reproduce the document that was
         // issued, not sign it in whoever happens to be logged in that day.
-        signerUserId: box.signerRole === SIGNER_ROLES.AUTHORISER ? actor.userId : null,
+        // A kept box keeps its signer for the same reason.
+        signerUserId:
+          box.signerRole === SIGNER_ROLES.AUTHORISER ? (box.signerUserId ?? actor.userId) : null,
       })),
       actor.userId,
     )

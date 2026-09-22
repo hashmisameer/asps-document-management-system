@@ -268,10 +268,16 @@ async function attachOne(
         },
       })
     } else {
-      await signatureService.uploadSignature(employee.employeeId, file, actor, {
-        ...context,
-        userAgent: 'mmc',
-      })
+      // No re-decide from here: the pickup decides again itself once both
+      // images are on the record, and a decision's own look in the folder
+      // must not start a second decision about the same document.
+      await signatureService.uploadSignature(
+        employee.employeeId,
+        file,
+        actor,
+        { ...context, userAgent: 'mmc' },
+        { redecide: false },
+      )
     }
   } catch (error) {
     result.detail = { ...result.detail, [kind]: describeError(error) }

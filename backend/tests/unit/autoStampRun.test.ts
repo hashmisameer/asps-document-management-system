@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   autoStampTypes: new Set<string>(['APPOINTMENT_LETTER']),
   findDocument: vi.fn(),
   findLatestDecision: vi.fn(),
+  listPlacements: vi.fn(),
+  findUser: vi.fn(),
   findStoredFile: vi.fn(),
   setSignatureStatus: vi.fn(),
   findEmployee: vi.fn(),
@@ -74,6 +76,19 @@ vi.mock('../../src/repositories/stampDecision.repository.js', () => ({
   findLatestForDocument: mocks.findLatestDecision,
 }))
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: mocks.insertAudit }))
+vi.mock('../../src/repositories/signaturePlacement.repository.js', () => ({
+  listForDocument: mocks.listPlacements,
+}))
+vi.mock('../../src/repositories/user.repository.js', () => ({
+  findById: mocks.findUser,
+  toAuthUser: (record: { userId: number; username: string; fullName: string; role: string }) => ({
+    userId: record.userId,
+    username: record.username,
+    fullName: record.fullName,
+    role: record.role,
+    mustChangePassword: false,
+  }),
+}))
 vi.mock('../../src/services/mmcImages.service.js', () => ({
   attachQuietly: mocks.attachQuietly,
 }))
@@ -86,7 +101,8 @@ vi.mock('../../src/services/signature.service.js', () => ({
   readPhotoForStamp: mocks.readPhotoForStamp,
 }))
 
-const { run, runBacklog } = await import('../../src/services/autoStampRun.service.js')
+const { run, runOne, runBacklog, redecideForEmployee, redecideType } =
+  await import('../../src/services/autoStampRun.service.js')
 
 const actor: AuthUser = {
   userId: 7,
@@ -184,6 +200,8 @@ beforeEach(() => {
   mocks.autoStampTypes = new Set(['APPOINTMENT_LETTER'])
   mocks.findDocument.mockResolvedValue(document())
   mocks.findLatestDecision.mockResolvedValue(null)
+  mocks.listPlacements.mockResolvedValue([])
+  mocks.findUser.mockResolvedValue(null)
   mocks.findStoredFile.mockResolvedValue({
     documentId: 5,
     employeeId: 42,
@@ -551,5 +569,446 @@ describe('the backlog', () => {
     expect(outcomes[0]?.result).toBeNull()
     expect(outcomes[1]?.result?.status).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
     expect(seen).toEqual([5, 6])
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Deciding again: what is already on the document stays                        */
+/* -------------------------------------------------------------------------- */
+
+function placed(
+  signerRole: 'Employee' | 'Authoriser' | 'Photo',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    signaturePlacementId: 11,
+    documentId: 5,
+    employeeId: 42,
+    pageNumber: 1,
+    x: 0.15,
+    y: 0.2,
+    width: 0.2,
+    height: 0.2,
+    pageRotation: 0,
+    method: 'Manual',
+    detectionMethod: 'Manual',
+    confidence: null,
+    signerRole,
+    signerUserId: signerRole === 'Authoriser' ? 7 : null,
+    signerName: signerRole === 'Authoriser' ? 'Priya Sharma' : null,
+    isApplied: true,
+    createdAt: '2026-09-15T00:00:00.000Z',
+    updatedAt: '2026-09-15T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** The ESIC template: photograph, employee and HR boxes on page 1. */
+const esicRows = [
+  { ...templateRow('Photo', 0.1), documentTypePlacementId: 1 },
+  { ...templateRow('Employee', 0.4), documentTypePlacementId: 2 },
+  { ...templateRow('Authoriser', 0.7), documentTypePlacementId: 3 },
+]
+
+function esicDocument(overrides: Record<string, unknown> = {}) {
+  return document({
+    documentCode: 'ESIC_FORM',
+    documentName: 'ESIC Form',
+    signatureStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
+    ...overrides,
+  })
+}
+
+/** A stamp-check that found every ESIC box empty on the original. */
+function esicChecked() {
+  return {
+    ...checkedEmpty(),
+    documentCode: 'ESIC_FORM',
+    documentName: 'ESIC Form',
+    boxes: esicRows.map((row, index) => ({
+      label: String(index),
+      signerRole: row.signerRole,
+      pageNumber: 1,
+      rect: { x: row.x, y: row.y, width: row.width, height: row.height },
+      verdict: 'empty',
+      decidedBy: 'none',
+      pageKind: 'digital',
+      overlap: { images: 0, coverage: 0 },
+      reason: 'no image on the box',
+    })),
+  }
+}
+
+describe('a document that already carries placements', () => {
+  beforeEach(() => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['ESIC_FORM'])
+    mocks.findDocument.mockResolvedValue(esicDocument())
+    mocks.listForType.mockResolvedValue(esicRows)
+    mocks.checkDocument.mockResolvedValue(esicChecked())
+    mocks.readPhotoForStamp.mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' })
+    mocks.readSignatureImages.mockResolvedValue({ Employee: {}, Authoriser: {}, Photo: {} })
+  })
+
+  it('keeps a photograph HR placed by hand, at its own rectangle, and adds the rest', async () => {
+    // Document 96: the photograph by hand on the 15th, the signature saved on
+    // the 16th. The photograph stays where HR put it; the employee box and
+    // the HR box are added from the template.
+    mocks.listPlacements.mockResolvedValue([placed('Photo')])
+
+    const result = await run(5, actor, context, { trigger: 'signature saved' })
+
+    expect(result?.decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(result?.decision.kept.map((box) => box.signerRole)).toEqual(['Photo'])
+    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual([
+      'Employee',
+      'Authoriser',
+    ])
+    expect(result?.decision.summary).toBe(
+      'Stamped: employee signature and hr signature. Kept: employee photo (placed by hand).',
+    )
+    expect(result?.status).toBe(SIGNATURE_STATUS.ADDED)
+
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as {
+      boxes: { signerRole: string; x: number; method: string; detectionMethod: string }[]
+      auditMetadata: Record<string, unknown>
+    }
+    // The whole set, repainted from the original: HR's box as it was, then
+    // the two new ones.
+    expect(
+      input.boxes.map((box) => [box.signerRole, box.x, box.method, box.detectionMethod]),
+    ).toEqual([
+      ['Photo', 0.15, 'Manual', 'Manual'],
+      ['Employee', 0.4, 'Automatic', 'Template'],
+      ['Authoriser', 0.7, 'Automatic', 'Template'],
+    ])
+    expect(input.auditMetadata).toMatchObject({
+      trigger: 'signature saved',
+      added: [
+        { signerRole: 'Employee', page: 1 },
+        { signerRole: 'Authoriser', page: 1 },
+      ],
+      kept: [{ signerRole: 'Photo', page: 1, method: 'Manual' }],
+    })
+    // The kept photograph needs its image, so it was read with the others.
+    expect(mocks.readSignatureImages).toHaveBeenCalledWith(
+      expect.objectContaining({ photo: expect.anything() }),
+    )
+  })
+
+  it('never puts a second box of a role already on the page, whoever placed the first', async () => {
+    mocks.listPlacements.mockResolvedValue([
+      placed('Employee', { method: 'Automatic', detectionMethod: 'Template', x: 0.5 }),
+      placed('Photo', { signaturePlacementId: 12 }),
+    ])
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    expect(result?.decision.kept.map((box) => box.signerRole)).toEqual(['Photo', 'Employee'])
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as { boxes: { signerRole: string }[] }
+    expect(input.boxes.filter((box) => box.signerRole === 'Employee')).toHaveLength(1)
+    expect(result?.decision.summary).toBe(
+      'Stamped: hr signature. Kept: employee photo (placed by hand); employee signature (stamped earlier).',
+    )
+  })
+
+  it('leaves alone a document with nothing to add, and says what is still missing', async () => {
+    mocks.listPlacements.mockResolvedValue([placed('Photo'), placed('Employee', { x: 0.5 })])
+    mocks.findActiveUserSignature.mockResolvedValue(null)
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({
+      left: 'nothingToAdd',
+      detail:
+        'still missing: the hr signature - the person who uploaded it has no signature on file',
+    })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.insertDecision).not.toHaveBeenCalled()
+    expect(mocks.setSignatureStatus).not.toHaveBeenCalled()
+  })
+
+  it('leaves alone a document that has every box the template has', async () => {
+    mocks.listPlacements.mockResolvedValue([
+      placed('Photo'),
+      placed('Employee', { x: 0.5 }),
+      placed('Authoriser', { x: 0.8 }),
+    ])
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({
+      left: 'nothingToAdd',
+      detail: 'every box the template has is already on it',
+    })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+  })
+
+  it('acts as the signer of a kept HR box, so the box keeps that person’s signature', async () => {
+    const other = {
+      userId: 3,
+      username: 'hr.other',
+      fullName: 'Other HR',
+      role: 'HR',
+      isActive: true,
+    }
+    mocks.listPlacements.mockResolvedValue([
+      placed('Authoriser', { signerUserId: 3, signerName: 'Other HR' }),
+    ])
+    mocks.findUser.mockResolvedValue(other)
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual(['Photo', 'Employee'])
+    // The HR image read is the signer's, and the run is recorded in their name.
+    expect(mocks.findActiveUserSignature).toHaveBeenCalledWith(3)
+    expect(mocks.insertDecision).toHaveBeenCalledWith(expect.objectContaining({ decidedBy: 3 }))
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as {
+      actor: { userId: number }
+      boxes: { signerRole: string; signerUserId?: number | null }[]
+    }
+    expect(input.actor.userId).toBe(3)
+    expect(input.boxes.find((box) => box.signerRole === 'Authoriser')?.signerUserId).toBe(3)
+  })
+
+  it('leaves alone a document whose kept HR box was signed by an account with no signature now', async () => {
+    mocks.listPlacements.mockResolvedValue([
+      placed('Authoriser', { signerUserId: 3, signerName: 'Other HR' }),
+    ])
+    mocks.findUser.mockResolvedValue({
+      userId: 3,
+      username: 'hr.other',
+      fullName: 'Other HR',
+      role: 'HR',
+      isActive: true,
+    })
+    mocks.findActiveUserSignature.mockResolvedValue(null)
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({
+      left: 'signerUnavailable',
+      detail:
+        'the hr signature already on it cannot be repainted: Other HR has no signature on file',
+    })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.checkDocument).not.toHaveBeenCalled()
+  })
+
+  it('leaves alone a document whose kept HR box was signed by an account that is gone', async () => {
+    mocks.listPlacements.mockResolvedValue([
+      placed('Authoriser', { signerUserId: 3, signerName: 'Other HR' }),
+    ])
+    mocks.findUser.mockResolvedValue({ userId: 3, isActive: false })
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({ left: 'signerUnavailable' })
+    expect((outcome as { detail: string }).detail).toContain('Other HR')
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+  })
+
+  it('leaves alone a document whose kept photograph is no longer on file', async () => {
+    mocks.listPlacements.mockResolvedValue([placed('Photo')])
+    mocks.readPhotoForStamp.mockResolvedValue(null)
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({
+      left: 'imageMissing',
+      detail:
+        'the employee photo already on it cannot be repainted: the employee has no photograph on file',
+    })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+  })
+
+  it('does not paint a template box over a box HR placed somewhere else', async () => {
+    // HR put the employee signature where the template's photograph goes.
+    mocks.listPlacements.mockResolvedValue([placed('Employee', { x: 0.1, y: 0.8 })])
+
+    const result = await run(5, actor, context)
+
+    const photo = result?.decision.boxes.find((box) => box.signerRole === 'Photo')
+    expect(photo?.action).toBe('skip')
+    expect(photo?.reason).toBe('it would lie over the employee signature box placed by hand')
+    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual(['Authoriser'])
+  })
+
+  it('counts kept boxes as done, not as left alone, in the decision row', async () => {
+    mocks.listPlacements.mockResolvedValue([placed('Photo')])
+
+    await run(5, actor, context)
+
+    expect(mocks.insertDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ stampedCount: 2, skippedCount: 0 }),
+    )
+    const boxes = (mocks.insertDecision.mock.calls[0]?.[0] as { boxes: { action: string }[] }).boxes
+    expect(boxes.map((box) => box.action)).toEqual(['keep', 'stamp', 'stamp'])
+  })
+})
+
+describe('deciding again for an employee', () => {
+  const sleeps: number[] = []
+  const deps = () => ({
+    mode: () => (mocks.autoStamp === 'stamp' ? 'Stamp' : 'Report') as 'Stamp' | 'Report',
+    types: () => mocks.autoStampTypes,
+    listAwaiting: vi.fn(async () => [
+      { documentId: 5, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: 9 },
+      { documentId: 6, documentCode: 'PF_FORM', documentName: 'PF Form', uploadedBy: 9 },
+      { documentId: 7, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: 404 },
+    ]),
+    resolveUser: vi.fn(async (id: number) =>
+      id === 9 ? { ...actor, userId: 9, username: 'hr.uploader' } : null,
+    ),
+    runOne: vi.fn(async (documentId: number, ..._rest: unknown[]) =>
+      documentId === 7
+        ? { documentId, left: 'nothingToAdd' as const, detail: 'x' }
+        : {
+            documentId,
+            mode: 'Stamp' as const,
+            decision: {} as never,
+            stamped: 1,
+            status: SIGNATURE_STATUS.ADDED,
+          },
+    ),
+    sleep: vi.fn(async (ms: number) => {
+      sleeps.push(ms)
+    }),
+  })
+
+  beforeEach(() => {
+    sleeps.length = 0
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['ESIC_FORM'])
+  })
+
+  it('runs the listed waiting documents, in their uploaders’ names, with a breath between', async () => {
+    const d = deps()
+    const outcomes = await redecideForEmployee(42, actor, context, 'signature saved', d)
+
+    // The PF form is not in the list and is not even run.
+    expect(d.runOne.mock.calls.map((call) => call[0])).toEqual([5, 7])
+    expect(d.runOne.mock.calls[0]?.[1]).toMatchObject({ userId: 9 })
+    // The uploader of #7 is gone; the caller stands in.
+    expect(d.runOne.mock.calls[1]?.[1]).toBe(actor)
+    expect(d.runOne.mock.calls[0]?.[3]).toEqual({ trigger: 'signature saved' })
+    expect(sleeps).toEqual([250])
+    expect(outcomes.map((o) => [o.documentId, o.kind])).toEqual([
+      [5, 'decided'],
+      [7, 'left'],
+    ])
+  })
+
+  it('does nothing at all in report mode', async () => {
+    mocks.autoStamp = 'report'
+    const d = deps()
+    const outcomes = await redecideForEmployee(42, actor, context, 'photo saved', d)
+    expect(outcomes).toEqual([])
+    expect(d.listAwaiting).not.toHaveBeenCalled()
+    expect(d.runOne).not.toHaveBeenCalled()
+  })
+
+  it('never throws - a save must not fail because what followed it did', async () => {
+    const d = deps()
+    d.listAwaiting.mockRejectedValue(new Error('database is down'))
+    await expect(redecideForEmployee(42, actor, context, 'photo saved', d)).resolves.toEqual([])
+  })
+})
+
+describe('deciding again for a type: the command', () => {
+  const rows = [
+    { documentId: 5, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: 9 },
+    { documentId: 6, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: null },
+  ]
+  const fallback: AuthUser = { ...actor, userId: 1, username: 'admin', role: ROLES.ADMIN }
+
+  beforeEach(() => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['ESIC_FORM'])
+    mocks.findDocument.mockResolvedValue(esicDocument())
+    mocks.listForType.mockResolvedValue(esicRows)
+    mocks.checkDocument.mockResolvedValue(esicChecked())
+    mocks.readPhotoForStamp.mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' })
+    mocks.readSignatureImages.mockResolvedValue({ Employee: {}, Authoriser: {}, Photo: {} })
+    mocks.listPlacements.mockResolvedValue([placed('Photo')])
+  })
+
+  it('a dry run reads and decides and writes nothing - not even to the record', async () => {
+    const seen: string[] = []
+    const outcomes = await redecideType(rows, {
+      dryRun: true,
+      fallback,
+      context,
+      resolveUploader: async () => null,
+      onEach: (o) => seen.push(`${o.documentId} ${o.kind}`),
+      sleep: async () => {},
+    })
+
+    expect(seen).toEqual(['5 preview', '6 preview'])
+    const first = outcomes[0]
+    expect(first?.kind).toBe('preview')
+    if (first?.kind === 'preview') {
+      expect(first.decision.toStamp.map((box) => box.signerRole)).toEqual([
+        'Employee',
+        'Authoriser',
+      ])
+      expect(first.decision.kept.map((box) => box.signerRole)).toEqual(['Photo'])
+    }
+    expect(mocks.attachQuietly).not.toHaveBeenCalled()
+    expect(mocks.insertDecision).not.toHaveBeenCalled()
+    expect(mocks.insertAudit).not.toHaveBeenCalled()
+    expect(mocks.setSignatureStatus).not.toHaveBeenCalled()
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+  })
+
+  it('a live run stamps, in the uploader’s name where there is one', async () => {
+    const uploader = { ...actor, userId: 9, username: 'hr.uploader' }
+    const sleeps: number[] = []
+    const outcomes = await redecideType(rows, {
+      dryRun: false,
+      fallback,
+      context,
+      resolveUploader: async (id) => (id === 9 ? uploader : null),
+      sleep: async (ms) => {
+        sleeps.push(ms)
+      },
+    })
+
+    expect(outcomes.map((o) => o.kind)).toEqual(['decided', 'decided'])
+    expect(mocks.applyPlacements).toHaveBeenCalledTimes(2)
+    const actors = mocks.applyPlacements.mock.calls.map(
+      (call) => (call[0] as { actor: { userId: number } }).actor.userId,
+    )
+    expect(actors).toEqual([9, 1])
+    expect(sleeps).toEqual([250])
+    const meta = (
+      mocks.applyPlacements.mock.calls[0]?.[0] as { auditMetadata: { trigger: string } }
+    ).auditMetadata
+    expect(meta.trigger).toBe('redecide command')
+  })
+
+  it('reports a document left alone, and carries on', async () => {
+    // The first has everything already, its HR box signed by the fallback
+    // itself; the second wants two boxes.
+    mocks.listPlacements
+      .mockResolvedValueOnce([
+        placed('Photo'),
+        placed('Employee', { x: 0.5 }),
+        placed('Authoriser', { x: 0.8, signerUserId: 1 }),
+      ])
+      .mockResolvedValueOnce([placed('Photo')])
+
+    const outcomes = await redecideType(rows, {
+      dryRun: false,
+      fallback,
+      context,
+      resolveUploader: async () => null,
+      sleep: async () => {},
+    })
+
+    expect(outcomes[0]).toMatchObject({ kind: 'left', reason: 'nothingToAdd' })
+    expect(outcomes[1]).toMatchObject({ kind: 'decided' })
+    expect(mocks.applyPlacements).toHaveBeenCalledTimes(1)
   })
 })

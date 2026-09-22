@@ -84,6 +84,32 @@ describe('formatDecision', () => {
     )
   })
 
+  it('prints a kept box as kept, and does not count it as left alone', () => {
+    const kept = row({
+      outcome: STAMP_OUTCOMES.STAMPED,
+      stampedCount: 2,
+      skippedCount: 0,
+      summary:
+        'Stamped: employee signature and hr signature. Kept: employee photo (placed by hand).',
+      boxes: [
+        {
+          signerRole: 'Photo',
+          pageNumber: 1,
+          action: 'keep',
+          reason: 'already on the page, placed by hand',
+          found: null,
+        },
+        { signerRole: 'Employee', pageNumber: 1, action: 'stamp', reason: null, found: 'empty' },
+        { signerRole: 'Authoriser', pageNumber: 1, action: 'stamp', reason: null, found: 'empty' },
+      ],
+    })
+    const lines = formatDecision(kept)
+    expect(lines[2]).toBe('    - photo p1: keep - already on the page, placed by hand')
+    const summary = summarise([kept])
+    expect(summary.boxesLeftAlone).toBe(0)
+    expect(summary.reasons).toEqual([])
+  })
+
   it('names no employee', () => {
     // The row type carries none, so this pins the line against ever growing one.
     const text = formatDecision(row()).join('\n')
