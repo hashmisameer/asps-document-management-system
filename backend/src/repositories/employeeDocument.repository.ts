@@ -469,24 +469,65 @@ export async function listStoredFilesOfType(documentTypeId: number): Promise<Sto
  */
 export interface AwaitingSignatureRow {
   documentId: number
+  documentCode: string
+  documentName: string
   uploadedBy: number | null
 }
 
+/** Column names only; the two queries below add their own WHERE clause to it. */
+const AWAITING_FROM = `
+      FROM   dbo.EmployeeDocuments AS d
+      JOIN   dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
+      WHERE  d.IsActive = 1
+        AND  d.OriginalFilePath IS NOT NULL
+        AND  d.SignatureStatus IN ('PendingDetection', 'ReviewRequired')`
+
+interface AwaitingRow {
+  DocumentId: number
+  DocumentCode: string
+  DocumentName: string
+  UploadedBy: number | null
+}
+
+function toAwaiting(row: AwaitingRow): AwaitingSignatureRow {
+  return {
+    documentId: row.DocumentId,
+    documentCode: row.DocumentCode,
+    documentName: row.DocumentName,
+    uploadedBy: row.UploadedBy,
+  }
+}
+
+/** One employee's documents still waiting for a signature, with a file to sign. */
 export async function listAwaitingSignature(employeeId: number): Promise<AwaitingSignatureRow[]> {
   const request = await createRequest()
-  const result = await request.input('employeeId', sql.Int, employeeId).query<{
-    DocumentId: number
-    UploadedBy: number | null
-  }>(`
-      SELECT d.DocumentId, d.UploadedBy
-      FROM   dbo.EmployeeDocuments AS d
-      WHERE  d.EmployeeId = @employeeId
-        AND  d.IsActive = 1
-        AND  d.OriginalFilePath IS NOT NULL
-        AND  d.SignatureStatus IN ('PendingDetection', 'ReviewRequired')
+  const result = await request.input('employeeId', sql.Int, employeeId).query<AwaitingRow>(`
+      SELECT d.DocumentId, dt.DocumentCode, dt.DocumentName, d.UploadedBy
+      ${AWAITING_FROM}
+        AND  d.EmployeeId = @employeeId
       ORDER BY d.DocumentId`)
 
-  return result.recordset.map((row) => ({ documentId: row.DocumentId, uploadedBy: row.UploadedBy }))
+  return result.recordset.map(toAwaiting)
+}
+
+/**
+ * Every document of one type still waiting for a signature, oldest first -
+ * what the re-decide command works through.
+ */
+export async function listWaitingOfType(
+  documentCode: string,
+  limit: number,
+): Promise<AwaitingSignatureRow[]> {
+  const request = await createRequest()
+  const result = await request
+    .input('documentCode', sql.VarChar(50), documentCode)
+    .input('limit', sql.Int, limit).query<AwaitingRow>(`
+      SELECT TOP (@limit) d.DocumentId, dt.DocumentCode, dt.DocumentName, d.UploadedBy
+      ${AWAITING_FROM}
+        AND  dt.DocumentCode = @documentCode
+      ORDER BY d.DocumentId`)
+
+  return result.recordset.map(toAwaiting)
 }
 
 /** A document waiting for stamping on upload that never came: the backlog. */

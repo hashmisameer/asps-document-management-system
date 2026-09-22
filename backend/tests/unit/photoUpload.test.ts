@@ -14,6 +14,7 @@ import { prepareForPdf } from '../../src/services/imagePrep.service.js'
  */
 
 const db = vi.hoisted(() => ({
+  redecideForEmployee: vi.fn(async () => []),
   findById: vi.fn(),
   setPhoto: vi.fn(),
   storePhoto: vi.fn(),
@@ -47,6 +48,9 @@ vi.mock('../../src/services/storage.service.js', () => ({
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
+vi.mock('../../src/services/autoStampRun.service.js', () => ({
+  redecideForEmployee: db.redecideForEmployee,
+}))
 
 const employeeService = await import('../../src/services/employee.service.js')
 
@@ -99,6 +103,14 @@ const upload = (buffer: Buffer, name: string) =>
   employeeService.uploadPhoto(42, { originalname: name, buffer, size: buffer.byteLength }, hr, context)
 
 describe('uploadPhoto', () => {
+  it('decides again about the employee’s waiting documents once the photograph is saved', async () => {
+    await upload(await jpeg(), 'photo.jpg')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(db.redecideForEmployee).toHaveBeenCalledWith(42, hr, context, 'photo saved')
+  })
+
   it('stores a progressive JPEG as baseline, and says so in the audit trail', async () => {
     const source = await jpeg({ progressive: true })
     expect((await sharp(source).metadata()).isProgressive).toBe(true)

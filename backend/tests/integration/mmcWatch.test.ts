@@ -17,8 +17,9 @@ import * as documentTypePlacementRepository from '../../src/repositories/documen
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as employeeRepository from '../../src/repositories/employee.repository.js'
 import * as userRepository from '../../src/repositories/user.repository.js'
+import { env } from '../../src/config/env.js'
 import { attachMissing } from '../../src/services/mmcImages.service.js'
-import { run as runStampDecision } from '../../src/services/autoStampRun.service.js'
+import { redecideForEmployee } from '../../src/services/autoStampRun.service.js'
 import {
   createMmcWatcher,
   realDeps,
@@ -122,7 +123,11 @@ describe('the MMC pickup, end to end', () => {
   let dirs = { photo: '', signature: '' }
   let letterTypeId = 0
 
+  const originalMode = env.AUTO_STAMP
+
   beforeAll(async () => {
+    // The re-decide after a pickup happens in stamp mode only.
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
     await ensureSchema()
     await resetData()
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'asps-mmc-'))
@@ -155,6 +160,7 @@ describe('the MMC pickup, end to end', () => {
   })
 
   afterAll(async () => {
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = originalMode
     await closeDatabase()
     await fs.rm(root, { recursive: true, force: true })
   })
@@ -166,14 +172,10 @@ describe('the MMC pickup, end to end', () => {
       ...real,
       dirs,
       attachMissing,
-      runStampDecision,
+      redecide: redecideForEmployee,
       findCandidateByCode: employeeRepository.findMmcCandidateByCode,
       listCandidatesMissingImages: employeeRepository.listMmcCandidatesMissingImages,
       findEmployee: employeeRepository.findById,
-      resolveUser: async (userId: number) => {
-        const user = await userRepository.findById(userId)
-        return user && user.isActive ? userRepository.toAuthUser(user) : null
-      },
       actor: async () => {
         const admin = await userRepository.findByUsername('admin.mmc')
         if (!admin) throw new Error('no admin')
@@ -226,13 +228,15 @@ describe('the MMC pickup, end to end', () => {
     expect(outcome.decided).toBeGreaterThanOrEqual(1)
 
     // The record has the signature, and the letter was decided about again -
-    // this time with a signature to stamp (report mode: recorded, not painted).
+    // this time with a signature to stamp, and stamped.
     const signature = await agent.get(`/api/employees/${employeeId}/signature`)
     expect(signature.body.signature.hasSignature).toBe(true)
 
     const after = await settledDocument(agent, letter.documentId)
     expect(after.stampDecision?.outcome).toBe(STAMP_OUTCOMES.STAMPED)
     expect(after.stampDecision?.summary).toBe('Stamped: employee signature.')
+    expect(after.signatureStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(after.hasProcessedFile).toBe(true)
     const request = await createRequest()
     const decisions = await request.query<{ N: number }>(
       `SELECT COUNT(*) AS N FROM dbo.StampDecisions WHERE DocumentId = ${letter.documentId}`,

@@ -36,6 +36,7 @@ import * as audit from './audit.service.js'
 import * as storage from './storage.service.js'
 import { inspectSignatureUpload, type UploadedFile } from './fileValidation.service.js'
 import { prepareForPdf } from './imagePrep.service.js'
+import { redecideInBackground } from './redecideHook.service.js'
 import type { RequestContext } from './auth.service.js'
 
 /**
@@ -472,6 +473,9 @@ export async function uploadPhoto(
       reencoded: prepared.converted,
     },
   })
+
+  // The ESIC form waiting for this photograph gets it now.
+  redecideInBackground(employeeId, actor, context, 'photo saved')
 
   return getById(employeeId)
 }

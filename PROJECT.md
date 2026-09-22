@@ -113,6 +113,23 @@ and processed file removed through `removeStamp`, the editor's own path;
 status `Skipped`; audit entry with the reason; refuses anything a person
 placed).
 
+**Deciding again when the image arrives later** (2026-09-22). A document was
+stamped only at upload; a signature or photograph that reached the record
+afterwards never went on (document 96: Manual photo on 15 Sept, signature on
+the pad on 16 Sept, never stamped). Now every save of an employee's signature
+or photograph - MMC pickup, hand upload, pad - runs `redecideForEmployee`
+(stamp mode, listed types, uploader's name, 250 ms apart), and
+`npm run auto-stamp -- --redecide --type ESIC_FORM [--dry-run]` does it for a
+type's backlog (~500 ESIC forms decided in report mode). **Everything already
+on a document is kept** - Automatic or Manual, rectangle, method, signer - and
+only roles missing from a page are added (`decide()` takes `existing`; the
+`keep` box action). The MMC attach path passes `{ redecide: false }` to
+`uploadSignature` so the watcher's own re-decide is the only one. A kept HR
+box makes the run act as its signer; no signature on that account = document
+left alone with the reason. Overlap guard: a template box more than a tenth
+under a hand-placed box is left alone. `applyPlacements` does not delete the
+previous processed file when it writes a new one (pre-existing; a small leak).
+
 **Several saved templates of one shape.** Templates saved before shape
 matching (pre-18 Sept) were keyed on exact size, so one shape can hold several.
 The stamper uses the **newest** saved template per shape and only that one
@@ -195,8 +212,8 @@ reports; MMC pickup; joining-date rule; overdue reminder with spreadsheet;
 bulk employee import from xlsx; dashboard and reports; xlsx exports; TIFF/OCR
 hardening (sequentialRead, errorHandler on the Tesseract worker).
 
-Test counts at the time of writing (2026-09-22): backend unit 883, frontend
-unit 167, integration 43 passing + 3 known failures (below). `npm run verify` runs lint,
+Test counts at the time of writing (2026-09-22): backend unit 912, frontend
+unit 167, integration 45 passing + 3 known failures (below). `npm run verify` runs lint,
 typecheck, SQL safety, secret scan and unit tests.
 
 ## What is open
@@ -284,6 +301,7 @@ npm run stamp-check -- --shapes      # shapes per type, templates needed
 npm run stamp-check -- --list        # templates saved and what they cover
 npm run auto-stamp -- --report       # stamping decisions (trial reading)
 npm run auto-stamp -- --backlog      # decide about documents stuck before auto-stamp
+npm run auto-stamp -- --redecide --type ESIC_FORM --dry-run   # add what arrived later
 npm run unstamp -- --documents 1,2 --reason "..." --dry-run   # take the app's stamp off
 npm run send-reminders -- --dry-run  # the overdue email and sheet, sent nowhere
 npm run attach-mmc-images -- --dry-run

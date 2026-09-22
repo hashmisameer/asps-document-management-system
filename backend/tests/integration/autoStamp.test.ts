@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { createCanvas } from '@napi-rs/canvas'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -14,7 +15,8 @@ import { createRequest } from '../../src/database/pool.js'
 import * as documentTypePlacementRepository from '../../src/repositories/documentTypePlacement.repository.js'
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as employeeDocumentRepository from '../../src/repositories/employeeDocument.repository.js'
-import { run, runBacklog } from '../../src/services/autoStampRun.service.js'
+import { redecideType, run, runBacklog } from '../../src/services/autoStampRun.service.js'
+import { resolveWithinRoot } from '../../src/services/storage.service.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
 /**
@@ -424,5 +426,338 @@ describe('stamping on upload, end to end', () => {
     expect(
       (await employeeDocumentRepository.listSignatureBacklog(100)).map((r) => r.documentId),
     ).not.toContain(letter.documentId)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Deciding again, when the image arrives after the upload                    */
+/* -------------------------------------------------------------------------- */
+
+/** A one-page ESIC declaration with a text layer the identity check can read. */
+async function esicFormFor(name: string, code: string, joining: string): Promise<Buffer> {
+  const pdf = await PDFDocument.create()
+  const page = pdf.addPage([595.28, 841.89])
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  page.drawText('EMPLOYEES STATE INSURANCE CORPORATION - DECLARATION FORM', {
+    x: 50,
+    y: 780,
+    size: 12,
+    font,
+  })
+  page.drawText(`Name: ${name}`, { x: 50, y: 740, size: 12, font })
+  page.drawText(`Employee Code: ${code}`, { x: 50, y: 720, size: 12, font })
+  page.drawText(`Date of Joining: ${joining}`, { x: 50, y: 700, size: 12, font })
+  return Buffer.from(await pdf.save())
+}
+
+/** A passport photograph: a plain JPEG. */
+function photoJpeg(): Buffer {
+  const canvas = createCanvas(120, 160)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#c8b8a8'
+  ctx.fillRect(0, 0, 120, 160)
+  ctx.fillStyle = '#404040'
+  ctx.beginPath()
+  ctx.arc(60, 70, 35, 0, Math.PI * 2)
+  ctx.fill()
+  return canvas.toBuffer('image/jpeg')
+}
+
+/** The document once a background re-decide has finished with it, or the last thing seen. */
+async function decidedAgain(
+  agent: Awaited<ReturnType<typeof signIn>>,
+  documentId: number,
+  done: (document: EmployeeDocument) => boolean,
+): Promise<EmployeeDocument> {
+  let last: EmployeeDocument | null = null
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const response = await agent.get(`/api/documents/${documentId}`)
+    last = response.body.document as EmployeeDocument
+    if (done(last)) return last
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  if (!last) throw new Error('the document never answered')
+  return last
+}
+
+describe('deciding again when the image arrives later, end to end', () => {
+  const originalMode = env.AUTO_STAMP
+  const originalTypes = env.AUTO_STAMP_TYPES
+  let hr: Awaited<ReturnType<typeof createUser>>
+  let agent: Awaited<ReturnType<typeof signIn>>
+
+  beforeAll(async () => {
+    await ensureSchema()
+    await resetData()
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = new Set(['ESIC_FORM'])
+
+    const admin = await createUser('admin.redecide', 'ADMIN')
+    hr = await createUser('hr.redecide', 'HR')
+    agent = await signIn(app(), hr)
+
+    // The ESIC template: photograph, employee and HR boxes on the one page.
+    const types = await documentTypeRepository.listActive()
+    const esicTypeId = types.find((t) => t.documentCode === 'ESIC_FORM')?.documentTypeId ?? 0
+    expect(esicTypeId).toBeGreaterThan(0)
+    await documentTypePlacementRepository.replaceForVariant(
+      esicTypeId,
+      A4,
+      [
+        { ...BOX, signerRole: SIGNER_ROLES.PHOTO, x: 0.7, y: 0.05, width: 0.15, height: 0.12 },
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, x: 0.1, y: 0.85 },
+        { ...BOX, signerRole: SIGNER_ROLES.AUTHORISER, x: 0.6, y: 0.85 },
+      ],
+      null,
+      admin.userId,
+    )
+
+    // The uploader's own signature, so the HR box has something to carry.
+    const mine = await agent
+      .post('/api/me/signature')
+      .field('capture', 'Uploaded')
+      .attach('file', signaturePng(), { filename: 'mine.png', contentType: 'image/png' })
+    expect(mine.status).toBe(200)
+  })
+
+  afterAll(async () => {
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = originalMode
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = originalTypes
+    await closeDatabase()
+  })
+
+  /** An employee with a photograph but no signature, and their ESIC form uploaded and waiting. */
+  async function waitingEsicForm() {
+    const created = await agent.post('/api/employees').send({
+      employeeCode: `RD${++codeSeq}`,
+      employeeName: 'Ravi Kumar',
+      joiningDate: JOINED,
+    })
+    expect(created.status).toBe(201)
+    const employee = created.body.employee
+    const photo = await agent
+      .post(`/api/employees/${employee.employeeId}/photo`)
+      .attach('file', photoJpeg(), { filename: 'photo.jpg', contentType: 'image/jpeg' })
+    expect(photo.status).toBe(200)
+
+    const checklist = await agent.get(`/api/employees/${employee.employeeId}/documents`)
+    const esic = checklist.body.documents.find(
+      (d: { documentCode: string }) => d.documentCode === 'ESIC_FORM',
+    )
+    const upload = await agent
+      .post(`/api/documents/${esic.documentId}/file`)
+      .attach('file', await esicFormFor('Ravi Kumar', employee.employeeCode, JOINED_ON_PAPER), {
+        filename: 'esic.pdf',
+        contentType: 'application/pdf',
+      })
+    expect(upload.status).toBe(200)
+    const document = await settled(agent, esic.documentId)
+    expect(document.signatureStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+    return { employee, document }
+  }
+
+  it('document 96: a photograph placed by hand stays where HR put it, and the signature saved on the pad goes on beside it', async () => {
+    // Before the trigger existed: the form was decided about in report mode,
+    // and HR placed the photograph by hand in the editor.
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'report'
+    const { employee, document } = await waitingEsicForm()
+    const request = await createRequest()
+
+    const byHand = await agent.put(`/api/documents/${document.documentId}/placements`).send({
+      acknowledgeOccupied: false,
+      placements: [
+        {
+          pageNumber: 1,
+          x: 0.72,
+          y: 0.06,
+          width: 0.14,
+          height: 0.11,
+          pageRotation: 0,
+          method: 'Manual',
+          detectionMethod: 'Manual',
+          confidence: null,
+          signerRole: SIGNER_ROLES.PHOTO,
+        },
+      ],
+    })
+    expect(byHand.status).toBe(200)
+    // A photograph alone is not a signature: still waiting.
+    expect(byHand.body.document.signatureStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+    expect(byHand.body.document.hasProcessedFile).toBe(true)
+    const firstProcessed = (await employeeDocumentRepository.findStoredFile(document.documentId))
+      ?.processedFilePath as string
+
+    // Now, in stamp mode, the employee's signature is saved on the pad.
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
+    const saved = await agent
+      .post(`/api/employees/${employee.employeeId}/signature`)
+      .attach('file', signaturePng(), { filename: 'pad.png', contentType: 'image/png' })
+    expect(saved.status).toBe(200)
+
+    const after = await decidedAgain(
+      agent,
+      document.documentId,
+      (d) => d.signatureStatus === SIGNATURE_STATUS.ADDED,
+    )
+    expect(after.signatureStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(after.stampDecision).toMatchObject({
+      mode: 'Stamp',
+      outcome: STAMP_OUTCOMES.STAMPED,
+      stampedCount: 2,
+      skippedCount: 0,
+    })
+    expect(after.stampDecision?.summary).toBe(
+      'Stamped: employee signature and hr signature. Kept: employee photo (placed by hand).',
+    )
+    expect(after.stampDecision?.boxes.map((box) => [box.signerRole, box.action])).toEqual([
+      ['Photo', 'keep'],
+      ['Employee', 'stamp'],
+      ['Authoriser', 'stamp'],
+    ])
+
+    // The rows: HR's photograph exactly as it was, and the two new boxes.
+    const rows = await request.query<{
+      SignerRole: string
+      Method: string
+      DetectionMethod: string
+      X: number
+      Y: number
+      SignerUserId: number | null
+    }>(
+      `SELECT SignerRole, Method, DetectionMethod, X, Y, SignerUserId
+       FROM dbo.SignaturePlacements WHERE DocumentId = ${document.documentId} ORDER BY SignaturePlacementId`,
+    )
+    expect(rows.recordset.map((r) => [r.SignerRole, r.Method, r.DetectionMethod])).toEqual([
+      ['Photo', 'Manual', 'Manual'],
+      ['Employee', 'Automatic', 'Template'],
+      ['Authoriser', 'Automatic', 'Template'],
+    ])
+    expect(rows.recordset[0]).toMatchObject({ X: 0.72, Y: 0.06 })
+    expect(rows.recordset[2]?.SignerUserId).toBe(hr.userId)
+
+    // The signed copy was regenerated from the original: a new file.
+    const location = await employeeDocumentRepository.findStoredFile(document.documentId)
+    expect(location?.processedFilePath).not.toBe(firstProcessed)
+    expect(existsSync(resolveWithinRoot(location?.processedFilePath as string))).toBe(true)
+
+    // The trail says what was kept and what was added, and why it ran.
+    const trail = await request.query<{ Metadata: string }>(
+      `SELECT Metadata FROM dbo.AuditLogs
+       WHERE Action = 'SIGNATURE_PLACED_FROM_TEMPLATE' AND EntityId = '${document.documentId}'`,
+    )
+    expect(trail.recordset).toHaveLength(1)
+    expect(JSON.parse(trail.recordset[0]?.Metadata ?? '{}')).toMatchObject({
+      trigger: 'signature saved',
+      kept: [{ signerRole: 'Photo', page: 1, method: 'Manual' }],
+      added: [
+        { signerRole: 'Employee', page: 1 },
+        { signerRole: 'Authoriser', page: 1 },
+      ],
+    })
+
+    // Signed now: another save leaves it alone.
+    const again = await run(
+      document.documentId,
+      {
+        userId: hr.userId,
+        username: hr.username,
+        fullName: 'HR',
+        role: 'HR',
+        mustChangePassword: false,
+      },
+      { ipAddress: null, userAgent: 'test' },
+    )
+    expect(again).toBeNull()
+  })
+
+  it('the re-decide command: a dry run reads and decides and changes nothing; the live run adds what is missing', async () => {
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
+    const { employee, document } = await waitingEsicForm()
+    const request = await createRequest()
+    const countRows = async (table: string) =>
+      (
+        await request.query<{ N: number }>(
+          `SELECT COUNT(*) AS N FROM dbo.${table} WHERE DocumentId = ${document.documentId}`,
+        )
+      ).recordset[0]?.N
+    // The photograph and the HR box went on at upload; the employee's
+    // signature is what waits.
+    expect(await countRows('SignaturePlacements')).toBe(2)
+    const decisionsBefore = await countRows('StampDecisions')
+
+    // The signature arrives with the trigger switched off - report mode -
+    // so nothing happens, and the document is exactly what --redecide is for.
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'report'
+    const saved = await agent
+      .post(`/api/employees/${employee.employeeId}/signature`)
+      .attach('file', signaturePng(), { filename: 'sig.png', contentType: 'image/png' })
+    expect(saved.status).toBe(200)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(await countRows('StampDecisions')).toBe(decisionsBefore)
+    expect(await countRows('SignaturePlacements')).toBe(2)
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
+
+    const rows = await employeeDocumentRepository.listWaitingOfType('ESIC_FORM', 500)
+    const mine = rows.filter((row) => row.documentId === document.documentId)
+    expect(mine).toHaveLength(1)
+    const fallback = {
+      userId: hr.userId,
+      username: hr.username,
+      fullName: 'HR',
+      role: 'HR' as const,
+      mustChangePassword: false,
+    }
+    const before = await employeeDocumentRepository.findStoredFile(document.documentId)
+
+    const preview = await redecideType(mine, {
+      dryRun: true,
+      fallback,
+      context: { ipAddress: null, userAgent: 'test' },
+      resolveUploader: async () => fallback,
+      sleep: async () => {},
+    })
+    expect(preview[0]?.kind).toBe('preview')
+    if (preview[0]?.kind === 'preview') {
+      expect(preview[0].decision.toStamp.map((box) => box.signerRole)).toEqual(['Employee'])
+      expect(preview[0].decision.kept.map((box) => box.signerRole)).toEqual(['Photo', 'Authoriser'])
+    }
+    // Nothing moved: rows, decisions, status, file.
+    expect(await countRows('SignaturePlacements')).toBe(2)
+    expect(await countRows('StampDecisions')).toBe(decisionsBefore)
+    const unchanged = await employeeDocumentRepository.findStoredFile(document.documentId)
+    expect(unchanged?.processedFilePath).toBe(before?.processedFilePath)
+    expect(
+      (await agent.get(`/api/documents/${document.documentId}`)).body.document.signatureStatus,
+    ).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+
+    const live = await redecideType(mine, {
+      dryRun: false,
+      fallback,
+      context: { ipAddress: null, userAgent: 'test' },
+      resolveUploader: async () => fallback,
+      sleep: async () => {},
+    })
+    expect(live[0]?.kind).toBe('decided')
+    expect(await countRows('SignaturePlacements')).toBe(3)
+    expect(await countRows('StampDecisions')).toBe((decisionsBefore ?? 0) + 1)
+    const done = (await agent.get(`/api/documents/${document.documentId}`)).body
+      .document as EmployeeDocument
+    expect(done.signatureStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(done.stampDecision?.summary).toBe(
+      'Stamped: employee signature. Kept: employee photo and hr signature (stamped earlier).',
+    )
+
+    // Run again: nothing to add, nothing written.
+    const twice = await redecideType(
+      await employeeDocumentRepository.listWaitingOfType('ESIC_FORM', 500),
+      {
+        dryRun: false,
+        fallback,
+        context: { ipAddress: null, userAgent: 'test' },
+        resolveUploader: async () => fallback,
+        sleep: async () => {},
+      },
+    )
+    expect(twice.map((o) => o.documentId)).not.toContain(document.documentId)
+    expect(await countRows('SignaturePlacements')).toBe(3)
   })
 })

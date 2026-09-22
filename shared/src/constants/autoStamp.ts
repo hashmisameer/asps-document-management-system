@@ -66,8 +66,15 @@ export const STAMP_OUTCOME_LABEL: Readonly<Record<StampOutcome, string>> = {
 export interface StampBoxDecision {
   signerRole: SignerRole
   pageNumber: number
-  action: 'stamp' | 'skip'
-  /** Why it was left alone. Null when stamped. */
+  /**
+   * stamp  painted from the template
+   * skip   left alone, with the reason
+   * keep   a placement already on the document for this role and page - HR's
+   *        by hand, or an earlier stamp - kept as it is and repainted with the
+   *        rest. A kept box is done, not left alone.
+   */
+  action: 'stamp' | 'skip' | 'keep'
+  /** Why it was left alone or kept. Null when stamped. */
   reason: string | null
   /** What the occupancy check found in the box, when it looked. */
   found: 'empty' | 'occupied' | 'uncertain' | null

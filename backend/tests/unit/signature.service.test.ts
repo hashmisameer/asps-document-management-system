@@ -38,6 +38,7 @@ const db = vi.hoisted(() => ({
   openStoredFile: vi.fn(),
   stampSignature: vi.fn(),
   assessBoxes: vi.fn(),
+  redecideForEmployee: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -101,6 +102,11 @@ vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insert
 // The occupancy check has its own tests against real PDFs; here it is an
 // oracle whose answer savePlacements has to respect.
 vi.mock('../../src/services/boxOccupancy.service.js', () => ({ assessBoxes: db.assessBoxes }))
+// What follows a save is the runner's; here only that it is asked, and that
+// its failing cannot fail the save.
+vi.mock('../../src/services/autoStampRun.service.js', () => ({
+  redecideForEmployee: db.redecideForEmployee,
+}))
 
 const signatureService = await import('../../src/services/signature.service.js')
 
@@ -748,6 +754,51 @@ describe('uploadSignature', () => {
     expect(db.insertAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: AUDIT_ACTIONS.SIGNATURE_UPLOADED }),
     )
+  })
+
+  it('decides again about the employee’s waiting documents, after the save, and never fails it', async () => {
+    db.redecideForEmployee.mockResolvedValue([])
+
+    await signatureService.uploadSignature(
+      42,
+      { originalname: 'my-signature.png', buffer: PNG_1X1, size: PNG_1X1.byteLength },
+      hr,
+      context,
+    )
+    // Detached: the import and the call land on a later tick.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(db.redecideForEmployee).toHaveBeenCalledWith(42, hr, context, 'signature saved')
+    // The audit entry for the save was written before it was asked.
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AUDIT_ACTIONS.SIGNATURE_UPLOADED }),
+    )
+
+    // A runner that blows up costs the save nothing.
+    db.redecideForEmployee.mockRejectedValue(new Error('database is down'))
+    await expect(
+      signatureService.uploadSignature(
+        42,
+        { originalname: 'my-signature.png', buffer: PNG_1X1, size: PNG_1X1.byteLength },
+        hr,
+        context,
+      ),
+    ).resolves.toMatchObject({ hasSignature: expect.any(Boolean) })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  it('does not decide again when told not to - the MMC pickup decides for itself', async () => {
+    await signatureService.uploadSignature(
+      42,
+      { originalname: 'my-signature.png', buffer: PNG_1X1, size: PNG_1X1.byteLength },
+      hr,
+      context,
+      { redecide: false },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(db.redecideForEmployee).not.toHaveBeenCalled()
   })
 
   it('records a replacement as a replacement', async () => {
