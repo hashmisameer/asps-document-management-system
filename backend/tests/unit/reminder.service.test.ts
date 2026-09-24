@@ -43,6 +43,7 @@ function overdue(overrides: Partial<PendingDocumentRow> = {}): PendingDocumentRo
     employeeId: 1,
     employeeCode: '00005696',
     employeeName: 'Ravi Kumar',
+    department: 'Stitching',
     documentName: 'Aadhaar Card',
     isMandatory: true,
     dueDate: due.toISOString().slice(0, 10),

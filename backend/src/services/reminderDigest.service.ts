@@ -41,6 +41,8 @@ export interface OverdueRow {
   employeeId: number
   employeeCode: string
   employeeName: string
+  /** Null for an employee whose department has never been recorded. */
+  department: string | null
   documentName: string
   /** 'YYYY-MM-DD'. Always present - a document with no date cannot be late. */
   dueDate: string
@@ -104,6 +106,7 @@ export function overdueRows(
       employeeId: row.employeeId,
       employeeCode: row.employeeCode,
       employeeName: row.employeeName,
+      department: row.department,
       documentName: row.documentName,
       dueDate: row.dueDate,
       daysOverdue: -(deadline.daysRemaining ?? 0),
@@ -130,6 +133,10 @@ export function overdueRows(
 export const OVERDUE_SHEET_COLUMNS: readonly XlsxColumn<OverdueRow>[] = [
   { header: 'employee_id', value: (row) => row.employeeCode, kind: 'text', width: 14 },
   { header: 'employee_name', value: (row) => row.employeeName, kind: 'text', width: 32 },
+  /* Empty, never a dash, for somebody whose department is not recorded: this
+     column exists to be sorted and filtered on, and a dash is a value Excel
+     groups with the real ones. */
+  { header: 'department', value: (row) => row.department ?? '', kind: 'text', width: 22 },
   { header: 'documents_pending', value: (row) => row.documentName, kind: 'text', width: 26 },
   { header: 'overdue_dates', value: (row) => formatDate(row.dueDate), kind: 'text', width: 14 },
   { header: 'days of overdue', value: (row) => row.daysOverdue, kind: 'number', width: 16 },

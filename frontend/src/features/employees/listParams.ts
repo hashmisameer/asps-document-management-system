@@ -123,6 +123,30 @@ export function archivedAreShown(
   return filters.archivedOnly || filters.includeArchived
 }
 
+/**
+ * Whether the list is showing people who may have left - and so whether the
+ * 'Left' column belongs on it.
+ *
+ * On a list of who is still here the column would be a row of dashes, which
+ * is a column that teaches nobody anything; on a list of leavers the date is
+ * the thing you opened the list to see, and having to open each profile for
+ * it is the whole complaint. So: when the Employment filter is 'Left', when
+ * archived records are in the list (they are mostly leavers), and on the
+ * Archived list itself.
+ *
+ * 'All' on its own does NOT bring it: that list is chiefly people who are
+ * still here. Include archived turns it on there, which is the case where a
+ * column of mixed dates and dashes is worth having.
+ *
+ * One function, used by the table and by the spreadsheet, so the file cannot
+ * hold a column the screen it came from did not show.
+ */
+export function leftDateIsShown(
+  filters: Pick<EmployeeFilters, 'status' | 'includeArchived' | 'archivedOnly'>,
+): boolean {
+  return filters.status === EMPLOYEE_STATUS_FILTERS.LEFT || archivedAreShown(filters)
+}
+
 const STATUSES: readonly string[] = Object.values(EMPLOYEE_STATUS_FILTERS)
 const PERIODS: readonly string[] = ['week', 'month', 'sixMonths', 'year']
 const GENDERS: readonly string[] = ['Male', 'Female', 'Other', 'notRecorded']

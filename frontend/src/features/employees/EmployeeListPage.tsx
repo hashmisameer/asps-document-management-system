@@ -38,6 +38,7 @@ import {
   employeeFiltersToSearch,
   employmentChoiceFilters,
   employmentChoiceOf,
+  leftDateIsShown,
   readEmployeeFilters,
   toEmployeeListAllQuery,
   toEmployeeListQuery,
@@ -83,6 +84,11 @@ export function EmployeeListPage() {
    */
   const [searchParams, setSearchParams] = useSearchParams()
   const filters = useMemo(() => readEmployeeFilters(searchParams), [searchParams])
+  // The date somebody left, on the screens that are about leavers - the table
+  // column and the spreadsheet's. Read from the filters rather than from the
+  // rows: a leavers list with nobody in it still has the column, and one that
+  // comes and goes with the contents of the page reads as a bug.
+  const showLeftDate = leftDateIsShown(filters)
 
   /**
    * The search box types locally.
@@ -207,6 +213,18 @@ export function EmployeeListPage() {
           { header: 'Employee ID', value: (r) => r.employeeCode, width: 14 },
           { header: 'Name', value: (r) => r.employeeName, width: 30 },
           { header: 'Joined', value: (r) => formatDate(r.joiningDate), width: 12 },
+          // The two dates side by side, and only on a list that is about
+          // leavers - the same rule the screen follows.
+          ...(showLeftDate
+            ? [
+                {
+                  header: 'Left',
+                  value: (r: EmployeeListItem) =>
+                    r.lastWorkingDate ? formatDate(r.lastWorkingDate) : '',
+                  width: 12,
+                },
+              ]
+            : []),
           { header: 'Department', value: (r) => r.department ?? '', width: 18 },
           { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
           { header: 'Documents pending', value: (r) => r.counts.pending, kind: 'number' },
@@ -526,6 +544,13 @@ export function EmployeeListPage() {
                 direction={sortDir}
                 onSort={toggleSort}
               />
+              {/* Not sortable: sorting is done by the server from a fixed list
+                  of columns, and adding one is its own change. */}
+              {showLeftDate ? (
+                <th scope="col" className="px-4 py-2 font-medium">
+                  Left
+                </th>
+              ) : null}
               <SortableHeader
                 label="Department"
                 sortKey="department"
@@ -584,6 +609,13 @@ export function EmployeeListPage() {
                   )}
                 </td>
                 <td className="px-4 py-2 text-slate-700">{formatDate(employee.joiningDate)}</td>
+                {/* A dash for somebody who has not left, the way the printed
+                    form treats a field with nothing in it. */}
+                {showLeftDate ? (
+                  <td className="px-4 py-2 text-slate-700">
+                    {employee.lastWorkingDate ? formatDate(employee.lastWorkingDate) : '-'}
+                  </td>
+                ) : null}
                 <td className="px-4 py-2 text-slate-700">{employee.department ?? '-'}</td>
                 <td className="px-4 py-2 text-slate-700">{employee.designation ?? '-'}</td>
                 <td className="px-4 py-2">
@@ -605,7 +637,7 @@ export function EmployeeListPage() {
             {data && data.items.length === 0 ? (
               <tr>
                 <td
-                  colSpan={canPrint ? 8 : 7}
+                  colSpan={(canPrint ? 8 : 7) + (showLeftDate ? 1 : 0)}
                   className="px-4 py-10 text-center text-sm text-slate-500"
                 >
                   {debouncedSearch || department || chips.length > 0 || joinedWithin
@@ -618,7 +650,7 @@ export function EmployeeListPage() {
             {!data && !error ? (
               <tr>
                 <td
-                  colSpan={canPrint ? 8 : 7}
+                  colSpan={(canPrint ? 8 : 7) + (showLeftDate ? 1 : 0)}
                   className="px-4 py-10 text-center text-sm text-slate-500"
                 >
                   Loading employees...

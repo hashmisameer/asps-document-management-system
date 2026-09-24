@@ -27,6 +27,7 @@ function row(overrides: Partial<PendingDocumentRow> = {}): PendingDocumentRow {
     employeeId: 1,
     employeeCode: '00005696',
     employeeName: 'Ravi Kumar',
+    department: 'Stitching',
     documentName: 'Aadhaar Card',
     isMandatory: true,
     dueDate: '2026-09-11',
@@ -110,10 +111,17 @@ describe('the sheet', () => {
     expect(OVERDUE_SHEET_COLUMNS.map((column) => column.header)).toEqual([
       'employee_id',
       'employee_name',
+      'department',
       'documents_pending',
       'overdue_dates',
       'days of overdue',
     ])
+  })
+
+  it('puts the department between the name and the document, where the office asked for it', () => {
+    const headers = OVERDUE_SHEET_COLUMNS.map((column) => column.header)
+    expect(headers.indexOf('department')).toBe(headers.indexOf('employee_name') + 1)
+    expect(headers.indexOf('department')).toBe(headers.indexOf('documents_pending') - 1)
   })
 
   it('reads back with the code intact, the date as the app shows it, and the days as a number', () => {
@@ -121,8 +129,15 @@ describe('the sheet', () => {
     const file = Buffer.from(buildOverdueSheet(rows, WHEN))
 
     expect(readXlsx(file)).toEqual([
-      ['employee_id', 'employee_name', 'documents_pending', 'overdue_dates', 'days of overdue'],
-      ['00005696', 'Ravi Kumar', 'Aadhaar Card', '11/09/2026', '7'],
+      [
+        'employee_id',
+        'employee_name',
+        'department',
+        'documents_pending',
+        'overdue_dates',
+        'days of overdue',
+      ],
+      ['00005696', 'Ravi Kumar', 'Stitching', 'Aadhaar Card', '11/09/2026', '7'],
     ])
 
     // Text cells for everything but the day count, which is a number so Excel
@@ -133,10 +148,32 @@ describe('the sheet', () => {
       '<c r="A2" t="inlineStr"><is><t xml:space="preserve">00005696</t></is></c>',
     )
     expect(sheet).toContain(
-      '<c r="D2" t="inlineStr"><is><t xml:space="preserve">11/09/2026</t></is></c>',
+      '<c r="E2" t="inlineStr"><is><t xml:space="preserve">11/09/2026</t></is></c>',
     )
-    expect(sheet).toContain('<c r="E2"><v>7</v></c>')
+    expect(sheet).toContain('<c r="F2"><v>7</v></c>')
     expect(sheet).not.toContain('<v>5696</v>')
+  })
+
+  it('leaves the department cell EMPTY for somebody whose department is not recorded', () => {
+    // Not a dash. The column is there to be sorted and filtered on, and a dash
+    // is a value Excel groups alongside 'Stitching'.
+    const rows = overdueRows([row({ department: null })], { today: TODAY })
+    const file = Buffer.from(buildOverdueSheet(rows, WHEN))
+
+    expect(readXlsx(file)[1]).toEqual([
+      '00005696',
+      'Ravi Kumar',
+      '',
+      'Aadhaar Card',
+      '11/09/2026',
+      '7',
+    ])
+  })
+
+  it('carries the department through from the query to the row', () => {
+    const [carried] = overdueRows([row({ department: 'Cutting' })], { today: TODAY })
+    expect(carried?.department).toBe('Cutting')
+    expect(overdueRows([row({ department: null })], { today: TODAY })[0]?.department).toBeNull()
   })
 
   it('carries a name with markup in it as plain text', () => {
@@ -144,6 +181,7 @@ describe('the sheet', () => {
     const file = Buffer.from(buildOverdueSheet(rows, WHEN))
 
     expect(readXlsx(file)[1]?.[1]).toBe('A <b>&</b> B')
+    expect(readXlsx(file)[1]?.[2]).toBe('Stitching')
   })
 
   it('is named for the day it was made, on the server calendar', () => {
@@ -237,9 +275,11 @@ describe('previewSheet', () => {
     const lines = previewSheet(rows, 20)
 
     expect(lines[0]).toBe(
-      'employee_id  employee_name  documents_pending  overdue_dates  days of overdue',
+      'employee_id  employee_name  department  documents_pending  overdue_dates  days of overdue',
     )
-    expect(lines[1]).toBe('00000000     Ravi Kumar     Aadhaar Card       11/09/2026     7')
+    expect(lines[1]).toBe(
+      '00000000     Ravi Kumar     Stitching   Aadhaar Card       11/09/2026     7',
+    )
     expect(lines).toHaveLength(22)
     expect(lines[21]).toBe('... and 5 more row(s)')
   })

@@ -18,6 +18,8 @@ export interface PendingDocumentRow {
   employeeId: number
   employeeCode: string
   employeeName: string
+  /** Null for an employee whose department has never been recorded. */
+  department: string | null
   documentName: string
   isMandatory: boolean
   dueDate: string | null
@@ -27,6 +29,7 @@ interface Row {
   EmployeeId: number
   EmployeeCode: string
   EmployeeName: string
+  Department: string | null
   DocumentName: string
   IsMandatory: boolean
   DueDate: Date | null
@@ -38,7 +41,7 @@ export async function findPendingDocuments(): Promise<PendingDocumentRow[]> {
      here rather than at each call site is the point of bindToday: this query
      asked for @today without ever declaring it, which the driver refuses. */
   const result = await bindToday(pool.request()).query<Row>(`
-    SELECT  e.EmployeeId, e.EmployeeCode, e.EmployeeName,
+    SELECT  e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.Department,
             dt.DocumentName, dt.IsMandatory, d.DueDate
     FROM    dbo.EmployeeDocuments AS d
     INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
@@ -57,6 +60,9 @@ export async function findPendingDocuments(): Promise<PendingDocumentRow[]> {
     employeeId: row.EmployeeId,
     employeeCode: row.EmployeeCode,
     employeeName: row.EmployeeName,
+    // Carried for the digest's spreadsheet, so whoever chases the paperwork
+    // can sort it by department without looking anybody up.
+    department: row.Department,
     documentName: row.DocumentName,
     isMandatory: row.IsMandatory,
     // Date only. A due date is a calendar day, not an instant, and rendering it
