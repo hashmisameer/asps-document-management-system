@@ -109,9 +109,14 @@ describe('the pending-documents reminder', () => {
     const express = app()
     const agent = await signIn(express, await createUser('hr.digest', 'HR'))
 
-    const created = await agent
-      .post('/api/employees')
-      .send({ employeeCode: `E${++codeSeq}`, employeeName: 'Ravi Kumar', joiningDate: JOINED })
+    const created = await agent.post('/api/employees').send({
+      employeeCode: `E${++codeSeq}`,
+      employeeName: 'Ravi Kumar',
+      joiningDate: JOINED,
+      // The department reaches the sheet from dbo.Employees, which is the half
+      // only the database can prove.
+      department: 'Stitching',
+    })
     const employee = created.body.employee
 
     // Judged a month from now: the week-and-fortnight documents are late by
@@ -126,18 +131,20 @@ describe('the pending-documents reminder', () => {
     expect(sheet[0]).toEqual([
       'employee_id',
       'employee_name',
+      'department',
       'documents_pending',
       'overdue_dates',
       'days of overdue',
     ])
-    const documents = sheet.slice(1).map((cells) => cells[2])
+    const documents = sheet.slice(1).map((cells) => cells[3])
     expect(documents).toContain('Aadhaar Card')
     expect(documents).not.toContain('Confirmation Letter')
     for (const cells of sheet.slice(1)) {
       expect(cells[0]).toBe(employee.employeeCode)
       expect(cells[1]).toBe('Ravi Kumar')
-      expect(cells[3]).toMatch(/^\d{2}\/\d{2}\/\d{4}$/)
-      expect(Number(cells[4])).toBeGreaterThan(0)
+      expect(cells[2]).toBe('Stitching')
+      expect(cells[4]).toMatch(/^\d{2}\/\d{2}\/\d{4}$/)
+      expect(Number(cells[5])).toBeGreaterThan(0)
     }
 
     // The list has moved out of the body.
