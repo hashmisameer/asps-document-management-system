@@ -4,6 +4,7 @@ import {
   activeFilterChips,
   archivedAreShown,
   employeeFiltersToSearch,
+  leftDateIsShown,
   employmentChoiceFilters,
   employmentChoiceOf,
   readEmployeeFilters,
@@ -225,5 +226,63 @@ describe('the Include archived checkbox', () => {
     // Two controls for one filter, and clearing either one leaves the other
     // saying something the list is not doing.
     expect(activeFilterChips(read('?archivedOnly=true&status=all'))).toHaveLength(0)
+  })
+})
+
+/**
+ * The 'Left' column, on the screen and in the spreadsheet.
+ *
+ * One rule for both, so an export cannot hold a column the list it came from
+ * did not show - and a date HR had to open each profile for is on the page
+ * they were already looking at.
+ */
+describe('whether the Left column belongs on this list', () => {
+  it('is away on a list of people who are still here', () => {
+    expect(leftDateIsShown(read(''))).toBe(false)
+    expect(leftDateIsShown(read('?status=active'))).toBe(false)
+  })
+
+  it('is there when the list is leavers', () => {
+    expect(leftDateIsShown(read('?status=left'))).toBe(true)
+  })
+
+  it('is away on All by itself - that list is chiefly people still here', () => {
+    expect(leftDateIsShown(read('?status=all'))).toBe(false)
+  })
+
+  it('is there whenever archived records are in the list', () => {
+    // Mostly leavers, and a mixed list is exactly where the date earns its
+    // column: some rows carry one, the rest show a dash.
+    expect(leftDateIsShown(read('?includeArchived=true'))).toBe(true)
+    expect(leftDateIsShown(read('?status=all&includeArchived=true'))).toBe(true)
+    expect(leftDateIsShown(read('?status=active&includeArchived=true'))).toBe(true)
+  })
+
+  it('is there on the Archived list, where the checkbox is forced on', () => {
+    expect(leftDateIsShown(read('?archivedOnly=true&status=all'))).toBe(true)
+  })
+
+  it('follows the dropdown, both ways', () => {
+    const left = { ...DEFAULT_EMPLOYEE_FILTERS, ...employmentChoiceFilters('left') }
+    const back = { ...left, ...employmentChoiceFilters('active') }
+
+    expect(leftDateIsShown(left)).toBe(true)
+    expect(leftDateIsShown(back)).toBe(false)
+  })
+
+  it('is exactly the archived checkbox, plus Left', () => {
+    // Said as a property rather than case by case: the two are one question
+    // apart, and a change to either must break this.
+    for (const search of [
+      '',
+      '?status=left',
+      '?includeArchived=true',
+      '?archivedOnly=true&status=all',
+    ]) {
+      const filters = read(search)
+      expect(leftDateIsShown(filters), search).toBe(
+        archivedAreShown(filters) || filters.status === 'left',
+      )
+    }
   })
 })
