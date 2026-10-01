@@ -56,20 +56,26 @@ describe('self-registration', () => {
   })
 
   it('holds the cap when registrations arrive at the same moment', async () => {
-    // The reason the cap lives in the INSERT. Ten at once, against an empty
-    // table: a check-then-write would let several past, because they all read
-    // the count before any of them had written.
+    // The reason the cap lives in the INSERT. More at once than there are
+    // slots, against an empty table: a check-then-write would let several past,
+    // because they all read the count before any of them had written.
+    //
+    // Five more than the cap, counted off the cap rather than written out, so
+    // that raising the cap keeps this a race and does not quietly turn it into
+    // a test where every attempt is expected to succeed.
+    const OVERSUBSCRIBED_BY = 5
     await resetData()
     const express = app()
 
-    const attempts = Array.from({ length: 10 }, (_, index) =>
-      request(express).post('/api/auth/register').send(registration(index + 1)),
+    const attempts = Array.from(
+      { length: MAX_SELF_REGISTRATIONS + OVERSUBSCRIBED_BY },
+      (_, index) => request(express).post('/api/auth/register').send(registration(index + 1)),
     )
     const results = await Promise.all(attempts)
     const created = results.filter((r) => r.status === 201)
 
     expect(created).toHaveLength(MAX_SELF_REGISTRATIONS)
-    expect(results.filter((r) => r.status === 403)).toHaveLength(10 - MAX_SELF_REGISTRATIONS)
+    expect(results.filter((r) => r.status === 403)).toHaveLength(OVERSUBSCRIBED_BY)
   })
 
   it('makes the first account on an empty system an administrator', async () => {

@@ -75,9 +75,10 @@ describe('registerSchema', () => {
 })
 
 describe('MAX_SELF_REGISTRATIONS', () => {
-  it('is five, the size of the office', () => {
+  it('is ten, raised from five on 2026-10-01 so new staff can enrol themselves', () => {
     // Pinned because it is the whole feature. Changing it should be a decision,
-    // not a stray edit.
-    expect(MAX_SELF_REGISTRATIONS).toBe(5)
+    // not a stray edit - and raising it is the only way to reopen a form the
+    // first five accounts closed, since a spent slot is never freed.
+    expect(MAX_SELF_REGISTRATIONS).toBe(10)
   })
 })
