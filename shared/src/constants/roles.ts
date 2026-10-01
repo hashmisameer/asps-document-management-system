@@ -136,11 +136,21 @@ export function roleHasPermission(role: Role, permission: Permission): boolean {
 /**
  * How many accounts may ever be created through the registration form.
  *
- * The office has five staff (open question Q11), so five is the whole intended
- * population. The form closes for good once that many accounts have been
- * registered - a cap counted in the DATABASE, not in the browser, because a
- * hidden button is not a control. Accounts an administrator creates with
- * `npm run db:create-user` do not consume these slots: an Admin adding a
- * colleague deliberately is a different act from a stranger enrolling.
+ * The form closes for good once that many accounts have been registered - a cap
+ * counted in the DATABASE, not in the browser, because a hidden button is not a
+ * control. Accounts an administrator creates on the Users screen or with
+ * `npm run user:add` do not consume these slots: an Admin adding a colleague
+ * deliberately is a different act from somebody enrolling themselves.
+ *
+ * TEN SINCE 2026-10-01, five before that. The first five slots went to the
+ * people who set the system up, so the form was shut, and the office wants new
+ * staff to enrol themselves - choosing their own username and password - rather
+ * than being handed an account by an administrator.
+ *
+ * Raising this number is the only honest way to reopen the form. The count is
+ * on IsSelfRegistered alone and ignores IsActive, so deactivating one of those
+ * five accounts does NOT free its slot - deliberately: a cap that counted only
+ * active accounts could be reopened by anybody who can deactivate one, and a
+ * closed form would quietly become open again. The slots are spent once.
  */
-export const MAX_SELF_REGISTRATIONS = 5
+export const MAX_SELF_REGISTRATIONS = 10

@@ -564,7 +564,7 @@ never both), `DB_ENCRYPT` (false), `DB_TRUST_SERVER_CERTIFICATE` (true),
 `OCR_PRIMARY_LANGUAGES` (`eng`),
 `SMTP_PORT` (25), `SMTP_SECURE` (false), `SMTP_USER`, `SMTP_PASSWORD`
 (both optional - an internal relay usually needs neither), `LOG_LEVEL` (`info`),
-`REGISTRATION_SECRET` (a shared code for the registration form; the five-account
+`REGISTRATION_SECRET` (a shared code for the registration form; the ten-account
 cap is the real control).
 
 ### Development only - do not set in production
