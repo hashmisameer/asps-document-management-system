@@ -115,15 +115,29 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
   return response.data.employee
 }
 
+/**
+ * The record, and how many deadlines moved with it.
+ *
+ * Changing a joining date moves the deadlines of documents not yet uploaded,
+ * so the screen has a number to report rather than leaving HR to go and look.
+ */
+export interface UpdatedEmployee {
+  employee: EmployeeProfile
+  deadlinesMoved: number
+}
+
 export async function updateEmployee(
   employeeId: number,
   input: UpdateEmployeeInput,
-): Promise<EmployeeProfile> {
-  const response = await api.patch<{ employee: EmployeeProfile }>(
+): Promise<UpdatedEmployee> {
+  const response = await api.patch<{ employee: EmployeeProfile; deadlinesMoved?: number }>(
     `/employees/${employeeId}`,
     input,
   )
-  return response.data.employee
+  return {
+    employee: response.data.employee,
+    deadlinesMoved: response.data.deadlinesMoved ?? 0,
+  }
 }
 
 /**

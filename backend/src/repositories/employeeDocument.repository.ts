@@ -866,8 +866,12 @@ export async function setNotRequired(
 }
 
 /** Sets or clears a single document's deadline, overriding the type's default. */
-export async function setDueDate(documentId: number, dueDate: string | null): Promise<boolean> {
-  const request = await createRequest()
+export async function setDueDate(
+  documentId: number,
+  dueDate: string | null,
+  transaction?: sql.Transaction,
+): Promise<boolean> {
+  const request = await createRequest(transaction)
   const result = await request
     .input('documentId', sql.Int, documentId)
     .input('dueDate', sql.Date, dueDate === null ? null : parseDateOnly(dueDate)).query(`
@@ -877,6 +881,125 @@ export async function setDueDate(documentId: number, dueDate: string | null): Pr
       WHERE  DocumentId = @documentId AND IsActive = 1`)
 
   return (result.rowsAffected[0] ?? 0) > 0
+}
+
+/**
+ * A checklist row whose deadline can still be recomputed, with the type's
+ * current deadline so the caller can work out what it should be.
+ */
+export interface DeadlineCandidate {
+  documentId: number
+  employeeId: number
+  employeeCode: string
+  documentCode: string
+  documentName: string
+  /** 'YYYY-MM-DD', or null for a row that never had one. */
+  dueDate: string | null
+  joiningDate: string
+  deadlineValue: number
+  deadlineUnit: DeadlineUnit
+  /** Whether a person has moved this deadline by hand before now. */
+  wasOverridden: boolean
+}
+
+interface DeadlineCandidateRow {
+  DocumentId: number
+  EmployeeId: number
+  EmployeeCode: string
+  DocumentCode: string
+  DocumentName: string
+  DueDate: Date | null
+  JoiningDate: Date
+  DeadlineValue: number
+  DeadlineUnit: string
+  WasOverridden: number
+}
+
+function toDeadlineCandidate(row: DeadlineCandidateRow): DeadlineCandidate {
+  return {
+    documentId: row.DocumentId,
+    employeeId: row.EmployeeId,
+    employeeCode: row.EmployeeCode,
+    documentCode: row.DocumentCode,
+    documentName: row.DocumentName,
+    dueDate: row.DueDate === null ? null : formatDateOnly(row.DueDate),
+    joiningDate: formatDateOnly(row.JoiningDate),
+    deadlineValue: row.DeadlineValue,
+    deadlineUnit: row.DeadlineUnit as DeadlineUnit,
+    wasOverridden: row.WasOverridden === 1,
+  }
+}
+
+/**
+ * The rows a recompute may touch, and what it needs to decide.
+ *
+ * NOTHING WITH A FILE. A document that has arrived keeps the date that applied
+ * to it - migrations 0023 and 0034 drew that line and this holds it: a
+ * correction to a joining date is not a licence to rewrite history.
+ *
+ * Rows marked 'not required' ARE included. Their date is hidden from every
+ * count, so moving it changes nothing anybody sees, and leaving one behind
+ * would make a row that disagrees with its employee for ever - the thing this
+ * exists to end.
+ *
+ * The type's own DeadlineValue/DeadlineUnit come back rather than a number
+ * written here: dbo.DocumentTypes is kept in step with
+ * shared/src/constants/documentChecklist.ts (0025, 0034), and that is the
+ * office's decision about how long people have.
+ *
+ * WasOverridden says a person has moved this deadline by hand before now - a
+ * DEADLINE_CHANGED entry against the document. The recompute moves it anyway;
+ * the flag is there so that an override being overwritten is reported rather
+ * than silently undone.
+ */
+const DEADLINE_CANDIDATE_SELECT = `
+      SELECT d.DocumentId, d.EmployeeId, e.EmployeeCode, dt.DocumentCode, dt.DocumentName,
+             d.DueDate, e.JoiningDate, dt.DeadlineValue, dt.DeadlineUnit,
+             CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditLogs AS a
+                               WHERE a.Action = 'DEADLINE_CHANGED'
+                                 AND a.EntityType = 'EmployeeDocument'
+                                 AND a.EntityId = CAST(d.DocumentId AS VARCHAR(50)))
+                  THEN 1 ELSE 0 END AS WasOverridden
+      FROM   dbo.EmployeeDocuments AS d
+      INNER JOIN dbo.Employees     AS e  ON e.EmployeeId = d.EmployeeId
+      INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
+      WHERE  d.IsActive = 1
+        AND  d.OriginalFilePath IS NULL
+        AND  dt.IsActive = 1
+        AND  dt.DeadlineValue IS NOT NULL
+        AND  dt.DeadlineUnit IS NOT NULL`
+
+/** One employee's recomputable rows - what a joining-date edit moves. */
+export async function listDeadlineCandidates(
+  employeeId: number,
+  transaction?: sql.Transaction,
+): Promise<DeadlineCandidate[]> {
+  const request = await createRequest(transaction)
+  const result = await request.input('employeeId', sql.Int, employeeId)
+    .query<DeadlineCandidateRow>(`
+      ${DEADLINE_CANDIDATE_SELECT}
+        AND  d.EmployeeId = @employeeId
+      ORDER BY dt.SortOrder`)
+
+  return result.recordset.map(toDeadlineCandidate)
+}
+
+/**
+ * Every recomputable row in the system, for the sweep.
+ *
+ * Whether a row DISAGREES is decided in code, by computeDueDate, rather than
+ * by repeating the DATEADD here: one place works out a deadline, and a second
+ * copy of that arithmetic in SQL is how the two come to disagree.
+ */
+export async function listAllDeadlineCandidates(limit: number): Promise<DeadlineCandidate[]> {
+  const request = await createRequest()
+  const result = await request.input('limit', sql.Int, limit).query<DeadlineCandidateRow>(
+    DEADLINE_CANDIDATE_SELECT.replace('SELECT d.DocumentId', 'SELECT TOP (@limit) d.DocumentId') +
+      `
+      ORDER BY e.EmployeeCode, dt.SortOrder`,
+  )
+
+  return result.recordset.map(toDeadlineCandidate)
 }
 
 /**

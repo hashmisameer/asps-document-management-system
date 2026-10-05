@@ -18,6 +18,7 @@ import {
 } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { withTransaction } from '../database/pool.js'
+import * as deadlineRecompute from './deadlineRecompute.service.js'
 import { withDeadline } from './document.service.js'
 import {
   bulkFileName,
@@ -179,22 +180,60 @@ export async function create(
   return getById(created.employeeId)
 }
 
+export interface UpdatedEmployee {
+  employee: EmployeeProfile
+  /**
+   * How many deadlines moved because the joining date did. Zero when it did
+   * not change, and zero when every document had already arrived.
+   */
+  deadlinesMoved: number
+}
+
+/**
+ * Edits an employee - and, when the joining date moves, the deadlines with it.
+ *
+ * THE EDIT AND THE DEADLINES ARE ONE ACT, in one transaction. A deadline is
+ * the joining date plus the type's allowance; a joining date corrected without
+ * its deadlines leaves a record that chases documents against a date nobody
+ * chose - which is how three employees came to be chased against 1988, 1989,
+ * 1993 and 2009. If the recompute cannot be written, the edit is not written
+ * either: half a correction is worse than none, and HR can press Save again.
+ *
+ * ONLY DOCUMENTS WITH NO FILE. One that has arrived keeps the date that
+ * applied to it, which is the line migrations 0023 and 0034 drew.
+ */
 export async function update(
   employeeId: number,
   input: UpdateEmployeeInput,
   actor: AuthUser,
   context: RequestContext,
-): Promise<EmployeeProfile> {
+): Promise<UpdatedEmployee> {
   const existing = await getById(employeeId)
 
   // Only a joining date that is CHANGING is judged. The edit form sends the
   // whole record back, and HR correcting a phone number on somebody who joined
   // two years ago is not adding a late employee.
-  if (input.joiningDate !== undefined && input.joiningDate !== existing.joiningDate) {
-    assertJoiningDateAllowed(input.joiningDate, actor)
+  const joiningDateChanged =
+    input.joiningDate !== undefined && input.joiningDate !== existing.joiningDate
+  if (joiningDateChanged) {
+    assertJoiningDateAllowed(input.joiningDate as string, actor)
   }
 
-  await employeeRepository.update(employeeId, input)
+  const deadlinesMoved = await withTransaction(async (tx) => {
+    await employeeRepository.update(employeeId, input, tx)
+
+    if (!joiningDateChanged) return 0
+
+    // Read AFTER the update, inside the transaction, so the candidates carry
+    // the new joining date rather than the one being replaced.
+    const moves = await deadlineRecompute.planForEmployee(employeeId, tx)
+    return deadlineRecompute.applyMoves(moves, {
+      actor,
+      context,
+      reason: `joining date changed from ${existing.joiningDate} to ${input.joiningDate as string}`,
+      transaction: tx,
+    })
+  })
 
   await audit.record({
     userId: actor.userId,
@@ -207,10 +246,11 @@ export async function update(
     metadata: {
       employeeCode: existing.employeeCode,
       changes: describeChanges(existing, input),
+      ...(joiningDateChanged ? { deadlinesMoved } : {}),
     },
   })
 
-  return getById(employeeId)
+  return { employee: await getById(employeeId), deadlinesMoved }
 }
 
 /**

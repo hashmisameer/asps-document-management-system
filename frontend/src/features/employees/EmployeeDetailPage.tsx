@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   EMPLOYMENT_STATUSES,
@@ -39,6 +39,11 @@ import {
 export function EmployeeDetailPage() {
   const params = useParams<{ employeeId: string }>()
   const employeeId = Number(params.employeeId)
+  // Set by the edit form when a changed joining date moved deadlines with it.
+  // Read from the navigation rather than fetched: it describes what the save
+  // just did, which no later request could answer.
+  const location = useLocation()
+  const deadlinesMoved = (location.state as { deadlinesMoved?: number } | null)?.deadlinesMoved ?? 0
   const { can } = useAuth()
   const queryClient = useQueryClient()
 
@@ -240,6 +245,16 @@ export function EmployeeDetailPage() {
             {profile.exitNotes ? (
               <span className="mt-1 block text-slate-600">{profile.exitNotes}</span>
             ) : null}
+          </Alert>
+        </div>
+      ) : null}
+
+      {deadlinesMoved > 0 ? (
+        <div className="mt-3">
+          <Alert tone="info" title="Joining date changed">
+            {deadlinesMoved === 1
+              ? '1 deadline moved.'
+              : `${deadlinesMoved} deadlines moved.`}
           </Alert>
         </div>
       ) : null}

@@ -71,13 +71,16 @@ export const create: RequestHandler = async (req, res) => {
 export const update: RequestHandler = async (req, res) => {
   const { employeeId } = parseParams(req, employeeParamsSchema)
   const input = parseBody(req, updateEmployeeSchema)
-  const employee = await employeeService.update(
+  // deadlinesMoved travels with the record because the screen says so in
+  // words: changing a joining date moves the deadlines of documents not yet
+  // uploaded, and HR is told how many.
+  const { employee, deadlinesMoved } = await employeeService.update(
     employeeId,
     input,
     actorOf(req),
     requestContext(req),
   )
-  res.json({ employee })
+  res.json({ employee, deadlinesMoved })
 }
 
 export const archive: RequestHandler = async (req, res) => {

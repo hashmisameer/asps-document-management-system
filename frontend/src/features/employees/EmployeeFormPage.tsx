@@ -224,9 +224,13 @@ export function EmployeeFormPage() {
   }
 
   const save = useMutation({
+    // One shape whichever request went, so the success path below does not
+    // have to ask. A create moves no deadlines: it sets them.
     mutationFn: async (input: ReturnType<typeof createEmployeeSchema.parse>) =>
-      isEdit ? updateEmployee(employeeId, input) : createEmployee(input),
-    onSuccess: async (employee) => {
+      isEdit
+        ? await updateEmployee(employeeId, input)
+        : { employee: await createEmployee(input), deadlinesMoved: 0 },
+    onSuccess: async ({ employee, deadlinesMoved }) => {
       if (!isEdit) {
         const failures = await uploadHeldFiles(employee)
         if (failures.length > 0) setUploadFailures(failures)
@@ -236,7 +240,12 @@ export function EmployeeFormPage() {
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
 
       if (isEdit) {
-        void navigate(`/employees/${employee.employeeId}`, { replace: true })
+        // The count travels with the navigation because the save ends on the
+        // employee's own page, which is where HR is looking when it lands.
+        void navigate(`/employees/${employee.employeeId}`, {
+          replace: true,
+          ...(deadlinesMoved > 0 ? { state: { deadlinesMoved } } : {}),
+        })
         return
       }
       // Stay here. The documents can only be uploaded now that the checklist
@@ -496,7 +505,7 @@ export function EmployeeFormPage() {
                 error={field.key === 'joiningDate' ? (joiningDateWarning ?? error) : error}
                 hint={
                   field.key === 'joiningDate' && isEdit
-                    ? 'Changing this does not move deadlines that have already been set.'
+                    ? 'Changing this moves the deadlines of documents not yet uploaded.'
                     : field.hint
                 }
                 onChange={set(field.key as Field)}
