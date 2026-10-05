@@ -577,8 +577,12 @@ export async function create(
  * null must clear it - so presence is tested with `in`, which can tell those
  * two apart, rather than with a truthiness check, which cannot.
  */
-export async function update(employeeId: number, input: UpdateEmployeeInput): Promise<boolean> {
-  const request = await createRequest()
+export async function update(
+  employeeId: number,
+  input: UpdateEmployeeInput,
+  transaction?: sql.Transaction,
+): Promise<boolean> {
+  const request = await createRequest(transaction)
   const assignments: string[] = []
 
   if (input.employeeName !== undefined) {

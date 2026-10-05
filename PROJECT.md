@@ -131,6 +131,22 @@ left alone with the reason. Overlap guard: a template box more than a tenth
 under a hand-placed box is left alone. `applyPlacements` does not delete the
 previous processed file when it writes a new one (pre-existing; a small leak).
 
+**Deadlines follow the joining date** (2026-10-05). A deadline is the joining
+date plus the type's allowance, written at checklist creation; nothing ever
+recomputed it, so correcting a joining date left the old deadlines in place -
+three employees were being chased against 1988, 1989, 1993 and 2009. Now an
+edit that CHANGES the joining date moves the deadlines of every document with
+no file, in the SAME transaction as the edit (if the recompute fails the edit
+fails), and the response carries `deadlinesMoved` which the detail page shows
+as one line. A document that has arrived keeps its date - 0023/0034's rule.
+`npm run recompute-deadlines [--dry-run]` sweeps every employee whose pending
+rows disagree. One function decides both (`deadlineRecompute.service.ts`:
+`planMoves` pure, `applyMoves` writes). Rows marked not required are included.
+A deadline HR set by hand through `PATCH /documents/:id/deadline` is
+indistinguishable from a stale one - there is no marker column - so it is moved
+too and reported separately (`wasOverridden`, from a `DEADLINE_CHANGED` audit
+entry on the document).
+
 **Several saved templates of one shape.** Templates saved before shape
 matching (pre-18 Sept) were keyed on exact size, so one shape can hold several.
 The stamper uses the **newest** saved template per shape and only that one
@@ -308,6 +324,7 @@ npm run auto-stamp -- --report       # stamping decisions (trial reading)
 npm run auto-stamp -- --backlog      # decide about documents stuck before auto-stamp
 npm run auto-stamp -- --redecide --type ESIC_FORM --dry-run   # add what arrived later
 npm run unstamp -- --documents 1,2 --reason "..." --dry-run   # take the app's stamp off
+npm run recompute-deadlines -- --dry-run      # deadlines that disagree with the joining date
 npm run send-reminders -- --dry-run  # the overdue email and sheet, sent nowhere
 npm run attach-mmc-images -- --dry-run
 npm run user:add / user:list / user:reset

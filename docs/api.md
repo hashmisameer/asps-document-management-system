@@ -303,6 +303,14 @@ failure - and goes to `ReviewRequired`; the checklist shows nothing for it.
 signed outside it, through the same code the editor's empty save uses, and
 leaves it `Skipped` (deployment notes).
 
+`PATCH /employees/:employeeId` answers `{ employee, deadlinesMoved }`.
+Changing the joining date moves the deadlines of every document not yet
+uploaded, in the same transaction as the edit - if the deadlines cannot be
+written the edit is refused too - and `deadlinesMoved` counts them, so the
+screen can say so. It is 0 when the joining date did not change. One
+`DEADLINE_CHANGED` entry is written per document moved, with the old and new
+dates and the joining-date change as its reason.
+
 Saving an employee's signature (`POST /employees/:id/signature`) or
 photograph (`POST /employees/:id/photo`) decides again about that employee's
 documents still waiting for a signature, after the response and never
@@ -317,6 +325,9 @@ already on the document and adding only the roles missing from a page.
 
 // PATCH /documents/:documentId/deadline  - null clears the deadline
 { "dueDate": "2026-09-30", "reason": "Agreed with the employee" }
+// A deadline set this way is moved again if the employee's joining date
+// changes, or by npm run recompute-deadlines: nothing on the row marks it as
+// deliberate. Both say in the audit trail that they overwrote one.
 
 // POST /documents/:documentId/verify   - no body
 ```

@@ -4,6 +4,7 @@ import {
   type AuditAction,
   type AuditEntityType,
 } from '@asps-dms/shared'
+import type { sql } from '../database/pool.js'
 import * as auditRepository from '../repositories/audit.repository.js'
 import { logger } from '../utils/logger.js'
 import { describeError } from '../utils/errors.js'
@@ -87,16 +88,21 @@ export interface AuditEntry {
   metadata?: Record<string, unknown>
 }
 
-export async function record(entry: AuditEntry): Promise<void> {
+export async function record(entry: AuditEntry, transaction?: sql.Transaction): Promise<void> {
   try {
-    await auditRepository.insert({
+    const row = {
       userId: entry.userId,
       action: entry.action,
       entityType: entry.entityType,
-      entityId: entry.entityId === null || entry.entityId === undefined ? null : String(entry.entityId),
+      entityId:
+        entry.entityId === null || entry.entityId === undefined ? null : String(entry.entityId),
       ipAddress: entry.ipAddress ?? null,
       metadataJson: serialiseMetadata(entry.metadata),
-    })
+    }
+    // The transaction is passed only when there IS one, rather than as an
+    // explicit undefined: an entry written outside a transaction is the
+    // ordinary case, and this keeps that call exactly as it has always been.
+    await (transaction ? auditRepository.insert(row, transaction) : auditRepository.insert(row))
   } catch (err) {
     // Loud in the log, invisible to the user's request.
     logger.error(

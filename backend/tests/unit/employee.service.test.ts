@@ -30,6 +30,8 @@ const db = vi.hoisted(() => ({
   listActiveTypes: vi.fn(),
   createChecklist: vi.fn(),
   listForEmployee: vi.fn(),
+  listDeadlineCandidates: vi.fn(),
+  setDueDate: vi.fn(),
   insertAudit: vi.fn(),
 }))
 
@@ -58,6 +60,8 @@ vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
   createChecklist: db.createChecklist,
   listForEmployee: db.listForEmployee,
   listDocumentTypeIdsForEmployee: vi.fn(),
+  listDeadlineCandidates: db.listDeadlineCandidates,
+  setDueDate: db.setDueDate,
 }))
 
 vi.mock('../../src/repositories/audit.repository.js', () => ({ insert: db.insertAudit }))
@@ -196,6 +200,10 @@ beforeEach(() => {
   db.findById.mockResolvedValue(profile())
   db.updateEmployee.mockResolvedValue(true)
   db.setActive.mockResolvedValue(true)
+  // Nothing to recompute unless a test says so: an employee whose outstanding
+  // documents all agree with their joining date.
+  db.listDeadlineCandidates.mockResolvedValue([])
+  db.setDueDate.mockResolvedValue(true)
 })
 
 describe('create', () => {
@@ -492,5 +500,118 @@ describe('listDocuments', () => {
     db.findById.mockResolvedValue(null)
 
     await expect(employeeService.listDocuments(999)).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The deadlines follow the joining date                                       */
+/* -------------------------------------------------------------------------- */
+
+/** A pending checklist row, as the recompute reads it. */
+function candidate(overrides: Record<string, unknown> = {}) {
+  return {
+    documentId: 501,
+    employeeId: 42,
+    employeeCode: '00006135',
+    documentCode: 'PF_FORM',
+    documentName: 'PF Form / Form 11',
+    dueDate: '1988-09-14',
+    joiningDate: '2026-09-05',
+    deadlineValue: 12,
+    deadlineUnit: 'DAY',
+    wasOverridden: false,
+    ...overrides,
+  }
+}
+
+describe('a changed joining date moves the deadlines with it', () => {
+  it('moves every outstanding deadline, and says how many', async () => {
+    db.listDeadlineCandidates.mockResolvedValue([
+      candidate(),
+      candidate({
+        documentId: 502,
+        documentCode: 'CONFIRMATION_LETTER',
+        documentName: 'Confirmation Letter',
+        dueDate: '1989-03-14',
+        deadlineValue: 6,
+        deadlineUnit: 'MONTH',
+      }),
+    ])
+
+    const result = await employeeService.update(42, { joiningDate: '2026-09-05' }, admin, context)
+
+    expect(result.deadlinesMoved).toBe(2)
+    // 12 days and 6 months from the NEW joining date, computed by the one
+    // function that computes a deadline anywhere.
+    expect(db.setDueDate).toHaveBeenCalledWith(501, '2026-09-17', expect.anything())
+    expect(db.setDueDate).toHaveBeenCalledWith(502, '2027-03-05', expect.anything())
+  })
+
+  it('writes a DEADLINE_CHANGED entry per document, saying what moved it', async () => {
+    db.listDeadlineCandidates.mockResolvedValue([candidate()])
+
+    await employeeService.update(42, { joiningDate: '2026-09-05' }, admin, context)
+
+    const entries = db.insertAudit.mock.calls.map((call) => call[0] as { action: string; metadataJson: string })
+    const deadline = entries.find((entry) => entry.action === AUDIT_ACTIONS.DEADLINE_CHANGED)
+    expect(deadline).toBeDefined()
+    expect(JSON.parse(deadline?.metadataJson ?? '{}')).toMatchObject({
+      employeeCode: '00006135',
+      documentName: 'PF Form / Form 11',
+      from: '1988-09-14',
+      to: '2026-09-17',
+      reason: 'joining date changed from 2026-09-01 to 2026-09-05',
+    })
+    // And the employee's own entry carries the count.
+    const updated = entries.find((entry) => entry.action === AUDIT_ACTIONS.EMPLOYEE_UPDATED)
+    expect(JSON.parse(updated?.metadataJson ?? '{}')).toMatchObject({ deadlinesMoved: 1 })
+  })
+
+  it('says so when a deadline somebody set by hand is overwritten', async () => {
+    db.listDeadlineCandidates.mockResolvedValue([candidate({ wasOverridden: true })])
+
+    await employeeService.update(42, { joiningDate: '2026-09-05' }, admin, context)
+
+    const deadline = db.insertAudit.mock.calls
+      .map((call) => call[0] as { action: string; metadataJson: string })
+      .find((entry) => entry.action === AUDIT_ACTIONS.DEADLINE_CHANGED)
+    expect(JSON.parse(deadline?.metadataJson ?? '{}')).toMatchObject({
+      overwroteManualDeadline: true,
+    })
+  })
+
+  it('moves nothing, and reads nothing, when the joining date did not change', async () => {
+    await employeeService.update(42, { department: 'Finance' }, admin, context)
+
+    expect(db.listDeadlineCandidates).not.toHaveBeenCalled()
+    expect(db.setDueDate).not.toHaveBeenCalled()
+  })
+
+  it('moves nothing when the joining date was sent back unchanged', async () => {
+    // The edit form sends the whole record, so this is the ordinary save.
+    const result = await employeeService.update(42, { joiningDate: '2026-09-01' }, admin, context)
+
+    expect(result.deadlinesMoved).toBe(0)
+    expect(db.listDeadlineCandidates).not.toHaveBeenCalled()
+  })
+
+  it('leaves a deadline that is already right alone - running twice moves nothing', async () => {
+    db.listDeadlineCandidates.mockResolvedValue([candidate({ dueDate: '2026-09-17' })])
+
+    const result = await employeeService.update(42, { joiningDate: '2026-09-05' }, admin, context)
+
+    expect(result.deadlinesMoved).toBe(0)
+    expect(db.setDueDate).not.toHaveBeenCalled()
+  })
+
+  it('refuses the whole edit when a deadline cannot be written', async () => {
+    // One act: a joining date corrected without its deadlines is the state
+    // this exists to prevent, so a failure takes the edit with it.
+    db.listDeadlineCandidates.mockResolvedValue([candidate()])
+    db.setDueDate.mockRejectedValue(new Error('database is down'))
+
+    await expect(
+      employeeService.update(42, { joiningDate: '2026-09-05' }, admin, context),
+    ).rejects.toThrow('database is down')
   })
 })

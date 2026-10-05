@@ -405,6 +405,38 @@ id that is no document; the rest of the list is still done, and the exit
 code is 1 when anything was refused. `--dry-run` prints the same table and
 changes nothing. Names no employee.
 
+### Deadlines that no longer match the joining date
+
+A deadline is the joining date plus the document type's allowance, written when
+the checklist is created. **Changing an employee's joining date now moves the
+deadlines of every document they have not uploaded yet**, in the same save, and
+the screen says how many moved. A document that has already arrived keeps the
+date that applied to it - the line migrations 0023 and 0034 drew.
+
+Nothing recomputed deadlines before this, so an employee whose joining date was
+corrected earlier kept the deadlines of the date that was wrong. Three had a
+date of birth typed into the joining date and were being chased against 1988,
+1989, 1993 and 2009. Once, after deploying:
+
+```
+npm run recompute-deadlines -- --dry-run     # list what disagrees, change nothing
+npm run recompute-deadlines                  # put them right
+npm run recompute-deadlines -- --limit 100 --as <username>
+```
+
+It finds **every** employee whose outstanding documents disagree with their
+current joining date, not a list of codes, and writes a `DEADLINE_CHANGED`
+entry per document. A deadline somebody set by hand through
+`PATCH /documents/:id/deadline` is moved as well, because nothing on the row
+marks it as deliberate - those are listed separately, before and after, so an
+override being overwritten is seen rather than lost. Unlike `stamp-check` and
+`auto-stamp`, this one **names the employee code**: it is a repair tool, and
+whoever runs it has to know whose record is being corrected.
+
+Because it reads each type's current `DeadlineValue`, it would also move dates
+after a future change to the office's deadlines - not only after a joining-date
+correction. The `--dry-run` is what makes that safe: read it before running it.
+
 **Rebuild `shared` before running any script.** The scripts run with `tsx`
 against the built `shared/dist`, not the source; after pulling a change to
 `shared/`, `npm run build --workspace shared` (which `npm run build` and
