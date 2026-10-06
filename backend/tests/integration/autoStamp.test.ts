@@ -15,7 +15,7 @@ import { createRequest } from '../../src/database/pool.js'
 import * as documentTypePlacementRepository from '../../src/repositories/documentTypePlacement.repository.js'
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as employeeDocumentRepository from '../../src/repositories/employeeDocument.repository.js'
-import { redecideType, run, runBacklog } from '../../src/services/autoStampRun.service.js'
+import { redecideType, run, runOne, runBacklog } from '../../src/services/autoStampRun.service.js'
 import { resolveWithinRoot } from '../../src/services/storage.service.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
@@ -759,5 +759,218 @@ describe('deciding again when the image arrives later, end to end', () => {
     )
     expect(twice.map((o) => o.documentId)).not.toContain(document.documentId)
     expect(await countRows('SignaturePlacements')).toBe(3)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Two boxes of one role: the ESIC form's second HR signature                  */
+/* -------------------------------------------------------------------------- */
+
+describe('a template with two boxes of one role, end to end', () => {
+  const originalMode = env.AUTO_STAMP
+  const originalTypes = env.AUTO_STAMP_TYPES
+
+  // The real ESIC template, page 1 of a one-page fixture: an HR signature
+  // beside the employee's, and a second one under the photograph. The
+  // photograph is stamped a little lower than its box, so it laps about a
+  // fifth of the way into that second HR box - which is the template's own
+  // business and must not stop it being stamped.
+  const PHOTO = { x: 0.2356, y: 0.2403, width: 0.16, height: 0.14 }
+  const HR_BESIDE = { x: 0.6339, y: 0.3582, width: 0.28, height: 0.09 }
+  const HR_UNDER_PHOTO = { x: 0.1678, y: 0.3858, width: 0.28, height: 0.09 }
+  const EMPLOYEE = { x: 0.6322, y: 0.2392, width: 0.28, height: 0.09 }
+
+  let hr: Awaited<ReturnType<typeof createUser>>
+  let agent: Awaited<ReturnType<typeof signIn>>
+
+  beforeAll(async () => {
+    await ensureSchema()
+    await resetData()
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = 'stamp'
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = new Set(['ESIC_FORM'])
+
+    const admin = await createUser('admin.twobox', 'ADMIN')
+    hr = await createUser('hr.twobox', 'HR')
+    agent = await signIn(app(), hr)
+
+    const types = await documentTypeRepository.listActive()
+    const esicTypeId = types.find((t) => t.documentCode === 'ESIC_FORM')?.documentTypeId ?? 0
+    expect(esicTypeId).toBeGreaterThan(0)
+    await documentTypePlacementRepository.replaceForVariant(
+      esicTypeId,
+      A4,
+      [
+        { ...BOX, ...PHOTO, signerRole: SIGNER_ROLES.PHOTO },
+        { ...BOX, ...EMPLOYEE, signerRole: SIGNER_ROLES.EMPLOYEE },
+        { ...BOX, ...HR_BESIDE, signerRole: SIGNER_ROLES.AUTHORISER },
+        { ...BOX, ...HR_UNDER_PHOTO, signerRole: SIGNER_ROLES.AUTHORISER },
+      ],
+      null,
+      admin.userId,
+    )
+
+    const mine = await agent
+      .post('/api/me/signature')
+      .field('capture', 'Uploaded')
+      .attach('file', signaturePng(), { filename: 'mine.png', contentType: 'image/png' })
+    expect(mine.status).toBe(200)
+  })
+
+  afterAll(async () => {
+    ;(env as { AUTO_STAMP: string }).AUTO_STAMP = originalMode
+    ;(env as { AUTO_STAMP_TYPES: ReadonlySet<string> }).AUTO_STAMP_TYPES = originalTypes
+    await closeDatabase()
+  })
+
+  /**
+   * A one-page ESIC declaration whose text the identity check can read.
+   *
+   * The ESIC type carries its own recognition keywords, so an appointment
+   * letter uploaded against it reads as the wrong document and nothing is
+   * stamped on it.
+   */
+  async function esicFormFor(name: string, code: string, joining: string): Promise<Buffer> {
+    const pdf = await PDFDocument.create()
+    const page = pdf.addPage([595.28, 841.89])
+    const font = await pdf.embedFont(StandardFonts.Helvetica)
+    page.drawText('EMPLOYEES STATE INSURANCE CORPORATION - DECLARATION FORM', {
+      x: 50,
+      y: 780,
+      size: 12,
+      font,
+    })
+    page.drawText(`Name: ${name}`, { x: 50, y: 740, size: 12, font })
+    page.drawText(`Employee Code: ${code}`, { x: 50, y: 720, size: 12, font })
+    page.drawText(`Date of Joining: ${joining}`, { x: 50, y: 700, size: 12, font })
+    return Buffer.from(await pdf.save())
+  }
+
+  /** An ESIC form uploaded and stamped, with a photograph on the record. */
+  async function stampedEsic() {
+    const created = await agent.post('/api/employees').send({
+      employeeCode: `TB${++codeSeq}`,
+      employeeName: 'Ravi Kumar',
+      joiningDate: JOINED,
+    })
+    expect(created.status).toBe(201)
+    const employee = created.body.employee
+
+    const photo = await agent
+      .post(`/api/employees/${employee.employeeId}/photo`)
+      .attach('file', signaturePng(), { filename: 'photo.png', contentType: 'image/png' })
+    expect(photo.status).toBe(200)
+    const enrolled = await agent
+      .post(`/api/employees/${employee.employeeId}/signature`)
+      .attach('file', signaturePng(), { filename: 'sig.png', contentType: 'image/png' })
+    expect(enrolled.status).toBe(200)
+
+    const checklist = await agent.get(`/api/employees/${employee.employeeId}/documents`)
+    const esic = checklist.body.documents.find(
+      (d: { documentCode: string }) => d.documentCode === 'ESIC_FORM',
+    )
+    const upload = await agent
+      .post(`/api/documents/${esic.documentId}/file`)
+      .attach('file', await esicFormFor('Ravi Kumar', employee.employeeCode, JOINED_ON_PAPER), {
+        filename: 'esic.pdf',
+        contentType: 'application/pdf',
+      })
+    expect(upload.status).toBe(200)
+    await settled(agent, esic.documentId)
+    return { employee, documentId: esic.documentId as number }
+  }
+
+  const placementsOf = async (documentId: number) => {
+    const request = await createRequest()
+    const result = await request.query<{ SignerRole: string; X: number; Method: string }>(
+      `SELECT SignerRole, ROUND(X, 4) AS X, Method FROM dbo.SignaturePlacements
+       WHERE DocumentId = ${documentId} ORDER BY SignaturePlacementId`,
+    )
+    return result.recordset
+  }
+
+  it('stamps all four boxes on a fresh upload, both HR boxes among them', async () => {
+    const { documentId } = await stampedEsic()
+
+    const rows = await placementsOf(documentId)
+    expect(rows).toHaveLength(4)
+    expect(rows.filter((row) => row.SignerRole === 'Authoriser')).toHaveLength(2)
+    expect(rows.map((row) => row.X).sort()).toEqual(
+      [PHOTO.x, EMPLOYEE.x, HR_BESIDE.x, HR_UNDER_PHOTO.x].sort(),
+    )
+  })
+
+  it('adds the HR box a document is missing, and leaves the other three exactly as recorded', async () => {
+    const { documentId } = await stampedEsic()
+
+    // Put the document into the state the five hundred are in: the HR box
+    // under the photograph never stamped, the rest as they were. Deleted in
+    // the table rather than through a route, because no route produces this -
+    // it is what a template gaining a fourth box after the stamp looks like.
+    const request = await createRequest()
+    await request.query(
+      `DELETE FROM dbo.SignaturePlacements
+       WHERE DocumentId = ${documentId} AND SignerRole = 'Authoriser'
+         AND ROUND(X, 4) = ${HR_UNDER_PHOTO.x}`,
+    )
+    const before = await placementsOf(documentId)
+    expect(before).toHaveLength(3)
+
+    // And back to waiting, as a document decided in report mode would be.
+    await request.query(
+      `UPDATE dbo.EmployeeDocuments SET SignatureStatus = 'ReviewRequired'
+       WHERE DocumentId = ${documentId}`,
+    )
+
+    const result = await run(
+      documentId,
+      {
+        userId: hr.userId,
+        username: hr.username,
+        fullName: 'HR',
+        role: 'HR',
+        mustChangePassword: false,
+      },
+      { ipAddress: null, userAgent: 'test' },
+    )
+
+    expect(result?.decision.toStamp).toHaveLength(1)
+    expect(result?.decision.kept).toHaveLength(3)
+
+    const after = await placementsOf(documentId)
+    expect(after).toHaveLength(4)
+    // The three that were there, unchanged, and the missing one added.
+    expect(after.slice(0, 3)).toEqual(before)
+    expect(after[3]).toMatchObject({
+      SignerRole: 'Authoriser',
+      X: HR_UNDER_PHOTO.x,
+      Method: 'Automatic',
+    })
+  })
+
+  it('reports nothing to add once all four are on it', async () => {
+    const { documentId } = await stampedEsic()
+    const request = await createRequest()
+    await request.query(
+      `UPDATE dbo.EmployeeDocuments SET SignatureStatus = 'ReviewRequired'
+       WHERE DocumentId = ${documentId}`,
+    )
+
+    const outcome = await runOne(
+      documentId,
+      {
+        userId: hr.userId,
+        username: hr.username,
+        fullName: 'HR',
+        role: 'HR',
+        mustChangePassword: false,
+      },
+      { ipAddress: null, userAgent: 'test' },
+    )
+
+    expect(outcome).toMatchObject({
+      left: 'nothingToAdd',
+      detail: 'every box the template has is already on it',
+    })
+    expect(await placementsOf(documentId)).toHaveLength(4)
   })
 })

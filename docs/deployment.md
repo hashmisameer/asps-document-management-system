@@ -305,6 +305,15 @@ is stamped.** The upload run, the backlog and the MMC pickup's re-decide all
 obey it; HR's own signing in the editor is available for every type as
 before. The checklist shows nothing for such a document.
 
+**A template may have two boxes of one role**, and both are filled. The ESIC
+form has an HR signature beside the employee's and a second under the
+photograph. A placement fills the box its centre sits in, and each placement
+counts once, so one signature cannot satisfy two boxes. Until 2026-10-06 they
+were matched by role alone: five hundred ESIC forms read as complete with the
+second HR box missing, and `--redecide` would not add it. If a template gains
+a box after documents have been stamped, `npm run auto-stamp -- --redecide
+--type <code>` is what fills it in.
+
 **Several saved templates of one shape.** Templates saved before matching
 went by shape (before 18 Sept 2026) were keyed on the exact page size, so one
 form can have several saved templates that are now one shape. The stamper
