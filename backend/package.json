@@ -26,7 +26,8 @@
     "stamp-check": "tsx src/scripts/stampCheck.ts",
     "auto-stamp": "tsx src/scripts/autoStamp.ts",
     "unstamp": "tsx src/scripts/unstamp.ts",
-    "recompute-deadlines": "tsx src/scripts/recomputeDeadlines.ts"
+    "recompute-deadlines": "tsx src/scripts/recomputeDeadlines.ts",
+    "nocount-check": "tsx src/scripts/nocountCheck.ts"
   },
   "dependencies": {
     "@asps-dms/shared": "*",

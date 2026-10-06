@@ -576,6 +576,19 @@ describe('the backlog', () => {
 /* Deciding again: what is already on the document stays                        */
 /* -------------------------------------------------------------------------- */
 
+/** Where each role's box is in esicRows below - templateRow's own geometry. */
+const BOX_X: Readonly<Record<'Employee' | 'Authoriser' | 'Photo', number>> = {
+  Photo: 0.1,
+  Employee: 0.4,
+  Authoriser: 0.7,
+}
+
+/**
+ * A placement already on the document, IN the box it fills.
+ *
+ * Position is what makes a placement that box's - see centreInside - so a
+ * fixture that sat at an arbitrary rectangle would fill nothing.
+ */
 function placed(
   signerRole: 'Employee' | 'Authoriser' | 'Photo',
   overrides: Record<string, unknown> = {},
@@ -585,10 +598,10 @@ function placed(
     documentId: 5,
     employeeId: 42,
     pageNumber: 1,
-    x: 0.15,
-    y: 0.2,
-    width: 0.2,
-    height: 0.2,
+    x: BOX_X[signerRole],
+    y: 0.8,
+    width: 0.25,
+    height: 0.08,
     pageRotation: 0,
     method: 'Manual',
     detectionMethod: 'Manual',
@@ -678,7 +691,7 @@ describe('a document that already carries placements', () => {
     expect(
       input.boxes.map((box) => [box.signerRole, box.x, box.method, box.detectionMethod]),
     ).toEqual([
-      ['Photo', 0.15, 'Manual', 'Manual'],
+      ['Photo', 0.1, 'Manual', 'Manual'],
       ['Employee', 0.4, 'Automatic', 'Template'],
       ['Authoriser', 0.7, 'Automatic', 'Template'],
     ])
@@ -698,7 +711,7 @@ describe('a document that already carries placements', () => {
 
   it('never puts a second box of a role already on the page, whoever placed the first', async () => {
     mocks.listPlacements.mockResolvedValue([
-      placed('Employee', { method: 'Automatic', detectionMethod: 'Template', x: 0.5 }),
+      placed('Employee', { method: 'Automatic', detectionMethod: 'Template' }),
       placed('Photo', { signaturePlacementId: 12 }),
     ])
 
@@ -714,7 +727,7 @@ describe('a document that already carries placements', () => {
   })
 
   it('leaves alone a document with nothing to add, and says what is still missing', async () => {
-    mocks.listPlacements.mockResolvedValue([placed('Photo'), placed('Employee', { x: 0.5 })])
+    mocks.listPlacements.mockResolvedValue([placed('Photo'), placed('Employee')])
     mocks.findActiveUserSignature.mockResolvedValue(null)
 
     const outcome = await runOne(5, actor, context)
@@ -732,8 +745,8 @@ describe('a document that already carries placements', () => {
   it('leaves alone a document that has every box the template has', async () => {
     mocks.listPlacements.mockResolvedValue([
       placed('Photo'),
-      placed('Employee', { x: 0.5 }),
-      placed('Authoriser', { x: 0.8 }),
+      placed('Employee'),
+      placed('Authoriser'),
     ])
 
     const outcome = await runOne(5, actor, context)
@@ -823,16 +836,32 @@ describe('a document that already carries placements', () => {
     expect(mocks.applyPlacements).not.toHaveBeenCalled()
   })
 
-  it('does not paint a template box over a box HR placed somewhere else', async () => {
-    // HR put the employee signature where the template's photograph goes.
-    mocks.listPlacements.mockResolvedValue([placed('Employee', { x: 0.1, y: 0.8 })])
+  it('does not paint a template box over a signature HR put where the template says nothing', async () => {
+    // HR signed across the photograph's box - not where the template puts an
+    // employee signature, so nothing in the template accounts for it.
+    mocks.listPlacements.mockResolvedValue([
+      placed('Employee', { x: 0.1, y: 0.8, width: 0.2, height: 0.2 }),
+    ])
 
     const result = await run(5, actor, context)
 
     const photo = result?.decision.boxes.find((box) => box.signerRole === 'Photo')
     expect(photo?.action).toBe('skip')
     expect(photo?.reason).toBe('it would lie over the employee signature box placed by hand')
-    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    // The employee box itself is still empty - that signature is not in it -
+    // so it is stamped, and HR's own placement is kept alongside.
+    expect(result?.decision.toStamp.map((box) => box.signerRole)).toEqual([
+      'Employee',
+      'Authoriser',
+    ])
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as {
+      boxes: { signerRole: string; x: number }[]
+    }
+    expect(input.boxes.map((box) => [box.signerRole, box.x])).toEqual([
+      ['Employee', 0.1],
+      ['Employee', 0.4],
+      ['Authoriser', 0.7],
+    ])
   })
 
   it('counts kept boxes as done, not as left alone, in the decision row', async () => {
@@ -845,6 +874,87 @@ describe('a document that already carries placements', () => {
     )
     const boxes = (mocks.insertDecision.mock.calls[0]?.[0] as { boxes: { action: string }[] }).boxes
     expect(boxes.map((box) => box.action)).toEqual(['keep', 'stamp', 'stamp'])
+  })
+})
+
+describe('a template with two boxes of one role', () => {
+  // The ESIC two-page form has an HR signature beside the employee's and a
+  // second one under the photograph. The template rows here are that shape.
+  const twoHrRows = [
+    { ...templateRow('Photo', 0.1), documentTypePlacementId: 1 },
+    { ...templateRow('Employee', 0.4), documentTypePlacementId: 2 },
+    { ...templateRow('Authoriser', 0.7), documentTypePlacementId: 3 },
+    { ...templateRow('Authoriser', 0.1), documentTypePlacementId: 4, y: 0.6 },
+  ]
+
+  beforeEach(() => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['ESIC_FORM'])
+    mocks.findDocument.mockResolvedValue(esicDocument())
+    mocks.listForType.mockResolvedValue(twoHrRows)
+    mocks.checkDocument.mockResolvedValue({
+      ...esicChecked(),
+      boxes: twoHrRows.map((row, index) => ({
+        label: String(index),
+        signerRole: row.signerRole,
+        pageNumber: 1,
+        rect: { x: row.x, y: row.y, width: row.width, height: row.height },
+        verdict: 'empty',
+        decidedBy: 'none',
+        pageKind: 'digital',
+        overlap: { images: 0, coverage: 0 },
+        reason: 'no image on the box',
+      })),
+    })
+    mocks.readPhotoForStamp.mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' })
+    mocks.readSignatureImages.mockResolvedValue({ Employee: {}, Authoriser: {}, Photo: {} })
+  })
+
+  it('adds the HR box that is missing and keeps the three that are there', async () => {
+    // The five hundred ESIC forms: photograph, employee signature, and the HR
+    // box beside it - with the HR box under the photograph never stamped.
+    mocks.listPlacements.mockResolvedValue([
+      placed('Photo', { method: 'Automatic', detectionMethod: 'Template' }),
+      placed('Employee', { method: 'Automatic', detectionMethod: 'Template' }),
+      placed('Authoriser', { method: 'Automatic', detectionMethod: 'Template' }),
+    ])
+
+    const result = await run(5, actor, context)
+
+    expect(result?.decision.toStamp).toHaveLength(1)
+    expect(result?.decision.toStamp[0]?.template.y).toBe(0.6)
+    expect(result?.decision.kept).toHaveLength(3)
+
+    // Everything already there goes back exactly as recorded, and the missing
+    // box joins it.
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as {
+      boxes: { signerRole: string; x: number; y: number; method: string }[]
+    }
+    expect(input.boxes).toHaveLength(4)
+    expect(input.boxes.filter((box) => box.signerRole === 'Authoriser')).toHaveLength(2)
+    expect(input.boxes[3]).toMatchObject({
+      signerRole: 'Authoriser',
+      x: 0.1,
+      y: 0.6,
+      method: 'Automatic',
+    })
+  })
+
+  it('leaves the document alone once both HR boxes are on it', async () => {
+    mocks.listPlacements.mockResolvedValue([
+      placed('Photo'),
+      placed('Employee'),
+      placed('Authoriser'),
+      placed('Authoriser', { signaturePlacementId: 14, x: 0.1, y: 0.6 }),
+    ])
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({
+      left: 'nothingToAdd',
+      detail: 'every box the template has is already on it',
+    })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
   })
 })
 
@@ -994,8 +1104,8 @@ describe('deciding again for a type: the command', () => {
     mocks.listPlacements
       .mockResolvedValueOnce([
         placed('Photo'),
-        placed('Employee', { x: 0.5 }),
-        placed('Authoriser', { x: 0.8, signerUserId: 1 }),
+        placed('Employee'),
+        placed('Authoriser', { signerUserId: 1 }),
       ])
       .mockResolvedValueOnce([placed('Photo')])
 

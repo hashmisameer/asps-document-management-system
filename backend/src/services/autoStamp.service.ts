@@ -39,9 +39,17 @@ import type { StampCheckResult } from './stampCheck.service.js'
  * when the employee's signature or photograph arrives later, and by then HR
  * may have placed something by hand, or an earlier run may have stamped part
  * of it. Every placement already there is KEPT - its rectangle, its method,
- * its signer - and a template box is stamped only where no placement of that
- * role is on that page. Never a second employee signature on a page; never a
- * template box painted over a box a person put there.
+ * its signer - and a template box is stamped only where nothing of that role
+ * already sits IN IT.
+ *
+ * MATCHED BY POSITION, NOT BY ROLE. A template can have two boxes of one role:
+ * the ESIC form has an HR signature beside the employee's and a second one
+ * under the photograph. Matching by role alone made one placement satisfy both
+ * of them, so the second box was unreachable on a re-decide and five hundred
+ * forms were reported as complete with it missing. A placement satisfies the
+ * box whose rectangle its CENTRE falls inside, and each placement is claimed
+ * once - so two boxes of a role need two placements, and a signature halfway
+ * down the page satisfies neither.
  *
  * THIS MODULE IS PURE. It takes what was measured - the template match and
  * the occupancy of each box, from stampCheck - what is on file, and what is
@@ -94,9 +102,18 @@ export interface ExistingPlacement {
 }
 
 /**
- * How much of a template box may lie under a box already placed before the
- * template box is left alone. A tenth: two boxes that touch at a corner are
- * neighbours; two that share more than that are the same place.
+ * How much of a template box may lie under a placement NOTHING IN THE TEMPLATE
+ * ACCOUNTS FOR before the template box is left alone. A tenth: two boxes that
+ * touch at a corner are neighbours; two that share more than that are the same
+ * place.
+ *
+ * Measured only against placements no template box claimed - a signature a
+ * person put somewhere the template says nothing about. A placement sitting in
+ * one of the template's own boxes never vetoes another: the template is the
+ * authority on its own geometry, and the office drew those boxes where it
+ * wants them. The ESIC photograph is stamped a little lower than its box and
+ * laps about a fifth of the way into the HR box beneath it; refusing that HR
+ * box would be the template arguing with itself.
  */
 export const OVERLAP_KEEP_OFF = 0.1
 
@@ -139,8 +156,9 @@ export const REASONS = {
   noEmployeeSignature: 'the employee has no signature on file',
   alreadyPlaced: (method: PlacementMethod) =>
     method === 'Automatic' ? 'already stamped earlier' : 'already on the page, placed by hand',
-  overlapsPlaced: (role: SignerRole) =>
-    `it would lie over the ${SIGNER_ROLE_LABEL[role].toLowerCase()} box placed by hand`,
+  overlapsPlaced: (role: SignerRole, method: PlacementMethod) =>
+    `it would lie over the ${SIGNER_ROLE_LABEL[role].toLowerCase()} ` +
+    (method === 'Automatic' ? 'stamped there earlier' : 'box placed by hand'),
   noAuthoriserSignature: 'the person who uploaded it has no signature on file',
   photoElsewhere: 'a photograph goes on the ESIC form only',
   noPhoto: 'the employee has no photograph on file',
@@ -177,6 +195,67 @@ function boxesOf(check: StampCheckResult, rows: readonly DocumentTypePlacement[]
     }))
 }
 
+/** A template box as a rectangle. */
+function rectOf(template: DocumentTypePlacement): NormalizedRect {
+  return { x: template.x, y: template.y, width: template.width, height: template.height }
+}
+
+/**
+ * Whether a placement is the one that fills this box: its CENTRE inside it.
+ *
+ * The centre rather than an overlap share, because it answers the question
+ * being asked - is this placement in that box - with one number nobody has to
+ * tune, and it cannot match a box on the other side of the page however large
+ * the placement is. A stamped signature is a little bigger or smaller than the
+ * box it went in; its middle is still in the middle.
+ */
+export function centreInside(placed: NormalizedRect, box: NormalizedRect): boolean {
+  const x = placed.x + placed.width / 2
+  const y = placed.y + placed.height / 2
+  return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height
+}
+
+/** One template box, what the occupancy check found, and what already fills it. */
+interface ClaimedBox {
+  template: DocumentTypePlacement
+  occupancy: BoxAssessment | null
+  /** The placement that fills this box, claimed by it alone. */
+  placed: ExistingPlacement | null
+}
+
+/**
+ * Gives each template box the placement that fills it, once.
+ *
+ * In template order, and each placement to at most one box: two boxes of a
+ * role need two placements. What no box claims is a placement the template
+ * does not account for - HR's own, somewhere the template says nothing about -
+ * and that is the only thing the overlap guard protects.
+ */
+function claimExisting(
+  pairs: readonly { template: DocumentTypePlacement; occupancy: BoxAssessment | null }[],
+  existing: readonly ExistingPlacement[],
+): { boxes: ClaimedBox[]; unclaimed: ExistingPlacement[] } {
+  const taken = new Set<number>()
+
+  const boxes = pairs.map(({ template, occupancy }) => {
+    const index = existing.findIndex(
+      (placed, at) =>
+        !taken.has(at) &&
+        placed.pageNumber === template.pageNumber &&
+        placed.signerRole === template.signerRole &&
+        centreInside(placed.rect, rectOf(template)),
+    )
+    if (index >= 0) taken.add(index)
+    return {
+      template,
+      occupancy,
+      placed: index >= 0 ? (existing[index] as ExistingPlacement) : null,
+    }
+  })
+
+  return { boxes, unclaimed: existing.filter((_, at) => !taken.has(at)) }
+}
+
 /** The share of `box` that lies under `other`. */
 export function overlapShare(box: NormalizedRect, other: NormalizedRect): number {
   const width = Math.min(box.x + box.width, other.x + other.width) - Math.max(box.x, other.x)
@@ -188,10 +267,11 @@ export function overlapShare(box: NormalizedRect, other: NormalizedRect): number
 
 /** What to do with one box: stamp it, keep what is there, or leave it alone and say why. */
 function planBox(
-  template: DocumentTypePlacement,
-  occupancy: BoxAssessment | null,
+  box: ClaimedBox,
+  unclaimed: readonly ExistingPlacement[],
   input: DecideInput,
 ): BoxPlan {
+  const { template, occupancy, placed } = box
   const base = {
     template,
     occupancy,
@@ -201,16 +281,19 @@ function planBox(
   }
   const skip = (reason: string): BoxPlan => ({ ...base, action: 'skip', reason })
 
-  // What is already on the document comes first. A placement of this role on
-  // this page - HR's by hand, or an earlier stamp - is the box, and stays;
-  // a box of another role lying where this one would go is somebody's
-  // decision about the page, and this does not paint over it.
-  const onPage = input.existing.filter((placed) => placed.pageNumber === template.pageNumber)
-  const sameRole = onPage.find((placed) => placed.signerRole === template.signerRole)
-  if (sameRole) return { ...base, action: 'keep', reason: REASONS.alreadyPlaced(sameRole.method) }
-  const rect = { x: template.x, y: template.y, width: template.width, height: template.height }
-  const under = onPage.find((placed) => overlapShare(rect, placed.rect) > OVERLAP_KEEP_OFF)
-  if (under) return skip(REASONS.overlapsPlaced(under.signerRole))
+  // What already fills THIS box comes first - HR's by hand, or an earlier
+  // stamp. It stays as it is, and the box is done.
+  if (placed) return { ...base, action: 'keep', reason: REASONS.alreadyPlaced(placed.method) }
+
+  // Something a person put where the template says nothing - that is their
+  // decision about the page, and this does not paint over it. Placements the
+  // template accounts for are not consulted: see OVERLAP_KEEP_OFF.
+  const under = unclaimed.find(
+    (other) =>
+      other.pageNumber === template.pageNumber &&
+      overlapShare(rectOf(template), other.rect) > OVERLAP_KEEP_OFF,
+  )
+  if (under) return skip(REASONS.overlapsPlaced(under.signerRole, under.method))
 
   // Nothing is painted over something already there, and nothing is painted
   // where it is not clear. A person can see the box; this cannot.
@@ -297,9 +380,8 @@ export function decide(input: DecideInput): Decision {
       break
   }
 
-  const boxes = boxesOf(check, input.templateRows).map(({ template, occupancy }) =>
-    planBox(template, occupancy, input),
-  )
+  const claimed = claimExisting(boxesOf(check, input.templateRows), input.existing)
+  const boxes = claimed.boxes.map((box) => planBox(box, claimed.unclaimed, input))
   const toStamp = boxes.filter((box) => box.action === 'stamp')
   const kept = boxes.filter((box) => box.action === 'keep')
   const skipped = boxes.filter((box) => box.action === 'skip')
@@ -374,12 +456,31 @@ function summarise(
   return parts.join(' ')
 }
 
+/**
+ * 'employee signature, employee photo and 2 hr signature boxes on page 2'.
+ *
+ * A role that appears more than once is named with its page, because on a
+ * two-page form that is what tells them apart. Two boxes of one role on the
+ * SAME page are counted instead of listed twice: 'hr signature on page 2 and
+ * hr signature on page 2' was true and told nobody anything.
+ */
 function listRoles(boxes: readonly BoxPlan[]): string {
-  const words = boxes.map((box) =>
-    boxes.filter((other) => other.signerRole === box.signerRole).length > 1
-      ? `${roleWord(box.signerRole)} on page ${box.pageNumber}`
-      : roleWord(box.signerRole),
-  )
+  const pagesOf = (role: SignerRole) =>
+    new Set(boxes.filter((box) => box.signerRole === role).map((box) => box.pageNumber)).size
+
+  const groups = new Map<string, BoxPlan[]>()
+  for (const box of boxes) {
+    const key = `${box.signerRole}|${box.pageNumber}`
+    groups.set(key, [...(groups.get(key) ?? []), box])
+  }
+
+  const words = [...groups.values()].map((group) => {
+    const box = group[0] as BoxPlan
+    const role = roleWord(box.signerRole)
+    if (group.length > 1) return `${group.length} ${role} boxes on page ${box.pageNumber}`
+    return pagesOf(box.signerRole) > 1 ? `${role} on page ${box.pageNumber}` : role
+  })
+
   return words.length <= 1
     ? (words[0] ?? '')
     : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`

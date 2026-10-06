@@ -147,6 +147,21 @@ indistinguishable from a stale one - there is no marker column - so it is moved
 too and reported separately (`wasOverridden`, from a `DEADLINE_CHANGED` audit
 entry on the document).
 
+**A template box is matched by POSITION, not by role** (2026-10-06). `decide()`
+matched what is already on a document to the template by role and page alone,
+so with the ESIC form's TWO Authoriser boxes (one beside the employee
+signature, one under the photograph) a single HR placement satisfied both -
+500 forms were reported "every box the template has is already on it" with the
+second box missing, and `--redecide` added nothing. Now a placement fills the
+box whose rectangle its CENTRE falls inside (`centreInside`), and each
+placement is claimed once, so two boxes of a role need two placements. The
+overlap guard (`OVERLAP_KEEP_OFF`, a tenth) now measures only against
+placements NO template box claimed - HR's own, somewhere the template says
+nothing - because the ESIC photograph is stamped lower than its box and laps
+~19% into the HR box beneath it, and the template is the authority on its own
+geometry. A first stamp at upload was always correct; only the re-decide path
+was blind.
+
 **Several saved templates of one shape.** Templates saved before shape
 matching (pre-18 Sept) were keyed on exact size, so one shape can hold several.
 The stamper uses the **newest** saved template per shape and only that one
