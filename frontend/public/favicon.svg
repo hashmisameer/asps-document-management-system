@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <rect width="40" height="40" rx="9" fill="#1D4ED8"/>
+  <!-- Two chevrons, one rising and one falling, sharing a centre. The same
+       geometry as src/components/BrandMark.tsx, at a heavier stroke. -->
+  <path d="M11 27.5 19.2 12.5a1 1 0 0 1 1.75 0l2.6 4.75" stroke="#FFFFFF"
+        stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M29 12.5 20.8 27.5a1 1 0 0 1-1.75 0l-2.6-4.75" stroke="#FFFFFF"
+        stroke-opacity="0.8" stroke-width="4.2" stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

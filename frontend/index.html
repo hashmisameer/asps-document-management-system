@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- public/favicon.svg is a second copy of the BrandMark geometry: static
+         HTML cannot import a React component. Its stroke is heavier than
+         src/components/BrandMark.tsx's so the mark still reads at 16px.
+         Change the mark there and change this file too. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- The one copy of the name that is not from src/app/brand.ts: static HTML
          cannot import it. Change it here too when the name changes. -->
     <title>ASPS International LLP - DMS</title>
