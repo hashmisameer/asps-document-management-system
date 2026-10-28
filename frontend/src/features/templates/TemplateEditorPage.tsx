@@ -5,6 +5,7 @@ import { Document, Page } from 'react-pdf'
 import {
   PHOTO_DOCUMENT_CODE,
   SIGNER_ROLES,
+  SIGNER_ROLE_LABEL,
   normalizeRotation,
   toVariant,
   variantKey,
@@ -160,6 +161,7 @@ export function TemplateEditorPage() {
         pageRotation: normalizeRotation(box.pageRotation),
         signerRole: box.signerRole,
         rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+        arrivesFilled: box.arrivesFilled,
       }))
   }, [key, drafts, existing.data])
 
@@ -189,6 +191,9 @@ export function TemplateEditorPage() {
           // is every page's size for the forms this office prints.
           pageWidthPt: firstPage.widthPt,
           pageHeightPt: firstPage.heightPt,
+          // Sent back as it came: a save replaces every row of the variant,
+          // so a flag not sent here is a flag lost.
+          arrivesFilled: box.arrivesFilled ?? false,
         })),
       })
     },
@@ -254,6 +259,10 @@ export function TemplateEditorPage() {
   }
 
   const onPage = placements.filter((box) => box.pageNumber === pageNumber)
+  const selectedBox = placements.find((box) => box.key === selected) ?? null
+
+  const setArrivesFilled = (boxKey: string, arrivesFilled: boolean) =>
+    update(placements.map((box) => (box.key === boxKey ? { ...box, arrivesFilled } : box)))
   const error = [types.error, samples.error, existing.error].find((e) => e instanceof ApiError) as
     | ApiError
     | undefined
@@ -319,6 +328,24 @@ export function TemplateEditorPage() {
           </Button>
         </div>
       </div>
+
+      {/* Whether MMC fills the selected box. Off unless somebody ticks it:
+          a box wrongly off sends a document to HR to look at, one wrongly on
+          could let a document be finished with that box empty. */}
+      {selectedBox ? (
+        <div className="mt-3 text-sm text-slate-700">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selectedBox.arrivesFilled ?? false}
+              onChange={(event) => setArrivesFilled(selectedBox.key, event.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            MMC prints this {SIGNER_ROLE_LABEL[selectedBox.signerRole].toLowerCase()} on page{' '}
+            {selectedBox.pageNumber} - it arrives filled, and nothing is stamped in it
+          </label>
+        </div>
+      ) : null}
 
       {/* Said before the save, not after: a save that replaces an existing
           template for the same form is the one way two different forms with

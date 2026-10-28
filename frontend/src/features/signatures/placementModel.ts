@@ -25,6 +25,12 @@ export interface DraftPlacement {
   pageRotation: PageRotation
   signerRole: SignerRole
   rect: NormalizedRect
+  /**
+   * A template box MMC fills before the upload. The template editor's alone:
+   * a document's placements never carry it, and a box drawn fresh starts
+   * without it.
+   */
+  arrivesFilled?: boolean
 }
 
 /** Where a new box lands: a readable default the person then drags into place. */

@@ -335,3 +335,62 @@ describe('saving a template', () => {
     expect(db.replaceForVariant).toHaveBeenCalledWith(6, FORM_11, [], 96, 9)
   })
 })
+
+describe('a box MMC fills', () => {
+  it('is saved as said, and the trail names which boxes', async () => {
+    // Form 11: MMC prints both signatures on its one page.
+    const response = await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send(
+        body([
+          { ...BOX, signerRole: 'Employee', arrivesFilled: true },
+          { ...BOX, signerRole: 'Authoriser', y: 0.6, arrivesFilled: true },
+        ]),
+      )
+
+    expect(response.status).toBe(200)
+    expect(db.replaceForVariant).toHaveBeenCalledWith(
+      6,
+      FORM_11,
+      [
+        expect.objectContaining({ signerRole: 'Employee', arrivesFilled: true }),
+        expect.objectContaining({ signerRole: 'Authoriser', arrivesFilled: true }),
+      ],
+      96,
+      9,
+    )
+    const audit = db.insertAudit.mock.calls
+      .map((call: unknown[]) => call[0] as { action: string; metadataJson?: string })
+      .find((entry) => entry.action === 'TEMPLATE_SAVED')
+    expect(audit?.metadataJson).toContain(
+      '"arrivesFilled":[{"signerRole":"Employee","page":1},{"signerRole":"Authoriser","page":1}]',
+    )
+  })
+
+  it('is off when the save does not say - the safe way round', async () => {
+    // Wrongly off sends a document to HR; wrongly on could finish it unsigned.
+    await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send(body([{ ...BOX, signerRole: 'Employee' }]))
+
+    expect(db.replaceForVariant).toHaveBeenCalledWith(
+      6,
+      FORM_11,
+      [expect.objectContaining({ signerRole: 'Employee', arrivesFilled: false })],
+      96,
+      9,
+    )
+  })
+
+  it('refuses a flag that is not a yes or a no', async () => {
+    const response = await request(app)
+      .put('/api/document-types/6/placements')
+      .set('Cookie', signedInAs(ROLES.ADMIN))
+      .send(body([{ ...BOX, signerRole: 'Employee', arrivesFilled: 'yes' }]))
+
+    expect(response.status).toBe(400)
+    expect(db.replaceForVariant).not.toHaveBeenCalled()
+  })
+})

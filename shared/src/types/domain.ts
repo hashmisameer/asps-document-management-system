@@ -511,6 +511,13 @@ export interface DocumentTypePlacement {
   /** The page this box was drawn on, unrotated, in points. */
   pageWidthPt: number
   pageHeightPt: number
+  /**
+   * MMC fills this box on the form it generates, so it arrives occupied and
+   * is not this system's to stamp - Form 11's two signatures, Form 2's HR
+   * stamp. False for a box this system stamps, which is every box unless
+   * somebody has said otherwise.
+   */
+  arrivesFilled: boolean
   /** Which form: the sample's page count and first-page size, in whole points. */
   variant: TemplateVariant
   sampleDocumentId: number | null

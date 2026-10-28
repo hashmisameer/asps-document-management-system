@@ -34,6 +34,7 @@ interface Row {
   PageRotation: number
   PageWidthPt: number
   PageHeightPt: number
+  ArrivesFilled: boolean
   SamplePageCount: number
   SampleWidthPt: number
   SampleHeightPt: number
@@ -55,6 +56,7 @@ function toRecord(row: Row): DocumentTypePlacement {
     pageRotation: row.PageRotation,
     pageWidthPt: row.PageWidthPt,
     pageHeightPt: row.PageHeightPt,
+    arrivesFilled: row.ArrivesFilled,
     variant: {
       pageCount: row.SamplePageCount,
       widthPt: row.SampleWidthPt,
@@ -69,7 +71,7 @@ function toRecord(row: Row): DocumentTypePlacement {
 const SELECT = `
       SELECT tp.DocumentTypePlacementId, tp.DocumentTypeId, tp.SignerRole, tp.PageNumber,
              tp.X, tp.Y, tp.Width, tp.Height, tp.PageRotation,
-             tp.PageWidthPt, tp.PageHeightPt,
+             tp.PageWidthPt, tp.PageHeightPt, tp.ArrivesFilled,
              tp.SamplePageCount, tp.SampleWidthPt, tp.SampleHeightPt, tp.SampleDocumentId,
              u.FullName AS CreatedByName, tp.CreatedAt
       FROM   dbo.DocumentTypePlacements AS tp
@@ -140,6 +142,11 @@ export interface TemplateBox {
   pageRotation: number
   pageWidthPt: number
   pageHeightPt: number
+  /**
+   * MMC fills this box. Written as given - the editor carries it through a
+   * save - and off when not given, which is the safe way round.
+   */
+  arrivesFilled?: boolean
 }
 
 /**
@@ -192,9 +199,10 @@ export async function replaceForVariant(
       .input(`rot${index}`, sql.Int, box.pageRotation)
       .input(`pw${index}`, sql.Float, box.pageWidthPt)
       .input(`ph${index}`, sql.Float, box.pageHeightPt)
+      .input(`filled${index}`, sql.Bit, box.arrivesFilled ?? false)
     return (
       `(@documentTypeId, @role${index}, @page${index}, @x${index}, @y${index}, @w${index}, @h${index}, ` +
-      `@rot${index}, @pw${index}, @ph${index}, @samplePageCount, @sampleWidthPt, @sampleHeightPt, ` +
+      `@rot${index}, @pw${index}, @ph${index}, @filled${index}, @samplePageCount, @sampleWidthPt, @sampleHeightPt, ` +
       `@sampleDocumentId, @createdBy)`
     )
   })
@@ -204,7 +212,7 @@ export async function replaceForVariant(
     tuples.length > 0
       ? `INSERT INTO dbo.DocumentTypePlacements
              (DocumentTypeId, SignerRole, PageNumber, X, Y, Width, Height, PageRotation,
-              PageWidthPt, PageHeightPt, SamplePageCount, SampleWidthPt, SampleHeightPt,
+              PageWidthPt, PageHeightPt, ArrivesFilled, SamplePageCount, SampleWidthPt, SampleHeightPt,
               SampleDocumentId, CreatedBy)
          VALUES ${tuples.join(', ')};`
       : ''

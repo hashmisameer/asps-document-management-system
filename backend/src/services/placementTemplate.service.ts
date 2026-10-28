@@ -139,6 +139,7 @@ export async function save(
       pageRotation: box.pageRotation,
       pageWidthPt: box.pageWidthPt,
       pageHeightPt: box.pageHeightPt,
+      arrivesFilled: box.arrivesFilled,
     })),
     input.sampleDocumentId,
     actor.userId,
@@ -163,6 +164,11 @@ export async function save(
       removed: input.placements.length === 0,
       boxes: input.placements.length,
       roles: input.placements.map((box) => box.signerRole),
+      // Which boxes MMC fills: setting one is what lets a document finish
+      // without this system stamping it, so the trail says who said so.
+      arrivesFilled: input.placements
+        .filter((box) => box.arrivesFilled)
+        .map((box) => ({ signerRole: box.signerRole, page: box.pageNumber })),
       sampleDocumentId: input.sampleDocumentId,
     },
   })

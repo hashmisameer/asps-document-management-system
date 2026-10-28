@@ -131,6 +131,7 @@ function templateRow(
     pageRotation: 0,
     pageWidthPt: 595,
     pageHeightPt: 842,
+    arrivesFilled: false,
     variant: A4,
     sampleDocumentId: null,
     createdByName: null,

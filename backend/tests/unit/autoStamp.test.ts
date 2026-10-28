@@ -47,6 +47,7 @@ function templateRow(
     pageRotation: 0,
     pageWidthPt: A4.widthPt,
     pageHeightPt: A4.heightPt,
+    arrivesFilled: false,
     variant: A4,
     sampleDocumentId: null,
     createdByName: null,

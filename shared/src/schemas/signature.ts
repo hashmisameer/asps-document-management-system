@@ -101,6 +101,12 @@ export const templatePlacementSchema = withinPage(
   boxSchema.extend({
     pageWidthPt: z.number().positive(),
     pageHeightPt: z.number().positive(),
+    /**
+     * MMC fills this box before the upload. Off unless somebody says so: a
+     * box wrongly off sends a document to HR, one wrongly on could finish it
+     * unsigned. See DocumentTypePlacement.arrivesFilled.
+     */
+    arrivesFilled: z.boolean().default(false),
   }),
 )
 

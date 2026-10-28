@@ -173,7 +173,14 @@ export async function runMigrations(): Promise<string[]> {
 
     try {
       for (const batch of splitBatches(file.sqlText)) {
-        await new sql.Request(transaction).batch(batch)
+        const request = new sql.Request(transaction)
+        // What a migration PRINTs - how many rows a data change touched - is
+        // the only record of it outside the database, so it is logged rather
+        // than dropped.
+        request.on('info', (info: { message: string }) => {
+          logger.info({ migration: file.name }, info.message)
+        })
+        await request.batch(batch)
       }
 
       await new sql.Request(transaction)

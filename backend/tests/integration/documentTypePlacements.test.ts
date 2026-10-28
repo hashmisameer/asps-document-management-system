@@ -3,6 +3,7 @@ import { SIGNER_ROLES, type TemplateVariant } from '@asps-dms/shared'
 import * as documentTypePlacementRepository from '../../src/repositories/documentTypePlacement.repository.js'
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as signaturePlacementRepository from '../../src/repositories/signaturePlacement.repository.js'
+import { readFile } from 'node:fs/promises'
 import { createRequest } from '../../src/database/pool.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
@@ -299,5 +300,85 @@ describe('placement templates, in the database', () => {
     expect(byCode.AADHAAR_CARD).toMatchObject({ status: 'scanned', variants: [] })
     expect(byCode.PAN_CARD).toMatchObject({ status: 'scanned' })
     expect(summaries).toHaveLength(9)
+  })
+
+  it('keeps whether MMC fills a box, and has it off when nobody said', async () => {
+    await documentTypePlacementRepository.replaceForVariant(
+      pfTypeId,
+      FORM_11,
+      [
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, y: 0.7, arrivesFilled: true },
+        { ...BOX, signerRole: SIGNER_ROLES.AUTHORISER, y: 0.85 },
+      ],
+      null,
+      adminUserId,
+    )
+
+    const rows = (await documentTypePlacementRepository.listForType(pfTypeId)).filter(
+      (r) => r.variant.pageCount === 1,
+    )
+    expect(rows.map((r) => [r.signerRole, r.arrivesFilled])).toEqual([
+      ['Employee', true],
+      ['Authoriser', false],
+    ])
+  })
+
+  it('migration 0040 flags exactly the three PF boxes MMC prints, and nothing else', async () => {
+    // Every PF box, all off: Form 11's two and Form 2's three.
+    await documentTypePlacementRepository.replaceForVariant(
+      pfTypeId,
+      FORM_11,
+      [
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, y: 0.7 },
+        { ...BOX, signerRole: SIGNER_ROLES.AUTHORISER, y: 0.85 },
+      ],
+      null,
+      adminUserId,
+    )
+    await documentTypePlacementRepository.replaceForVariant(
+      pfTypeId,
+      PF_TWO_PAGE,
+      [
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, pageNumber: 1 },
+        { ...BOX, signerRole: SIGNER_ROLES.EMPLOYEE, pageNumber: 2, y: 0.5 },
+        { ...BOX, signerRole: SIGNER_ROLES.AUTHORISER, pageNumber: 2, y: 0.85 },
+      ],
+      null,
+      adminUserId,
+    )
+    // And an ESIC HR box, which MMC never fills.
+    await documentTypePlacementRepository.replaceForVariant(
+      esicTypeId,
+      FORM_11,
+      [{ ...BOX, signerRole: SIGNER_ROLES.AUTHORISER }],
+      null,
+      adminUserId,
+    )
+
+    // The migration's own UPDATE, run again over those rows: the file's
+    // batches after the column is added, split on GO as the runner splits it.
+    const file = await readFile(
+      new URL('../../../database/migrations/0040_template_box_arrives_filled.sql', import.meta.url),
+      'utf8',
+    )
+    const batches = file
+      .split(/^[ \t]*GO[ \t]*(?:--.*)?$/gim)
+      .map((batch) => batch.trim())
+      .filter((batch) => batch.includes('UPDATE tp'))
+    expect(batches).toHaveLength(1)
+    const printed: string[] = []
+    const request = await createRequest()
+    request.on('info', (info: { message: string }) => printed.push(info.message))
+    await request.batch(batches[0] as string)
+
+    const flagged = (await documentTypePlacementRepository.listForType(pfTypeId))
+      .filter((r) => r.arrivesFilled)
+      .map((r) => `${r.variant.pageCount}p ${r.signerRole} p${r.pageNumber}`)
+      .sort()
+    expect(flagged).toEqual(['1p Authoriser p1', '1p Employee p1', '2p Authoriser p2'])
+    const esic = await documentTypePlacementRepository.listForType(esicTypeId)
+    expect(esic.every((r) => !r.arrivesFilled)).toBe(true)
+    expect(printed.at(-1)).toContain('ArrivesFilled set on 3 PF_FORM template row(s)')
+    expect(printed.filter((line) => line.includes('set on DocumentTypePlacementId'))).toHaveLength(3)
   })
 })

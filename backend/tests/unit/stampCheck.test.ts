@@ -80,6 +80,7 @@ function templateRow(
     pageRotation: 0,
     pageWidthPt: variant.widthPt,
     pageHeightPt: variant.heightPt,
+    arrivesFilled: false,
     variant,
     sampleDocumentId: null,
     createdByName: null,

@@ -548,10 +548,18 @@ export function PlacementBox({
           : isPhoto
             ? 'border-slate-500 bg-slate-500/10 text-slate-700'
             : 'border-brand-600 bg-brand-600/10 text-brand-800'
-      } ${selected ? 'ring-2 ring-offset-1 ring-brand-600' : ''}`}
+      } ${selected ? 'ring-2 ring-offset-1 ring-brand-600' : ''} ${
+        // A box MMC fills is drawn dashed: it is part of the template but
+        // nothing is stamped in it, and that should be seen at a glance.
+        placement.arrivesFilled ? 'border-dashed' : ''
+      }`}
     >
       <span className="pointer-events-none select-none px-1 text-center font-medium">
-        {isAuthoriser ? `${SIGNER_ROLE_LABEL[placement.signerRole]} - ${ownName}` : SIGNER_ROLE_LABEL[placement.signerRole]}
+        {placement.arrivesFilled
+          ? `${SIGNER_ROLE_LABEL[placement.signerRole]} - MMC fills`
+          : isAuthoriser
+            ? `${SIGNER_ROLE_LABEL[placement.signerRole]} - ${ownName}`
+            : SIGNER_ROLE_LABEL[placement.signerRole]}
       </span>
 
       {!readOnly && selected ? (
