@@ -22,3 +22,21 @@ export function redecideInBackground(
       logger.error({ err: error, employeeId, trigger }, 'Deciding again after a save threw')
     })
 }
+
+/**
+ * The same for one document whose blocker has just been cleared - HR
+ * confirming it after its identity check failed. After the confirmation has
+ * been answered, and never able to fail it.
+ */
+export function redecideDocumentInBackground(
+  documentId: number,
+  actor: AuthUser,
+  context: RequestContext,
+  trigger: 'identity confirmed',
+): void {
+  void import('./autoStampRun.service.js')
+    .then((runner) => runner.redecideDocument(documentId, actor, context, trigger))
+    .catch((error) => {
+      logger.error({ err: error, documentId, trigger }, 'Deciding again after a confirmation threw')
+    })
+}

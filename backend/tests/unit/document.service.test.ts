@@ -37,6 +37,7 @@ const db = vi.hoisted(() => ({
   setNotRequired: vi.fn(),
   readStoredFile: vi.fn(),
   autoStampRun: vi.fn(),
+  redecideDocument: vi.fn(),
 }))
 
 vi.mock('../../src/repositories/employeeDocument.repository.js', () => ({
@@ -93,7 +94,10 @@ vi.mock('../../src/services/documentText.service.js', () => ({
 
 // Stamping on upload is its own module with its own tests; here it is a spy
 // that says whether, and when, the upload handed the document to it.
-vi.mock('../../src/services/autoStampRun.service.js', () => ({ run: db.autoStampRun }))
+vi.mock('../../src/services/autoStampRun.service.js', () => ({
+  run: db.autoStampRun,
+  redecideDocument: db.redecideDocument,
+}))
 
 const documentService = await import('../../src/services/document.service.js')
 
@@ -769,6 +773,81 @@ describe('setNotRequired', () => {
     db.setNotRequired.mockResolvedValue(false)
 
     await expect(documentService.setNotRequired(5, true, hr, context)).resolves.toBeDefined()
+  })
+})
+
+describe('overrideIdentityCheck', () => {
+  const failed = record({
+    documentName: 'ESIC Form',
+    documentCode: 'ESIC_FORM',
+    originalFileName: 'esic.pdf',
+    requiresSignature: true,
+    signatureStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
+    identityCheck: {
+      status: 'Failed',
+      source: 'PdfText',
+      checks: [],
+      checkedAt: '2026-10-09T02:49:22.000Z',
+      overriddenByName: null,
+      overrideReason: null,
+      failureReason: 'The employee name was not found.',
+    },
+  })
+
+  /** The confirmation has answered; deciding again runs after it. */
+  const afterBackground = () =>
+    vi.waitFor(() => expect(db.redecideDocument).toHaveBeenCalled(), { timeout: 1000 })
+
+  beforeEach(() => {
+    db.findById.mockResolvedValue(failed)
+    db.findStoredFile.mockResolvedValue({ documentId: 5, storedFileName: 'stored.pdf' })
+    db.recordIdentityCheck.mockResolvedValue(true)
+    db.redecideDocument.mockResolvedValue(null)
+  })
+
+  it('decides about stamping again once the confirmation is recorded', async () => {
+    // The decision was made while the check said Failed. Without this the
+    // document stays unstamped for good, and nothing says which ones they are.
+    await documentService.overrideIdentityCheck(5, undefined, hr, context)
+
+    await afterBackground()
+    expect(db.redecideDocument).toHaveBeenCalledWith(5, hr, context, 'identity confirmed')
+    const recorded = db.recordIdentityCheck.mock.invocationCallOrder[0] ?? 0
+    const audited = db.insertAudit.mock.invocationCallOrder[0] ?? 0
+    const redecided = db.redecideDocument.mock.invocationCallOrder[0] ?? 0
+    expect(recorded).toBeLessThan(redecided)
+    expect(audited).toBeLessThan(redecided)
+  })
+
+  it('does not decide again when there was nothing to confirm', async () => {
+    db.findById.mockResolvedValue(
+      record({ identityCheck: { ...failed.identityCheck!, status: 'Passed' } }),
+    )
+
+    await expect(
+      documentService.overrideIdentityCheck(5, undefined, hr, context),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(db.redecideDocument).not.toHaveBeenCalled()
+  })
+
+  it('does not decide again when somebody else changed it first', async () => {
+    db.recordIdentityCheck.mockResolvedValue(false)
+
+    await expect(
+      documentService.overrideIdentityCheck(5, undefined, hr, context),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(db.redecideDocument).not.toHaveBeenCalled()
+  })
+
+  it('still answers when deciding again goes wrong', async () => {
+    db.redecideDocument.mockRejectedValue(new Error('the stamp blew up'))
+
+    await expect(
+      documentService.overrideIdentityCheck(5, undefined, hr, context),
+    ).resolves.toBeDefined()
+    await afterBackground()
   })
 })
 

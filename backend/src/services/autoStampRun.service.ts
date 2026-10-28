@@ -60,7 +60,8 @@ import { checkDocument } from './stampCheck.service.js'
  *
  * A DOCUMENT IS DECIDED ABOUT AGAIN when the employee's signature or
  * photograph arrives after the upload - from MMC's folder, by hand on the
- * record, or on the pad - and by the re-decide command for the ones that
+ * record, or on the pad - when HR confirms a document whose identity check
+ * failed, and by the re-decide command for the ones that
  * waited before this existed. Everything already on the document is kept and
  * repainted with what is added; a document with nothing to add is left
  * exactly as it is. See prepare().
@@ -134,6 +135,7 @@ export type RunTrigger =
   | 'signature saved'
   | 'photo saved'
   | 'MMC pickup'
+  | 'identity confirmed'
   | 'backlog command'
   | 'redecide command'
 
@@ -543,6 +545,7 @@ export interface RedecideDeps {
   mode: () => AutoStampMode
   types: () => ReadonlySet<string>
   listAwaiting: typeof employeeDocumentRepository.listAwaitingSignature
+  findAwaiting: typeof employeeDocumentRepository.findAwaitingSignature
   resolveUser: (userId: number) => Promise<AuthUser | null>
   runOne: typeof runOne
   sleep: (ms: number) => Promise<void>
@@ -553,6 +556,7 @@ function defaultRedecideDeps(): RedecideDeps {
     mode: modeFromEnv,
     types: typesFromEnv,
     listAwaiting: employeeDocumentRepository.listAwaitingSignature,
+    findAwaiting: employeeDocumentRepository.findAwaitingSignature,
     resolveUser: activeUser,
     runOne,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -583,29 +587,64 @@ export async function redecideForEmployee(
     )
     for (const [index, row] of waiting.entries()) {
       if (index > 0) await deps.sleep(BETWEEN_DOCUMENTS_MS)
-      const uploader = row.uploadedBy ? await deps.resolveUser(row.uploadedBy) : null
-      const outcome = await deps.runOne(row.documentId, uploader ?? caller, context, { trigger })
-      outcomes.push(
-        'left' in outcome
-          ? {
-              documentId: row.documentId,
-              documentName: row.documentName,
-              kind: 'left',
-              reason: outcome.left,
-              detail: outcome.detail,
-            }
-          : {
-              documentId: row.documentId,
-              documentName: row.documentName,
-              kind: 'decided',
-              result: outcome,
-            },
-      )
+      outcomes.push(await redecideRow(row, caller, context, trigger, deps))
     }
   } catch (error) {
     logger.error({ err: error, employeeId, trigger }, 'Deciding again could not be completed')
   }
   return outcomes
+}
+
+/**
+ * Decides again about ONE document, because the thing that stopped it has
+ * been cleared - HR confirming a document whose identity check failed. Only
+ * that document: nothing about the employee's others has changed. The same
+ * rules as redecideForEmployee - stamp mode only, the types in the list only,
+ * in the uploader's name (the caller's when that account is gone) - and the
+ * same promise: never throws.
+ */
+export async function redecideDocument(
+  documentId: number,
+  caller: AuthUser,
+  context: RequestContext,
+  trigger: RunTrigger,
+  deps: RedecideDeps = defaultRedecideDeps(),
+): Promise<RedecideOutcome | null> {
+  try {
+    if (deps.mode() !== AUTO_STAMP_MODES.STAMP) return null
+    const row = await deps.findAwaiting(documentId)
+    if (!row || !deps.types().has(row.documentCode)) return null
+    return await redecideRow(row, caller, context, trigger, deps)
+  } catch (error) {
+    logger.error({ err: error, documentId, trigger }, 'Deciding again could not be completed')
+    return null
+  }
+}
+
+/** One waiting document, run in its uploader's name. */
+async function redecideRow(
+  row: AwaitingSignatureRow,
+  caller: AuthUser,
+  context: RequestContext,
+  trigger: RunTrigger,
+  deps: RedecideDeps,
+): Promise<RedecideOutcome> {
+  const uploader = row.uploadedBy ? await deps.resolveUser(row.uploadedBy) : null
+  const outcome = await deps.runOne(row.documentId, uploader ?? caller, context, { trigger })
+  return 'left' in outcome
+    ? {
+        documentId: row.documentId,
+        documentName: row.documentName,
+        kind: 'left',
+        reason: outcome.left,
+        detail: outcome.detail,
+      }
+    : {
+        documentId: row.documentId,
+        documentName: row.documentName,
+        kind: 'decided',
+        result: outcome,
+      }
 }
 
 /**

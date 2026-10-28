@@ -38,6 +38,7 @@ import type { RequestContext } from './auth.service.js'
 import { inspectDocumentUpload, type UploadedFile } from './fileValidation.service.js'
 import * as storage from './storage.service.js'
 import { checkUpload, describeFailure } from './documentVerification.service.js'
+import { redecideDocumentInBackground } from './redecideHook.service.js'
 
 /**
  * Employee documents: the file, its status, and its deadline.
@@ -626,6 +627,11 @@ export async function overrideIdentityCheck(
       ...summariseChecks(record.identityCheck.checks),
     },
   })
+
+  // The stamp decision was made while the check said Failed, and refused for
+  // that reason alone. It is made again now, or the document stays unstamped
+  // with nothing to say why.
+  redecideDocumentInBackground(documentId, actor, context, 'identity confirmed')
 
   return getById(documentId)
 }

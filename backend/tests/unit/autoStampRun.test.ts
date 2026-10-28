@@ -101,7 +101,7 @@ vi.mock('../../src/services/signature.service.js', () => ({
   readPhotoForStamp: mocks.readPhotoForStamp,
 }))
 
-const { run, runOne, runBacklog, redecideForEmployee, redecideType } =
+const { run, runOne, runBacklog, redecideForEmployee, redecideDocument, redecideType } =
   await import('../../src/services/autoStampRun.service.js')
 
 const actor: AuthUser = {
@@ -968,6 +968,7 @@ describe('deciding again for an employee', () => {
       { documentId: 6, documentCode: 'PF_FORM', documentName: 'PF Form', uploadedBy: 9 },
       { documentId: 7, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: 404 },
     ]),
+    findAwaiting: vi.fn(async (_documentId: number) => null),
     resolveUser: vi.fn(async (id: number) =>
       id === 9 ? { ...actor, userId: 9, username: 'hr.uploader' } : null,
     ),
@@ -1023,6 +1024,79 @@ describe('deciding again for an employee', () => {
     const d = deps()
     d.listAwaiting.mockRejectedValue(new Error('database is down'))
     await expect(redecideForEmployee(42, actor, context, 'photo saved', d)).resolves.toEqual([])
+  })
+})
+
+describe('deciding again for one document, when HR confirms it', () => {
+  const esic = { documentId: 5, documentCode: 'ESIC_FORM', documentName: 'ESIC Form', uploadedBy: 9 }
+  const deps = (row: typeof esic | null = esic) => ({
+    mode: () => (mocks.autoStamp === 'stamp' ? 'Stamp' : 'Report') as 'Stamp' | 'Report',
+    types: () => mocks.autoStampTypes,
+    listAwaiting: vi.fn(async () => []),
+    findAwaiting: vi.fn(async (_documentId: number) => row),
+    resolveUser: vi.fn(async (id: number) =>
+      id === 9 ? { ...actor, userId: 9, username: 'hr.uploader' } : null,
+    ),
+    runOne: vi.fn(async (documentId: number, ..._rest: unknown[]) => ({
+      documentId,
+      mode: 'Stamp' as const,
+      decision: {} as never,
+      stamped: 4,
+      status: SIGNATURE_STATUS.ADDED,
+    })),
+    sleep: vi.fn(async () => {}),
+  })
+
+  beforeEach(() => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['ESIC_FORM'])
+  })
+
+  it('runs that document alone, in its uploader’s name', async () => {
+    const d = deps()
+    const outcome = await redecideDocument(5, actor, context, 'identity confirmed', d)
+
+    expect(d.findAwaiting).toHaveBeenCalledWith(5)
+    // Not the employee's other documents: only this one's blocker was cleared.
+    expect(d.listAwaiting).not.toHaveBeenCalled()
+    expect(d.runOne).toHaveBeenCalledTimes(1)
+    expect(d.runOne.mock.calls[0]?.[0]).toBe(5)
+    expect(d.runOne.mock.calls[0]?.[1]).toMatchObject({ userId: 9 })
+    expect(d.runOne.mock.calls[0]?.[3]).toEqual({ trigger: 'identity confirmed' })
+    expect(outcome).toMatchObject({ documentId: 5, kind: 'decided' })
+  })
+
+  it('stands the caller in when the uploader’s account is gone', async () => {
+    const d = deps({ ...esic, uploadedBy: 404 })
+    await redecideDocument(5, actor, context, 'identity confirmed', d)
+    expect(d.runOne.mock.calls[0]?.[1]).toBe(actor)
+  })
+
+  it('does nothing at all in report mode', async () => {
+    mocks.autoStamp = 'report'
+    const d = deps()
+    await expect(redecideDocument(5, actor, context, 'identity confirmed', d)).resolves.toBeNull()
+    expect(d.findAwaiting).not.toHaveBeenCalled()
+    expect(d.runOne).not.toHaveBeenCalled()
+  })
+
+  it('leaves a type that is not in the list alone', async () => {
+    const d = deps({ ...esic, documentCode: 'PF_FORM' })
+    await expect(redecideDocument(5, actor, context, 'identity confirmed', d)).resolves.toBeNull()
+    expect(d.runOne).not.toHaveBeenCalled()
+  })
+
+  it('leaves a document that is no longer waiting alone', async () => {
+    // Signed by hand in the meantime, or its file removed.
+    const d = deps(null)
+    await expect(redecideDocument(5, actor, context, 'identity confirmed', d)).resolves.toBeNull()
+    expect(d.runOne).not.toHaveBeenCalled()
+  })
+
+  it('never throws - a confirmation must not fail because what followed it did', async () => {
+    const d = deps()
+    d.runOne.mockRejectedValue(new Error('database is down'))
+    await expect(redecideDocument(5, actor, context, 'identity confirmed', d)).resolves.toBeNull()
   })
 })
 

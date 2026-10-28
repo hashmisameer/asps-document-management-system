@@ -510,6 +510,20 @@ export async function listAwaitingSignature(employeeId: number): Promise<Awaitin
   return result.recordset.map(toAwaiting)
 }
 
+/** One document, if it is still waiting for a signature with a file to sign. */
+export async function findAwaitingSignature(
+  documentId: number,
+): Promise<AwaitingSignatureRow | null> {
+  const request = await createRequest()
+  const result = await request.input('documentId', sql.Int, documentId).query<AwaitingRow>(`
+      SELECT d.DocumentId, dt.DocumentCode, dt.DocumentName, d.UploadedBy
+      ${AWAITING_FROM}
+        AND  d.DocumentId = @documentId`)
+
+  const row = result.recordset[0]
+  return row ? toAwaiting(row) : null
+}
+
 /**
  * Every document of one type still waiting for a signature, oldest first -
  * what the re-decide command works through.
