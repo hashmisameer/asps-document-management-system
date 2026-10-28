@@ -151,7 +151,9 @@ describe('the ordinary case', () => {
 })
 
 describe('a box that already has something in it', () => {
-  it('is left alone, the rest is stamped, and HR is told', () => {
+  it('is left alone, the rest is stamped, and HR is told to check the template', () => {
+    // A box the template expects empty: the likeliest cause is the box, drawn
+    // over something printed on the form, so it is said - loudly.
     const rows = [templateRow(SIGNER_ROLES.EMPLOYEE), templateRow(SIGNER_ROLES.AUTHORISER)]
     const decision = decide(
       input({ templateRows: rows, check: checked(rows, ['occupied', 'empty']) }),
@@ -162,11 +164,12 @@ describe('a box that already has something in it', () => {
     expect(decision.boxes[0]).toMatchObject({
       action: 'skip',
       found: 'occupied',
-      reason: REASONS.occupied('ink covers 6.1% of the box'),
+      checkTemplate: true,
+      reason: REASONS.unexpectedlyFilled('ink covers 6.1% of the box on a scanned page'),
     })
     expect(decision.nextStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
     expect(decision.summary).toBe(
-      'Stamped: hr signature. Not stamped: the employee signature - the box already has something in it (ink covers 6.1% of the box).',
+      'Stamped: hr signature. Not stamped: the employee signature - the box should be empty and already has something in it (ink covers 6.1% of the box on a scanned page) - check the template box is in the right place.',
     )
   })
 
@@ -705,5 +708,195 @@ describe('the auto-stamp list', () => {
     expect(
       decide(input({ documentCode: 'ESIC_FORM', autoStampTypes: new Set(['ESIC_FORM']) })).outcome,
     ).toBe(STAMP_OUTCOMES.STAMPED)
+  })
+})
+
+/**
+ * Boxes MMC fills.
+ *
+ * The template says which they are, and nothing rests on a percentage: MMC's
+ * genuine Form 11 signatures and an empty placeholder printed inside a box
+ * both read 33%. A box MMC fills is never painted. Occupied, it is done;
+ * empty, MMC did not do its part. A box this system fills that arrives
+ * occupied is the misplaced-box case, and is said loudly.
+ */
+describe('a box MMC fills', () => {
+  const PF = { documentCode: 'PF_FORM', documentName: 'PF Form' }
+  const PF_LISTED: ReadonlySet<string> = new Set(['PF_FORM', 'ESIC_FORM'])
+
+  /** What a digital page says when an image covers the box. */
+  function imageOn(index: number, row: DocumentTypePlacement, percent: number): BoxAssessment {
+    return {
+      label: String(index),
+      signerRole: row.signerRole,
+      pageNumber: row.pageNumber,
+      rect: { x: row.x, y: row.y, width: row.width, height: row.height },
+      verdict: 'occupied',
+      decidedBy: 'image',
+      pageKind: 'digital',
+      overlap: { images: 1, coverage: percent / 100 },
+      reason: `an image covers ${percent}% of the box`,
+    }
+  }
+
+  function emptyOn(index: number, row: DocumentTypePlacement): BoxAssessment {
+    return { ...assessed(index, row, 'empty'), pageKind: 'digital' }
+  }
+
+  function pf(
+    rows: DocumentTypePlacement[],
+    boxes: BoxAssessment[],
+    variant = A4,
+    overrides: Partial<DecideInput> = {},
+  ): DecideInput {
+    return input({
+      ...PF,
+      autoStampTypes: PF_LISTED,
+      templateRows: rows,
+      check: { ...checked(rows), variant, measured: variant, boxes },
+      ...overrides,
+    })
+  }
+
+  it('finishes Form 2: the employee signatures stamped, MMC’s HR stamp taken as filled', () => {
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { variant: TWO_PAGE, pageNumber: 1 }),
+      templateRow(SIGNER_ROLES.EMPLOYEE, { variant: TWO_PAGE, pageNumber: 2, y: 0.5 }),
+      templateRow(SIGNER_ROLES.AUTHORISER, {
+        variant: TWO_PAGE,
+        pageNumber: 2,
+        y: 0.85,
+        arrivesFilled: true,
+      }),
+    ]
+    const [p1, p2, hr] = rows as [DocumentTypePlacement, DocumentTypePlacement, DocumentTypePlacement]
+    const decision = decide(pf(rows, [emptyOn(0, p1), emptyOn(1, p2), imageOn(2, hr, 54)], TWO_PAGE))
+
+    expect(decision.toStamp.map((box) => [box.signerRole, box.pageNumber])).toEqual([
+      ['Employee', 1],
+      ['Employee', 2],
+    ])
+    expect(decision.filled.map((box) => [box.signerRole, box.pageNumber])).toEqual([
+      ['Authoriser', 2],
+    ])
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+    // Said as filled, never as stamped.
+    expect(decision.summary).toBe(
+      'Stamped: employee signature on page 1 and employee signature on page 2. ' +
+        'Already filled: the hr signature - the box already has something in it, ' +
+        'as the template expects (an image covers 54% of the box).',
+    )
+  })
+
+  it('finishes Form 11 with nothing painted at all: MMC signed both boxes', () => {
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { y: 0.7, arrivesFilled: true }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { y: 0.85, arrivesFilled: true }),
+    ]
+    const [employee, hr] = rows as [DocumentTypePlacement, DocumentTypePlacement]
+    const decision = decide(pf(rows, [imageOn(0, employee, 33), imageOn(1, hr, 33)]))
+
+    expect(decision.toStamp).toEqual([])
+    expect(decision.boxes.map((box) => box.action)).toEqual(['filled', 'filled'])
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(decision.summary).toBe(
+      'Already filled: the employee signature and hr signature - the box already has ' +
+        'something in it, as the template expects (an image covers 33% of the box).',
+    )
+  })
+
+  it('takes a box MMC fills on a scanned page as filled on its ink', () => {
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { y: 0.4 }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { arrivesFilled: true }),
+    ]
+    const [employee, hr] = rows as [DocumentTypePlacement, DocumentTypePlacement]
+    const decision = decide(
+      pf(rows, [assessed(0, employee, 'empty'), assessed(1, hr, 'occupied')]),
+    )
+
+    expect(decision.toStamp.map((box) => box.signerRole)).toEqual(['Employee'])
+    expect(decision.filled.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+  })
+
+  it('leaves a box MMC should have filled, and did not, for HR - and paints nothing in it', () => {
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { y: 0.7, arrivesFilled: true }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { y: 0.85, arrivesFilled: true }),
+    ]
+    const [employee, hr] = rows as [DocumentTypePlacement, DocumentTypePlacement]
+    const decision = decide(pf(rows, [imageOn(0, employee, 33), emptyOn(1, hr)]))
+
+    expect(decision.toStamp).toEqual([])
+    expect(decision.boxes[1]).toMatchObject({ action: 'skip', reason: REASONS.expectedFilled })
+    expect(decision.boxes[1]?.checkTemplate).toBeUndefined()
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+  })
+
+  it('does not guess at a box MMC fills whose reading is uncertain, or that was not read', () => {
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE, { y: 0.7, arrivesFilled: true }),
+      templateRow(SIGNER_ROLES.AUTHORISER, { y: 0.85, arrivesFilled: true }),
+    ]
+    const decision = decide(pf(rows, [assessed(0, rows[0] as DocumentTypePlacement, 'uncertain')]))
+
+    expect(decision.boxes.map((box) => box.action)).toEqual(['skip', 'skip'])
+    expect(decision.boxes[0]?.reason).toBe(REASONS.uncertain('ink covers 6.1% of the box'))
+    expect(decision.boxes[1]?.reason).toBe(REASONS.uncertain('the box was not checked'))
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+  })
+
+  it('says loudly when a box this system fills arrives occupied - the misplaced-box case', () => {
+    // This morning's: an employee box sitting over the PHOTO placeholder
+    // printed on the form, reading 33%.
+    const rows = [
+      templateRow(SIGNER_ROLES.EMPLOYEE),
+      templateRow(SIGNER_ROLES.AUTHORISER, { y: 0.85, arrivesFilled: true }),
+    ]
+    const [employee, hr] = rows as [DocumentTypePlacement, DocumentTypePlacement]
+    const decision = decide(pf(rows, [imageOn(0, employee, 33), imageOn(1, hr, 54)]))
+
+    expect(decision.boxes[0]).toMatchObject({
+      action: 'skip',
+      checkTemplate: true,
+      reason: REASONS.unexpectedlyFilled('an image covers 33% of the box'),
+    })
+    expect(decision.filled.map((box) => box.signerRole)).toEqual(['Authoriser'])
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+  })
+
+  it('keeps a placement already in a box MMC fills, as any other', () => {
+    const rows = [templateRow(SIGNER_ROLES.AUTHORISER, { arrivesFilled: true })]
+    const decision = decide(
+      pf(rows, [imageOn(0, rows[0] as DocumentTypePlacement, 54)], A4, {
+        existing: [
+          {
+            signerRole: SIGNER_ROLES.AUTHORISER,
+            pageNumber: 1,
+            rect: { x: 0.6, y: 0.8, width: 0.25, height: 0.08 },
+            method: 'Manual',
+          },
+        ],
+      }),
+    )
+
+    expect(decision.kept).toHaveLength(1)
+    expect(decision.filled).toEqual([])
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+  })
+
+  it('decides an ESIC form, every box off, exactly as before when it is empty', () => {
+    const rows = [templateRow(SIGNER_ROLES.EMPLOYEE), templateRow(SIGNER_ROLES.AUTHORISER)]
+    const decision = decide(
+      input({ documentCode: 'ESIC_FORM', templateRows: rows, check: checked(rows) }),
+    )
+
+    expect(decision.toStamp).toHaveLength(2)
+    expect(decision.filled).toEqual([])
+    expect(decision.outcome).toBe(STAMP_OUTCOMES.STAMPED)
+    expect(decision.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
   })
 })

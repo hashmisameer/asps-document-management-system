@@ -28,6 +28,13 @@ import type { StampCheckResult } from './stampCheck.service.js'
  * uploader's; the photograph is the employee's. A wrong signature is a wrong
  * file in MMC's folder, which is not a decision this system should put to HR.
  *
+ * SOME BOXES ARE MMC'S. A template box can say MMC fills it on the form it
+ * generates - Form 11's two signatures, Form 2's HR stamp. Such a box is never
+ * painted: occupied, it is done ('filled'); empty, MMC did not do its part and
+ * HR is told. The occupancy reading alone could not have made that call -
+ * MMC's genuine signatures and an empty placeholder printed inside a box both
+ * read 33% - so the template says it, and nothing rests on a percentage.
+ *
  * WHAT IS NEVER DONE IS GUESSED AT. A box is left alone when something is
  * already in it, when the image it needs is not on file, when the file matches
  * no template or more than one, and when the identity check said the file may
@@ -131,6 +138,8 @@ export interface Decision {
   toStamp: BoxPlan[]
   /** Template boxes whose role is already placed on that page: done, not stamped. */
   kept: BoxPlan[]
+  /** Template boxes MMC fills that arrived occupied: done, nothing painted. */
+  filled: BoxPlan[]
   /** Where the document's signature status ends up, whatever the mode. */
   nextStatus: SignatureStatus
   /** One sentence, written for HR. */
@@ -151,7 +160,12 @@ export const REASONS = {
   ambiguousVariant: 'the file matches more than one of the template’s forms',
   notPdf: 'the file is not a PDF; templates are for the generated forms',
   unreadable: 'the file could not be opened',
-  occupied: (found: string) => `the box already has something in it (${found})`,
+  arrivedFilled: (found: string) =>
+    `the box already has something in it, as the template expects (${found})`,
+  expectedFilled: 'the template expects this box to arrive filled, and it is empty',
+  unexpectedlyFilled: (found: string) =>
+    `the box should be empty and already has something in it (${found}) - ` +
+    'check the template box is in the right place',
   uncertain: (found: string) => `it is not clear whether the box is empty (${found})`,
   noEmployeeSignature: 'the employee has no signature on file',
   alreadyPlaced: (method: PlacementMethod) =>
@@ -295,11 +309,27 @@ function planBox(
   )
   if (under) return skip(REASONS.overlapsPlaced(under.signerRole, under.method))
 
-  // Nothing is painted over something already there, and nothing is painted
-  // where it is not clear. A person can see the box; this cannot.
+  // Nothing is painted where it is not clear. A person can see the box; this
+  // cannot - and that holds for a box MMC fills as much as for one it does not.
   if (!occupancy) return skip(REASONS.uncertain('the box was not checked'))
-  if (occupancy.verdict === 'occupied') return skip(REASONS.occupied(occupancy.reason))
   if (occupancy.verdict === 'uncertain') return skip(REASONS.uncertain(occupancy.reason))
+
+  // A box MMC fills is never painted. Occupied is what it should be, and the
+  // box is done; empty means MMC did not do its part, and HR is told.
+  if (template.arrivesFilled) {
+    return occupancy.verdict === 'occupied'
+      ? { ...base, action: 'filled', reason: REASONS.arrivedFilled(occupancy.reason) }
+      : skip(REASONS.expectedFilled)
+  }
+
+  // A box this system fills, already occupied. Nothing is painted over it -
+  // and it is said loudly, because the likeliest cause is the template, not
+  // the document: a box drawn over something printed on the form.
+  if (occupancy.verdict === 'occupied') {
+    const evidence =
+      occupancy.pageKind === 'scanned' ? `${occupancy.reason} on a scanned page` : occupancy.reason
+    return { ...skip(REASONS.unexpectedlyFilled(evidence)), checkTemplate: true }
+  }
 
   switch (template.signerRole) {
     case SIGNER_ROLES.EMPLOYEE:
@@ -329,6 +359,7 @@ function nothing(outcome: StampOutcome, reason: string): Decision {
     boxes: [],
     toStamp: [],
     kept: [],
+    filled: [],
     nextStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
     summary: `Not stamped: ${reason}.`,
   }
@@ -337,12 +368,16 @@ function nothing(outcome: StampOutcome, reason: string): Decision {
 /**
  * Decides what to stamp on an uploaded document, and what to say about it.
  *
- * The document ends in ADDED only when every box of the template was stamped
- * - a photograph included. An HR box left empty because the uploader has no
- * signature, or a photograph box with no photograph behind it, is a document
- * with something still missing, and it goes to REVIEW_REQUIRED so that HR
- * sees it, with the reason. Stamping the rest first is what makes that a
- * finishing job rather than a signing job.
+ * The document ends in ADDED when nothing is left to do: every box of the
+ * template is stamped now, was already on the document, or is one MMC fills
+ * and arrived filled. ADDED means the signatures are on the document, not
+ * that this system produced a copy - Form 11 arrives with both of its own
+ * and is finished with nothing painted. Anything left alone - an HR box with
+ * no uploader's signature behind it, a box MMC should have filled and did
+ * not, a box that should be empty and is not - is a document with something
+ * still missing, and it goes to REVIEW_REQUIRED so that HR sees it, with the
+ * reason. Stamping the rest first is what makes that a finishing job rather
+ * than a signing job.
  */
 export function decide(input: DecideInput): Decision {
   // The list first: a type the server is not set to stamp is left for HR
@@ -384,10 +419,12 @@ export function decide(input: DecideInput): Decision {
   const boxes = claimed.boxes.map((box) => planBox(box, claimed.unclaimed, input))
   const toStamp = boxes.filter((box) => box.action === 'stamp')
   const kept = boxes.filter((box) => box.action === 'keep')
+  const filled = boxes.filter((box) => box.action === 'filled')
   const skipped = boxes.filter((box) => box.action === 'skip')
 
-  // A kept box is done. The outcome and the status are about what is on the
-  // document once this is through, not about who put it there.
+  // A kept box is done, and so is a filled one. The outcome and the status
+  // are about what is on the document once this is through, not about who
+  // put it there.
   const outcome: StampOutcome =
     skipped.length === 0
       ? STAMP_OUTCOMES.STAMPED
@@ -398,7 +435,8 @@ export function decide(input: DecideInput): Decision {
   // Added only when nothing is left to do. A stamped photograph alone is not
   // a signed document, exactly as on the manual path.
   const complete =
-    skipped.length === 0 && [...toStamp, ...kept].some((box) => isSignatureRole(box.signerRole))
+    skipped.length === 0 &&
+    [...toStamp, ...kept, ...filled].some((box) => isSignatureRole(box.signerRole))
 
   return {
     outcome,
@@ -406,9 +444,10 @@ export function decide(input: DecideInput): Decision {
     boxes,
     toStamp,
     kept,
+    filled,
     nextStatus: complete ? SIGNATURE_STATUS.ADDED : SIGNATURE_STATUS.REVIEW_REQUIRED,
     summary:
-      summarise(toStamp, kept, skipped) +
+      summarise(toStamp, kept, filled, skipped) +
       (check.templatesInShape > 1
         ? ` (${check.templatesInShape} saved templates are this shape; the newest was used.)`
         : ''),
@@ -424,6 +463,7 @@ export function decide(input: DecideInput): Decision {
 function summarise(
   toStamp: readonly BoxPlan[],
   kept: readonly BoxPlan[],
+  filled: readonly BoxPlan[],
   skipped: readonly BoxPlan[],
 ): string {
   const parts: string[] = []
@@ -441,19 +481,23 @@ function summarise(
     parts.push(`Kept: ${clauses.join('; ')}.`)
   }
 
-  if (skipped.length > 0) {
-    const byReason = new Map<string, BoxPlan[]>()
-    for (const box of skipped) {
-      const reason = box.reason ?? 'no reason recorded'
-      byReason.set(reason, [...(byReason.get(reason) ?? []), box])
-    }
-    const clauses = [...byReason.entries()].map(
-      ([reason, boxes]) => `the ${listRoles(boxes)} - ${reason}`,
-    )
-    parts.push(`Not stamped: ${clauses.join('; ')}.`)
-  }
+  // Said as filled, never as stamped: nothing of this system's went in it.
+  if (filled.length > 0) parts.push(`Already filled: ${byReason(filled)}.`)
+  if (skipped.length > 0) parts.push(`Not stamped: ${byReason(skipped)}.`)
 
   return parts.join(' ')
+}
+
+/** 'the hr signature - <reason>; the employee signature - <reason>', one clause per reason. */
+function byReason(boxes: readonly BoxPlan[]): string {
+  const groups = new Map<string, BoxPlan[]>()
+  for (const box of boxes) {
+    const reason = box.reason ?? 'no reason recorded'
+    groups.set(reason, [...(groups.get(reason) ?? []), box])
+  }
+  return [...groups.entries()]
+    .map(([reason, group]) => `the ${listRoles(group)} - ${reason}`)
+    .join('; ')
 }
 
 /**

@@ -72,10 +72,18 @@ export interface StampBoxDecision {
    * keep   a placement already on the document for this role and page - HR's
    *        by hand, or an earlier stamp - kept as it is and repainted with the
    *        rest. A kept box is done, not left alone.
+   * filled a box the template says MMC fills, and it arrived occupied:
+   *        satisfied with nothing painted, and not left alone either.
    */
-  action: 'stamp' | 'skip' | 'keep'
-  /** Why it was left alone or kept. Null when stamped. */
+  action: 'stamp' | 'skip' | 'keep' | 'filled'
+  /** Why it was left alone, kept or taken as filled. Null when stamped. */
   reason: string | null
+  /**
+   * A box the template expects EMPTY that arrived occupied. Not a fault in
+   * the document but most likely in the template - a box drawn over
+   * something printed on the form - and silent unless it is said.
+   */
+  checkTemplate?: boolean
   /** What the occupancy check found in the box, when it looked. */
   found: 'empty' | 'occupied' | 'uncertain' | null
 }
