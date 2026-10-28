@@ -49,9 +49,12 @@ import { checkDocument } from './stampCheck.service.js'
  * WHATEVER HAPPENS, THE DOCUMENT LEAVES 'PendingDetection'. That status used
  * to be where every uploaded document sat for ever, because nothing moved it;
  * the 'documents to sign' count looked for ReviewRequired and found nothing.
- * Now every run ends in ADDED (every box stamped) or REVIEW_REQUIRED (anything
+ * Now every run ends in ADDED (nothing left to do) or REVIEW_REQUIRED (anything
  * left alone, or the run itself failed), with a decision row saying why - so
- * the count is right and HR can read the reason.
+ * the count is right and HR can read the reason. ADDED needs nothing painted
+ * when nothing is missing: Form 11 arrives with MMC's signatures in both of
+ * its boxes, and a document stamped earlier may only have been waiting for a
+ * box MMC fills to be recognised as filled.
  *
  * REPORT MODE, the default, records the decision and stamps nothing. The
  * document still goes to REVIEW_REQUIRED, exactly as it would have with a box
@@ -88,6 +91,19 @@ function modeFromEnv(): AutoStampMode {
 
 function typesFromEnv(): ReadonlySet<string> {
   return env.AUTO_STAMP_TYPES
+}
+
+/**
+ * Where a decided document ends up, painted or not.
+ *
+ * In stamp mode, where the decision says: ADDED when nothing is left - and
+ * that needs nothing painted when the signatures are already on it, kept
+ * from an earlier stamp or MMC's own. In report mode nothing a run decides
+ * is acted on, so always REVIEW_REQUIRED. The dry run asks this too, so what
+ * it says a document would become is what a real run makes it.
+ */
+export function statusAfter(mode: AutoStampMode, decision: Decision): SignatureStatus {
+  return mode === AUTO_STAMP_MODES.STAMP ? decision.nextStatus : SIGNATURE_STATUS.REVIEW_REQUIRED
 }
 
 /** Where a document that has been decided about, but not fully stamped, goes. */
@@ -346,8 +362,14 @@ async function prepare(
 
   // A document that already carries something and gets nothing new is left
   // exactly as it is: no repaint, no row, no status change. The reasons say
-  // what is still missing, or that nothing is.
-  if (existing.length > 0 && decision.toStamp.length === 0) {
+  // what is still missing, or that nothing is. The exception is one whose
+  // decision finishes it - every box kept or filled - which goes on to be
+  // recorded and marked ADDED, still with nothing repainted.
+  if (
+    existing.length > 0 &&
+    decision.toStamp.length === 0 &&
+    statusAfter(mode, decision) !== SIGNATURE_STATUS.ADDED
+  ) {
     const still = decision.boxes.filter((box) => box.action === 'skip')
     return {
       documentId,
@@ -480,6 +502,11 @@ export async function runOne(
             page: row.pageNumber,
             method: row.method,
           })),
+          filled: decision.filled.map((box) => ({
+            signerRole: box.signerRole,
+            page: box.pageNumber,
+            reason: box.reason,
+          })),
           leftAlone: decision.boxes
             .filter((box) => box.action === 'skip')
             .map((box) => ({
@@ -499,10 +526,14 @@ export async function runOne(
       }
     }
 
-    // Nothing was painted - report mode, or nothing to paint - so the
-    // document goes to HR whatever the decision would have finished as.
-    await settle(documentId, startedFrom, SIGNATURE_STATUS.REVIEW_REQUIRED)
-    return { documentId, mode, decision, stamped: 0, status: SIGNATURE_STATUS.REVIEW_REQUIRED }
+    // Nothing was painted - report mode, or nothing to paint. In stamp mode a
+    // decision that leaves nothing to do finishes the document as it is, the
+    // file untouched; anything else goes to HR. A decision that wanted boxes
+    // painted and did not get them is never finished on its say-so.
+    const status =
+      decision.toStamp.length > 0 ? SIGNATURE_STATUS.REVIEW_REQUIRED : statusAfter(mode, decision)
+    await settle(documentId, startedFrom, status)
+    return { documentId, mode, decision, stamped: 0, status }
   } catch (error) {
     // The upload is safe and the file is stored. What is lost is this
     // decision, and that is recorded as such rather than left as a spinner.
@@ -790,7 +821,26 @@ async function recordDecision(
     action: box.action,
     reason: box.reason,
     found: box.found,
+    ...(box.checkTemplate ? { checkTemplate: true } : {}),
   }))
+
+  // A box that should be empty and is not is most likely the template's
+  // fault, and nothing else about it is loud. Said in the log too, so it is
+  // seen by whoever reads the server rather than only by whoever opens the row.
+  const suspect = decision.boxes.filter((box) => box.checkTemplate)
+  if (suspect.length > 0) {
+    logger.warn(
+      {
+        documentId,
+        boxes: suspect.map((box) => ({
+          signerRole: box.signerRole,
+          page: box.pageNumber,
+          reason: box.reason,
+        })),
+      },
+      'Stamping on upload: a template box that should be empty is occupied - check the template',
+    )
+  }
 
   await stampDecisionRepository.insert({
     documentId,
@@ -820,6 +870,8 @@ async function recordDecision(
       variant: decision.variant ? exactVariantKey(decision.variant) : null,
       toStamp: decision.toStamp.length,
       kept: decision.kept.length,
+      filled: decision.filled.length,
+      checkTemplate: suspect.length,
       leftAlone: decision.boxes.filter((box) => box.action === 'skip').length,
       summary: decision.summary,
     },

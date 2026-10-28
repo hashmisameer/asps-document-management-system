@@ -52,13 +52,7 @@
  *                        the first active administrator
  *   --limit <n>          at most n decisions or documents (default 500)
  */
-import {
-  ROLES,
-  SIGNER_ROLE_LABEL,
-  STAMP_OUTCOME_LABEL,
-  type AuthUser,
-  type StampBoxDecision,
-} from '@asps-dms/shared'
+import { AUTO_STAMP_MODES, ROLES, STAMP_OUTCOME_LABEL, type AuthUser } from '@asps-dms/shared'
 import { env } from '../config/env.js'
 import { closePool } from '../database/pool.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
@@ -66,11 +60,12 @@ import * as stampDecisionRepository from '../repositories/stampDecision.reposito
 import * as userRepository from '../repositories/user.repository.js'
 import {
   formatDecision,
+  formatRedecide,
   formatSummary,
   parseSince,
   summarise,
 } from '../services/autoStampReport.service.js'
-import { redecideType, runBacklog, type RedecideOutcome } from '../services/autoStampRun.service.js'
+import { redecideType, runBacklog, statusAfter } from '../services/autoStampRun.service.js'
 import { describeError } from '../utils/errors.js'
 
 function readFlags(argv: string[]): Map<string, string> {
@@ -216,38 +211,6 @@ async function backlog(flags: Map<string, string>): Promise<void> {
   }
 }
 
-/** 'employee signature p1, photograph p1' */
-function boxList(boxes: readonly StampBoxDecision[]): string {
-  return boxes
-    .map((box) => `${SIGNER_ROLE_LABEL[box.signerRole].toLowerCase()} p${box.pageNumber}`)
-    .join(', ')
-}
-
-/** One line per document: what would be, or was, added, kept and left. */
-function describeRedecide(outcome: RedecideOutcome): string {
-  const head = `#${outcome.documentId}  ${outcome.documentName}`
-  if (outcome.kind === 'left') return `${head}  left alone: ${outcome.detail}`
-
-  const decision = outcome.kind === 'preview' ? outcome.decision : outcome.result.decision
-  const add = decision.boxes.filter((box) => box.action === 'stamp')
-  const keep = decision.boxes.filter((box) => box.action === 'keep')
-  const leave = decision.boxes.filter((box) => box.action === 'skip')
-  const parts = [
-    add.length > 0 ? `${outcome.kind === 'preview' ? 'would add' : 'added'}: ${boxList(add)}` : '',
-    keep.length > 0
-      ? `keep: ${keep.map((box) => `${boxList([box])} (${box.reason})`).join(', ')}`
-      : '',
-    leave.length > 0
-      ? `leave: ${leave.map((box) => `${boxList([box])} - ${box.reason}`).join('; ')}`
-      : '',
-  ].filter((part) => part.length > 0)
-  const status =
-    outcome.kind === 'decided'
-      ? `  -> ${outcome.result.status}` + (outcome.result.stamped === 0 ? ' (nothing painted)' : '')
-      : ''
-  return `${head}  ${parts.join('; ') || STAMP_OUTCOME_LABEL[decision.outcome]}${status}`
-}
-
 async function redecide(flags: Map<string, string>): Promise<void> {
   const dryRun = flags.get('dry-run') === 'true'
   const limit = readLimit(flags)
@@ -279,6 +242,7 @@ async function redecide(flags: Map<string, string>): Promise<void> {
   }
 
   const fallback = await resolveFallback(flags.get('as'))
+  const mode = env.AUTO_STAMP === 'stamp' ? AUTO_STAMP_MODES.STAMP : AUTO_STAMP_MODES.REPORT
   const counts = new Map<string, number>()
   const count = (label: string) => counts.set(label, (counts.get(label) ?? 0) + 1)
 
@@ -291,15 +255,14 @@ async function redecide(flags: Map<string, string>): Promise<void> {
       return user && user.isActive ? userRepository.toAuthUser(user) : null
     },
     onEach: (outcome) => {
-      console.log(describeRedecide(outcome))
+      // Where a previewed document would land is the runner's own rule, so
+      // the dry run's 'would become Added' is what the real run does.
+      const wouldBecome =
+        outcome.kind === 'preview' ? statusAfter(mode, outcome.decision) : undefined
+      console.log(formatRedecide(outcome, wouldBecome))
       if (outcome.kind === 'left') count(`left alone: ${outcome.reason}`)
-      else if (outcome.kind === 'preview') {
-        count(
-          outcome.decision.toStamp.length > 0
-            ? 'would be added to'
-            : STAMP_OUTCOME_LABEL[outcome.decision.outcome],
-        )
-      } else count(STAMP_OUTCOME_LABEL[outcome.result.decision.outcome])
+      else if (outcome.kind === 'preview') count(`would become ${wouldBecome}`)
+      else count(`became ${outcome.result.status}`)
     },
   })
 

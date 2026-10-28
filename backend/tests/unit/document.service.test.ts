@@ -676,6 +676,24 @@ describe('openForDelivery', () => {
     )
   })
 
+  it('serves the original upload for a document Added with no copy of ours - Form 11', async () => {
+    // MMC put both signatures on it; nothing was painted, so there is no
+    // processed file, and the upload IS the signed document.
+    db.findStoredFile.mockResolvedValue(location)
+    db.openStoredFile.mockReturnValue('stream')
+
+    const delivery = await documentService.openForDelivery(5, 'download', hr, context)
+
+    expect(db.openStoredFile).toHaveBeenCalledWith('documents/42/uuid.pdf')
+    expect(delivery.mimeType).toBe('application/pdf')
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AUDIT_ACTIONS.DOCUMENT_DOWNLOADED,
+        metadataJson: expect.stringContaining('"servedProcessedFile":false'),
+      }),
+    )
+  })
+
   it('says the file is missing from the store rather than reporting "not found"', async () => {
     db.findStoredFile.mockResolvedValue(location)
     db.storedFileExists.mockResolvedValue(false)

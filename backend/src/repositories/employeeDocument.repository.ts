@@ -1019,9 +1019,14 @@ export async function listAllDeadlineCandidates(limit: number): Promise<Deadline
 /**
  * Records the signed copy, and the signature state that goes with it.
  *
- * Both move together on purpose: a processed file with a signature status of
- * ReviewRequired, or an 'Added' status with no processed file, are each a
- * document that reads as one thing and is another.
+ * Both move together whenever this system stamps: a processed file with a
+ * signature status of ReviewRequired is a document that reads as one thing
+ * and is another.
+ *
+ * 'Added' means the signatures are on the document, NOT that this system
+ * produced a copy of it. A form MMC generated with its own signatures in
+ * every box - Form 11 - is Added with no processed file at all, and the file
+ * served for it is the original upload, which is the signed document.
  */
 export async function setProcessedFile(
   documentId: number,

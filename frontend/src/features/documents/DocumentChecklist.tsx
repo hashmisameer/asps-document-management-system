@@ -427,7 +427,18 @@ function ChecklistRow({
               document, not a problem with it: a box left alone because it
               already had a signature in it is normal, so this is grey and
               three words, and the why stays in the decision row. */}
-          {stampLine ? <p className="mt-1 text-xs text-slate-500">{stampLine}</p> : null}
+          {stampLine === 'Check template' ? (
+            // Amber and said once: a box in this type's template is sitting
+            // over something printed on the form. Not the document's fault.
+            <p
+              className="mt-1 text-xs font-medium text-status-pending"
+              title="A box this document's template expects to be empty already has something in it - most likely the box sits over something printed on the form. Move it in Templates."
+            >
+              {stampLine}
+            </p>
+          ) : stampLine ? (
+            <p className="mt-1 text-xs text-slate-500">{stampLine}</p>
+          ) : null}
 
           {/* A WARNING, not a refusal. The document is on file either way.
               Amber rather than red, and with one button: every identity card

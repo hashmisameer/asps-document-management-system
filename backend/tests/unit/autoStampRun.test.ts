@@ -101,8 +101,15 @@ vi.mock('../../src/services/signature.service.js', () => ({
   readPhotoForStamp: mocks.readPhotoForStamp,
 }))
 
-const { run, runOne, runBacklog, redecideForEmployee, redecideDocument, redecideType } =
-  await import('../../src/services/autoStampRun.service.js')
+const {
+  run,
+  runOne,
+  runBacklog,
+  redecideForEmployee,
+  redecideDocument,
+  redecideType,
+  statusAfter,
+} = await import('../../src/services/autoStampRun.service.js')
 
 const actor: AuthUser = {
   userId: 7,
@@ -743,7 +750,31 @@ describe('a document that already carries placements', () => {
     expect(mocks.setSignatureStatus).not.toHaveBeenCalled()
   })
 
-  it('leaves alone a document that has every box the template has', async () => {
+  it('finishes a document that has every box the template has, without repainting it', async () => {
+    // Nothing is missing, so it is not left waiting for HR: the decision is
+    // recorded and the document moved to Added, the signed copy untouched.
+    mocks.listPlacements.mockResolvedValue([
+      placed('Photo'),
+      placed('Employee'),
+      placed('Authoriser'),
+    ])
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({ stamped: 0, status: SIGNATURE_STATUS.ADDED })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.insertDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: STAMP_OUTCOMES.STAMPED, stampedCount: 0 }),
+    )
+    expect(mocks.setSignatureStatus).toHaveBeenCalledWith(
+      5,
+      SIGNATURE_STATUS.REVIEW_REQUIRED,
+      SIGNATURE_STATUS.ADDED,
+    )
+  })
+
+  it('in report mode still leaves that document exactly as it is', async () => {
+    mocks.autoStamp = 'report'
     mocks.listPlacements.mockResolvedValue([
       placed('Photo'),
       placed('Employee'),
@@ -756,7 +787,8 @@ describe('a document that already carries placements', () => {
       left: 'nothingToAdd',
       detail: 'every box the template has is already on it',
     })
-    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.insertDecision).not.toHaveBeenCalled()
+    expect(mocks.setSignatureStatus).not.toHaveBeenCalled()
   })
 
   it('acts as the signer of a kept HR box, so the box keeps that person’s signature', async () => {
@@ -941,7 +973,7 @@ describe('a template with two boxes of one role', () => {
     })
   })
 
-  it('leaves the document alone once both HR boxes are on it', async () => {
+  it('finishes the document once both HR boxes are on it, without repainting it', async () => {
     mocks.listPlacements.mockResolvedValue([
       placed('Photo'),
       placed('Employee'),
@@ -951,10 +983,7 @@ describe('a template with two boxes of one role', () => {
 
     const outcome = await runOne(5, actor, context)
 
-    expect(outcome).toMatchObject({
-      left: 'nothingToAdd',
-      detail: 'every box the template has is already on it',
-    })
+    expect(outcome).toMatchObject({ stamped: 0, status: SIGNATURE_STATUS.ADDED })
     expect(mocks.applyPlacements).not.toHaveBeenCalled()
   })
 })
@@ -1174,13 +1203,14 @@ describe('deciding again for a type: the command', () => {
   })
 
   it('reports a document left alone, and carries on', async () => {
-    // The first has everything already, its HR box signed by the fallback
-    // itself; the second wants two boxes.
+    // The first cannot be touched: its HR box was signed by an account that
+    // is gone, and repainting without that image would lose the box. The
+    // second wants two boxes.
     mocks.listPlacements
       .mockResolvedValueOnce([
         placed('Photo'),
         placed('Employee'),
-        placed('Authoriser', { signerUserId: 1 }),
+        placed('Authoriser', { signerUserId: 3, signerName: 'Gone HR' }),
       ])
       .mockResolvedValueOnce([placed('Photo')])
 
@@ -1192,8 +1222,191 @@ describe('deciding again for a type: the command', () => {
       sleep: async () => {},
     })
 
-    expect(outcomes[0]).toMatchObject({ kind: 'left', reason: 'nothingToAdd' })
+    expect(outcomes[0]).toMatchObject({ kind: 'left', reason: 'signerUnavailable' })
     expect(outcomes[1]).toMatchObject({ kind: 'decided' })
     expect(mocks.applyPlacements).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * Boxes MMC fills, through the runner.
+ *
+ * A box MMC fills is never painted. A document whose decision leaves nothing
+ * to do is finished - recorded, and moved to Added - with nothing repainted,
+ * which is how the PF forms already carrying the employee's signatures, and
+ * Form 11 with MMC's own in both boxes, reach Added at all.
+ */
+describe('boxes MMC fills', () => {
+  /** The PF form's page: the employee's box (ours) and the HR box (MMC's). */
+  const pfRows = [
+    { ...templateRow('Employee', 0.4), documentTypePlacementId: 21 },
+    { ...templateRow('Authoriser', 0.7), documentTypePlacementId: 22, arrivesFilled: true },
+  ]
+
+  function pfChecked(verdicts: ('empty' | 'occupied')[]) {
+    return {
+      ...checkedEmpty(),
+      documentCode: 'PF_FORM',
+      documentName: 'PF Form',
+      boxes: pfRows.map((row, index) => {
+        const occupied = verdicts[index] === 'occupied'
+        return {
+          label: String(index),
+          signerRole: row.signerRole,
+          pageNumber: 1,
+          rect: { x: row.x, y: row.y, width: row.width, height: row.height },
+          verdict: occupied ? 'occupied' : 'empty',
+          decidedBy: occupied ? 'image' : 'none',
+          pageKind: 'digital',
+          overlap: { images: occupied ? 1 : 0, coverage: occupied ? 0.54 : 0 },
+          reason: occupied ? 'an image covers 54% of the box' : 'no image on the box',
+        }
+      }),
+    }
+  }
+
+  beforeEach(() => {
+    mocks.autoStamp = 'stamp'
+    mocks.autoStampTypes = new Set(['PF_FORM'])
+    mocks.findDocument.mockResolvedValue(
+      document({ documentCode: 'PF_FORM', documentName: 'PF Form' }),
+    )
+    mocks.listForType.mockResolvedValue(pfRows)
+    mocks.checkDocument.mockResolvedValue(pfChecked(['empty', 'occupied']))
+    mocks.readSignatureImages.mockResolvedValue({ Employee: {} })
+  })
+
+  it('paints the employee box and never the HR box MMC filled, and finishes the document', async () => {
+    const result = await run(5, actor, context)
+
+    expect(result?.status).toBe(SIGNATURE_STATUS.ADDED)
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as {
+      boxes: { signerRole: string }[]
+      nextStatus: string
+      auditMetadata: Record<string, unknown>
+    }
+    expect(input.boxes.map((box) => box.signerRole)).toEqual(['Employee'])
+    expect(input.nextStatus).toBe(SIGNATURE_STATUS.ADDED)
+    expect(input.auditMetadata).toMatchObject({
+      filled: [{ signerRole: 'Authoriser', page: 1 }],
+      leftAlone: [],
+    })
+  })
+
+  it('finishes a document stamped earlier without repainting it - the PF forms waiting today', async () => {
+    // Form 2 after the backlog: the employee's signature stamped, MMC's HR
+    // stamp beside it, and the document left in ReviewRequired.
+    mocks.findDocument.mockResolvedValue(
+      document({
+        documentCode: 'PF_FORM',
+        documentName: 'PF Form',
+        signatureStatus: SIGNATURE_STATUS.REVIEW_REQUIRED,
+        hasProcessedFile: true,
+      }),
+    )
+    mocks.listPlacements.mockResolvedValue([
+      placed('Employee', { x: 0.4, method: 'Automatic', detectionMethod: 'Template' }),
+    ])
+
+    const outcome = await runOne(5, actor, context, { trigger: 'redecide command' })
+
+    expect(outcome).toMatchObject({ stamped: 0, status: SIGNATURE_STATUS.ADDED })
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.insertDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: STAMP_OUTCOMES.STAMPED, stampedCount: 0, skippedCount: 0 }),
+    )
+    expect(mocks.setSignatureStatus).toHaveBeenCalledWith(
+      5,
+      SIGNATURE_STATUS.REVIEW_REQUIRED,
+      SIGNATURE_STATUS.ADDED,
+    )
+  })
+
+  it('finishes Form 11 with nothing painted at all - MMC signed both boxes', async () => {
+    const form11 = pfRows.map((row) => ({ ...row, arrivesFilled: true }))
+    mocks.listForType.mockResolvedValue(form11)
+    mocks.checkDocument.mockResolvedValue(pfChecked(['occupied', 'occupied']))
+
+    const result = await run(5, actor, context)
+
+    expect(result).toMatchObject({ stamped: 0, status: SIGNATURE_STATUS.ADDED })
+    expect(result?.decision.filled).toHaveLength(2)
+    expect(mocks.applyPlacements).not.toHaveBeenCalled()
+    expect(mocks.setSignatureStatus).toHaveBeenCalledWith(
+      5,
+      SIGNATURE_STATUS.PENDING_DETECTION,
+      SIGNATURE_STATUS.ADDED,
+    )
+  })
+
+  it('in report mode finishes nothing, and leaves a document stamped earlier exactly as it is', async () => {
+    mocks.autoStamp = 'report'
+    mocks.listPlacements.mockResolvedValue([placed('Employee', { x: 0.4 })])
+
+    const outcome = await runOne(5, actor, context)
+
+    expect(outcome).toMatchObject({ left: 'nothingToAdd' })
+    expect(mocks.insertDecision).not.toHaveBeenCalled()
+    expect(mocks.setSignatureStatus).not.toHaveBeenCalled()
+  })
+
+  it('in report mode records Form 11 and sends it to HR, as every report-mode decision', async () => {
+    mocks.autoStamp = 'report'
+    mocks.listForType.mockResolvedValue(pfRows.map((row) => ({ ...row, arrivesFilled: true })))
+    mocks.checkDocument.mockResolvedValue(pfChecked(['occupied', 'occupied']))
+
+    const result = await run(5, actor, context)
+
+    expect(result).toMatchObject({ stamped: 0, status: SIGNATURE_STATUS.REVIEW_REQUIRED })
+    expect(mocks.insertDecision).toHaveBeenCalled()
+  })
+
+  it('keeps an empty box MMC should have filled for HR, and paints nothing in it', async () => {
+    mocks.checkDocument.mockResolvedValue(pfChecked(['empty', 'empty']))
+
+    const result = await run(5, actor, context)
+
+    expect(result?.status).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+    const input = mocks.applyPlacements.mock.calls[0]?.[0] as { boxes: { signerRole: string }[] }
+    expect(input.boxes.map((box) => box.signerRole)).toEqual(['Employee'])
+  })
+
+  it('records a box that should be empty and is not as one to check the template for', async () => {
+    mocks.checkDocument.mockResolvedValue(pfChecked(['occupied', 'occupied']))
+
+    const result = await run(5, actor, context)
+
+    expect(result?.status).toBe(SIGNATURE_STATUS.REVIEW_REQUIRED)
+    const row = mocks.insertDecision.mock.calls[0]?.[0] as {
+      boxes: { signerRole: string; action: string; checkTemplate?: boolean }[]
+    }
+    expect(row.boxes).toEqual([
+      expect.objectContaining({ signerRole: 'Employee', action: 'skip', checkTemplate: true }),
+      expect.objectContaining({ signerRole: 'Authoriser', action: 'filled' }),
+    ])
+    // Only the suspect box carries the marker.
+    expect(row.boxes[1]).not.toHaveProperty('checkTemplate')
+    const entry = mocks.insertAudit.mock.calls
+      .map((call) => call[0] as { action: string; metadataJson: string })
+      .find((audit) => audit.action === 'AUTO_STAMP_DECIDED')
+    expect(entry?.metadataJson).toContain('"checkTemplate":1')
+    expect(entry?.metadataJson).toContain('"filled":1')
+  })
+})
+
+describe('statusAfter', () => {
+  const decision = (nextStatus: string) => ({ nextStatus }) as never
+
+  it('is where the decision says, in stamp mode', () => {
+    expect(statusAfter('Stamp', decision(SIGNATURE_STATUS.ADDED))).toBe(SIGNATURE_STATUS.ADDED)
+    expect(statusAfter('Stamp', decision(SIGNATURE_STATUS.REVIEW_REQUIRED))).toBe(
+      SIGNATURE_STATUS.REVIEW_REQUIRED,
+    )
+  })
+
+  it('is always ReviewRequired in report mode, where nothing decided is acted on', () => {
+    expect(statusAfter('Report', decision(SIGNATURE_STATUS.ADDED))).toBe(
+      SIGNATURE_STATUS.REVIEW_REQUIRED,
+    )
   })
 })

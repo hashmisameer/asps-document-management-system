@@ -16,7 +16,7 @@ import * as documentTypePlacementRepository from '../../src/repositories/documen
 import * as documentTypeRepository from '../../src/repositories/documentType.repository.js'
 import * as employeeDocumentRepository from '../../src/repositories/employeeDocument.repository.js'
 import { redecideType, run, runOne, runBacklog } from '../../src/services/autoStampRun.service.js'
-import { resolveWithinRoot } from '../../src/services/storage.service.js'
+import { readStoredFile, resolveWithinRoot } from '../../src/services/storage.service.js'
 import { app, closeDatabase, createUser, ensureSchema, resetData, signIn } from './helpers.js'
 
 /**
@@ -947,13 +947,15 @@ describe('a template with two boxes of one role, end to end', () => {
     })
   })
 
-  it('reports nothing to add once all four are on it', async () => {
+  it('finishes it once all four are on it, repainting nothing', async () => {
     const { documentId } = await stampedEsic()
     const request = await createRequest()
     await request.query(
       `UPDATE dbo.EmployeeDocuments SET SignatureStatus = 'ReviewRequired'
        WHERE DocumentId = ${documentId}`,
     )
+    const before = await placementsOf(documentId)
+    const fileBefore = await processedFileOf(documentId)
 
     const outcome = await runOne(
       documentId,
@@ -967,10 +969,24 @@ describe('a template with two boxes of one role, end to end', () => {
       { ipAddress: null, userAgent: 'test' },
     )
 
-    expect(outcome).toMatchObject({
-      left: 'nothingToAdd',
-      detail: 'every box the template has is already on it',
-    })
-    expect(await placementsOf(documentId)).toHaveLength(4)
+    // Every box is on it, so it is not left waiting for HR: recorded, and
+    // Added - with the placements and the signed copy exactly as they were.
+    expect(outcome).toMatchObject({ stamped: 0, status: 'Added' })
+    expect(await placementsOf(documentId)).toEqual(before)
+    expect(await processedFileOf(documentId)).toEqual(fileBefore)
+    const status = await (await createRequest()).query<{ SignatureStatus: string }>(
+      `SELECT SignatureStatus FROM dbo.EmployeeDocuments WHERE DocumentId = ${documentId}`,
+    )
+    expect(status.recordset[0]?.SignatureStatus).toBe('Added')
   })
 })
+
+/** The signed copy's path and bytes on disk, to show a run did not repaint it. */
+async function processedFileOf(documentId: number): Promise<{ path: string; bytes: string }> {
+  const result = await (await createRequest()).query<{ ProcessedFilePath: string }>(
+    `SELECT ProcessedFilePath FROM dbo.EmployeeDocuments WHERE DocumentId = ${documentId}`,
+  )
+  const path = result.recordset[0]?.ProcessedFilePath ?? ''
+  const bytes = (await readStoredFile(path)).toString('base64')
+  return { path, bytes }
+}

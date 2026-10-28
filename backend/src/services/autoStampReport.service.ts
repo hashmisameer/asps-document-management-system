@@ -1,5 +1,13 @@
-import { STAMP_OUTCOME_LABEL, STAMP_OUTCOMES, type StampOutcome } from '@asps-dms/shared'
+import {
+  SIGNER_ROLE_LABEL,
+  STAMP_OUTCOME_LABEL,
+  STAMP_OUTCOMES,
+  type SignatureStatus,
+  type StampBoxDecision,
+  type StampOutcome,
+} from '@asps-dms/shared'
 import type { StampDecisionReportRow } from '../repositories/stampDecision.repository.js'
+import type { RedecideOutcome } from './autoStampRun.service.js'
 
 /**
  * The trial report: what stamping on upload decided, printed for reading.
@@ -74,8 +82,24 @@ export interface ReportSummary {
   /** Boxes that were, or in report mode would have been, stamped. */
   boxesStamped: number
   boxesLeftAlone: number
+  /** Boxes MMC fills that arrived filled: done, nothing painted. */
+  boxesFilled: number
   /** The reasons boxes were left alone, most common first. */
   reasons: { reason: string; count: number }[]
+  /** What was measured in the boxes taken as filled, most common first. */
+  filledBecause: { reason: string; count: number }[]
+  /**
+   * Boxes the template expects empty that were occupied - most likely a box
+   * drawn over something printed on the form. Each one is listed: there
+   * should be few, and every one is a box somebody has to go and move.
+   */
+  checkTemplate: { documentId: number; documentName: string; box: string; reason: string }[]
+  /**
+   * Documents finished with at least one box taken as filled, nothing of
+   * ours in it. The ones to spot-check: a box read wrongly as filled is a
+   * document finished with that box empty.
+   */
+  finishedWithFilled: number[]
   /** How many decisions were only ever recorded, versus acted on. */
   reportMode: number
   stampMode: number
@@ -87,6 +111,10 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
   const reasonCounts = new Map<string, number>()
   let boxesStamped = 0
   let boxesLeftAlone = 0
+  let boxesFilled = 0
+  const filledCounts = new Map<string, number>()
+  const checkTemplate: ReportSummary['checkTemplate'] = []
+  const finishedWithFilled: number[] = []
   let reportMode = 0
   let stampMode = 0
   let notInList = 0
@@ -105,6 +133,24 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
       if (box.action === 'skip' && box.reason) {
         reasonCounts.set(box.reason, (reasonCounts.get(box.reason) ?? 0) + 1)
       }
+      if (box.action === 'filled') {
+        boxesFilled += 1
+        if (box.reason) filledCounts.set(box.reason, (filledCounts.get(box.reason) ?? 0) + 1)
+      }
+      if (box.checkTemplate) {
+        checkTemplate.push({
+          documentId: row.documentId,
+          documentName: row.documentName,
+          box: boxName(box),
+          reason: box.reason ?? 'no reason recorded',
+        })
+      }
+    }
+    if (
+      row.outcome === STAMP_OUTCOMES.STAMPED &&
+      row.boxes.some((box) => box.action === 'filled')
+    ) {
+      finishedWithFilled.push(row.documentId)
     }
     // A document-level refusal has no boxes; its one reason is the summary.
     if (row.boxes.length === 0 && row.outcome !== STAMP_OUTCOMES.STAMPED) {
@@ -119,13 +165,29 @@ export function summarise(rows: readonly StampDecisionReportRow[]): ReportSummar
     byOutcome,
     boxesStamped,
     boxesLeftAlone,
-    reasons: [...reasonCounts.entries()]
-      .map(([reason, count]) => ({ reason, count }))
-      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
+    boxesFilled,
+    reasons: mostCommonFirst(reasonCounts),
+    filledBecause: mostCommonFirst(filledCounts),
+    checkTemplate,
+    finishedWithFilled,
     reportMode,
     stampMode,
   }
 }
+
+function mostCommonFirst(counts: ReadonlyMap<string, number>): { reason: string; count: number }[] {
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+}
+
+/** 'hr signature p2' */
+function boxName(box: Pick<StampBoxDecision, 'signerRole' | 'pageNumber'>): string {
+  return `${SIGNER_ROLE_LABEL[box.signerRole].toLowerCase()} p${box.pageNumber}`
+}
+
+/** How many document ids a list prints before it says how many more. */
+const IDS_SHOWN = 20
 
 export function formatSummary(summary: ReportSummary): string[] {
   const lines = [
@@ -133,7 +195,9 @@ export function formatSummary(summary: ReportSummary): string[] {
       (summary.notInList > 0
         ? `, ${summary.notInList} not in the auto-stamp list (left for HR on purpose)`
         : ''),
-    `boxes: ${summary.boxesStamped} stamped (or would be), ${summary.boxesLeftAlone} left alone`,
+    `boxes: ${summary.boxesStamped} stamped (or would be), ` +
+      (summary.boxesFilled > 0 ? `${summary.boxesFilled} already filled, ` : '') +
+      `${summary.boxesLeftAlone} left alone`,
     '',
     'by outcome:',
   ]
@@ -141,11 +205,79 @@ export function formatSummary(summary: ReportSummary): string[] {
     const count = summary.byOutcome[outcome]
     if (count) lines.push(`  ${String(count).padStart(5)}  ${STAMP_OUTCOME_LABEL[outcome]}`)
   }
+  // First after the outcomes, because each one is a box somebody has to move.
+  if (summary.checkTemplate.length > 0) {
+    lines.push(
+      '',
+      `CHECK THE TEMPLATE - ${summary.checkTemplate.length} box(es) that should be empty were occupied:`,
+    )
+    for (const entry of summary.checkTemplate) {
+      lines.push(`  #${entry.documentId}  ${entry.documentName}  ${entry.box} - ${entry.reason}`)
+    }
+  }
   if (summary.reasons.length > 0) {
     lines.push('', 'left alone because:')
     for (const { reason, count } of summary.reasons) {
       lines.push(`  ${String(count).padStart(5)}  ${reason}`)
     }
   }
+  if (summary.filledBecause.length > 0) {
+    lines.push('', 'taken as already filled because:')
+    for (const { reason, count } of summary.filledBecause) {
+      lines.push(`  ${String(count).padStart(5)}  ${reason}`)
+    }
+  }
+  if (summary.finishedWithFilled.length > 0) {
+    const ids = summary.finishedWithFilled
+    const shown = ids
+      .slice(0, IDS_SHOWN)
+      .map((id) => `#${id}`)
+      .join(' ')
+    const more = ids.length > IDS_SHOWN ? ` and ${ids.length - IDS_SHOWN} more` : ''
+    lines.push(
+      '',
+      `finished with a box taken as filled - spot-check these: ${ids.length}`,
+      `  ${shown}${more}`,
+    )
+  }
   return lines
+}
+
+/**
+ * One line per document for --redecide: what would be, or was, added, kept,
+ * taken as filled and left, and where the document ends up. `wouldBecome` is
+ * the status a real run would leave a previewed document in - the runner's
+ * own statusAfter, so the dry run says what the real run does.
+ */
+export function formatRedecide(outcome: RedecideOutcome, wouldBecome?: SignatureStatus): string {
+  const head = `#${outcome.documentId}  ${outcome.documentName}`
+  if (outcome.kind === 'left') return `${head}  left alone: ${outcome.detail}`
+
+  const preview = outcome.kind === 'preview'
+  const decision = preview ? outcome.decision : outcome.result.decision
+  const of = (action: StampBoxDecision['action']) =>
+    decision.boxes.filter((box) => box.action === action)
+  const add = of('stamp')
+  const keep = of('keep')
+  const filled = of('filled')
+  const leave = of('skip')
+  const parts = [
+    add.length > 0 ? `${preview ? 'would add' : 'added'}: ${add.map(boxName).join(', ')}` : '',
+    keep.length > 0
+      ? `keep: ${keep.map((box) => `${boxName(box)} (${box.reason})`).join(', ')}`
+      : '',
+    filled.length > 0
+      ? `already filled: ${filled.map((box) => `${boxName(box)} (${box.reason})`).join(', ')}`
+      : '',
+    leave.length > 0
+      ? `leave: ${leave.map((box) => `${boxName(box)} - ${box.reason}`).join('; ')}`
+      : '',
+  ].filter((part) => part.length > 0)
+
+  const painted = preview ? add.length > 0 : outcome.result.stamped > 0
+  const landing = preview ? wouldBecome : outcome.result.status
+  const status = landing
+    ? `  -> ${preview ? 'would become ' : ''}${landing}${painted ? '' : ' (nothing painted)'}`
+    : ''
+  return `${head}  ${parts.join('; ') || STAMP_OUTCOME_LABEL[decision.outcome]}${status}`
 }

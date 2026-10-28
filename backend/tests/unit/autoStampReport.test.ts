@@ -3,6 +3,7 @@ import { STAMP_OUTCOMES } from '@asps-dms/shared'
 import type { StampDecisionReportRow } from '../../src/repositories/stampDecision.repository.js'
 import {
   formatDecision,
+  formatRedecide,
   formatSummary,
   parseSince,
   summarise,
@@ -229,5 +230,172 @@ describe('summarise', () => {
       '6 decision(s): 3 recorded only, 1 stamped, 2 not in the auto-stamp list (left for HR on purpose)',
     )
     expect(lines).toContain('      2  Not in the auto-stamp list')
+  })
+})
+
+/**
+ * Boxes MMC fills, and boxes that should be empty and are not.
+ *
+ * The first are counted apart from both 'stamped' and 'left alone', with what
+ * was measured in them; the documents finished with one are listed for a
+ * spot-check. The second are each listed, first, because every one is a box
+ * somebody has to go and move.
+ */
+describe('filled boxes and boxes to check the template for', () => {
+  const form2 = row({
+    documentId: 610,
+    documentCode: 'PF_FORM',
+    documentName: 'PF Form',
+    mode: 'Stamp',
+    outcome: STAMP_OUTCOMES.STAMPED,
+    stampedCount: 2,
+    skippedCount: 0,
+    boxes: [
+      { signerRole: 'Employee', pageNumber: 1, action: 'stamp', reason: null, found: 'empty' },
+      { signerRole: 'Employee', pageNumber: 2, action: 'stamp', reason: null, found: 'empty' },
+      {
+        signerRole: 'Authoriser',
+        pageNumber: 2,
+        action: 'filled',
+        reason: 'the box already has something in it, as the template expects (an image covers 54% of the box)',
+        found: 'occupied',
+      },
+    ],
+  })
+  const misplaced = row({
+    documentId: 611,
+    documentCode: 'PF_FORM',
+    documentName: 'PF Form',
+    mode: 'Stamp',
+    outcome: STAMP_OUTCOMES.NOTHING,
+    stampedCount: 0,
+    skippedCount: 1,
+    boxes: [
+      {
+        signerRole: 'Employee',
+        pageNumber: 1,
+        action: 'skip',
+        reason:
+          'the box should be empty and already has something in it (an image covers 33% of the box) - check the template box is in the right place',
+        found: 'occupied',
+        checkTemplate: true,
+      },
+    ],
+  })
+
+  it('counts filled boxes apart, and lists the documents finished with one', () => {
+    const summary = summarise([form2, misplaced])
+
+    expect(summary.boxesStamped).toBe(2)
+    expect(summary.boxesFilled).toBe(1)
+    expect(summary.boxesLeftAlone).toBe(1)
+    expect(summary.filledBecause).toEqual([
+      {
+        reason:
+          'the box already has something in it, as the template expects (an image covers 54% of the box)',
+        count: 1,
+      },
+    ])
+    expect(summary.finishedWithFilled).toEqual([610])
+  })
+
+  it('lists every box to check the template for, before the reasons', () => {
+    const lines = formatSummary(summarise([form2, misplaced]))
+
+    expect(lines[1]).toBe('boxes: 2 stamped (or would be), 1 already filled, 1 left alone')
+    const check = lines.indexOf(
+      'CHECK THE TEMPLATE - 1 box(es) that should be empty were occupied:',
+    )
+    expect(check).toBeGreaterThan(0)
+    expect(lines[check + 1]).toBe(
+      '  #611  PF Form  employee signature p1 - the box should be empty and already has something in it (an image covers 33% of the box) - check the template box is in the right place',
+    )
+    expect(check).toBeLessThan(lines.indexOf('left alone because:'))
+    expect(lines).toContain('taken as already filled because:')
+    expect(lines).toContain('finished with a box taken as filled - spot-check these: 1')
+    expect(lines).toContain('  #610')
+  })
+
+  it('shows twenty document ids to spot-check and says how many more', () => {
+    const many = Array.from({ length: 23 }, (_, index) => ({ ...form2, documentId: 700 + index }))
+    const lines = formatSummary(summarise(many))
+    const ids = lines[lines.indexOf('finished with a box taken as filled - spot-check these: 23') + 1]
+    expect(ids?.match(/#\d+/g)).toHaveLength(20)
+    expect(ids).toMatch(/#719 and 3 more$/)
+  })
+
+  it('says nothing about either when there is none', () => {
+    const lines = formatSummary(summarise([row()]))
+    expect(lines.join('\n')).not.toContain('CHECK THE TEMPLATE')
+    expect(lines.join('\n')).not.toContain('spot-check')
+  })
+})
+
+describe('formatRedecide', () => {
+  const box = (
+    signerRole: 'Employee' | 'Authoriser',
+    pageNumber: number,
+    action: 'stamp' | 'keep' | 'filled' | 'skip',
+    reason: string | null,
+  ) => ({ signerRole, pageNumber, action, reason, found: null })
+
+  it('says a PF form stamped earlier would become Added, nothing painted', () => {
+    const line = formatRedecide(
+      {
+        documentId: 610,
+        documentName: 'PF Form',
+        kind: 'preview',
+        decision: {
+          outcome: STAMP_OUTCOMES.STAMPED,
+          nextStatus: 'Added',
+          boxes: [
+            box('Employee', 1, 'keep', 'already stamped earlier'),
+            box('Employee', 2, 'keep', 'already stamped earlier'),
+            box('Authoriser', 2, 'filled', 'as the template expects (an image covers 54% of the box)'),
+          ],
+        } as never,
+      },
+      'Added',
+    )
+
+    expect(line).toBe(
+      '#610  PF Form  keep: employee signature p1 (already stamped earlier), ' +
+        'employee signature p2 (already stamped earlier); ' +
+        'already filled: hr signature p2 (as the template expects (an image covers 54% of the box))' +
+        '  -> would become Added (nothing painted)',
+    )
+  })
+
+  it('says what a real run did, and where the document landed', () => {
+    const line = formatRedecide({
+      documentId: 7,
+      documentName: 'ESIC Form',
+      kind: 'decided',
+      result: {
+        documentId: 7,
+        mode: 'Stamp',
+        stamped: 1,
+        status: 'Added',
+        decision: {
+          outcome: STAMP_OUTCOMES.STAMPED,
+          boxes: [box('Employee', 1, 'stamp', null)],
+        } as never,
+      },
+    })
+    expect(line).toBe('#7  ESIC Form  added: employee signature p1  -> Added')
+  })
+
+  it('says a document left alone, and why', () => {
+    expect(
+      formatRedecide({
+        documentId: 8,
+        documentName: 'PF Form',
+        kind: 'left',
+        reason: 'signerUnavailable',
+        detail: 'the hr signature on it was placed by Gone HR, whose account is no longer active',
+      }),
+    ).toBe(
+      '#8  PF Form  left alone: the hr signature on it was placed by Gone HR, whose account is no longer active',
+    )
   })
 })
