@@ -340,16 +340,23 @@ function employeeListShape(
    * the two cards only for as long as they were the only mandatory documents -
    * eight of the ten are mandatory now, and this quietly became 'missing
    * anything at all'.
+   *
+   * Only a card that is EXPECTED of them. A PAN set aside for contract staff,
+   * who have none, is not missing - and this filter once counted it, so the
+   * tile said 1 and the list it opened said 202. EXPECTED_DOCUMENT is the
+   * dashboard's own fragment, read here rather than typed again, which is why
+   * the subquery's aliases are `d` and `dt`.
    */
   if (query.missingIdCard) {
     conditions.push(`EXISTS (
       SELECT 1
-      FROM   dbo.EmployeeDocuments AS idc
-      INNER JOIN dbo.DocumentTypes AS idt ON idt.DocumentTypeId = idc.DocumentTypeId
-      WHERE  idc.EmployeeId = e.EmployeeId
-        AND  idc.IsActive = 1
-        AND  idt.DocumentCode IN (${IDENTITY_CARD_CODES_SQL})
-        AND  idc.OriginalFilePath IS NULL
+      FROM   dbo.EmployeeDocuments AS d
+      INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
+      WHERE  d.EmployeeId = e.EmployeeId
+        AND  d.IsActive = 1
+        AND  ${EXPECTED_DOCUMENT}
+        AND  dt.DocumentCode IN (${IDENTITY_CARD_CODES_SQL})
+        AND  d.OriginalFilePath IS NULL
     )`)
   }
 

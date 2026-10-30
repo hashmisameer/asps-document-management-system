@@ -56,6 +56,13 @@ const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE, EFFECTIVE_LEFT } = await import(
 
 const squash = (sql: string): string => sql.replace(/\s+/g, ' ').trim()
 
+/** The text from `start` up to `end`, both found in order; empty when either is missing. */
+function between(text: string, start: string, end: string): string {
+  const from = text.indexOf(start)
+  const to = from < 0 ? -1 : text.indexOf(end, from)
+  return from < 0 || to < 0 ? '' : text.slice(from, to)
+}
+
 /** The last statement built, with its whitespace flattened. */
 function lastSql(): string {
   const statement = captured.statements[captured.statements.length - 1]
@@ -255,9 +262,20 @@ describe('the employee tiles and the employee list', () => {
     // picked them out only while they were the only mandatory documents -
     // eight of the ten are mandatory now.
     expect(summary).toContain("dt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
-    expect(squash(list)).toContain("idt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
-    expect(squash(list)).toContain('idc.OriginalFilePath IS NULL')
+    expect(squash(list)).toContain("dt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
+    expect(squash(list)).toContain('d.OriginalFilePath IS NULL')
     expect(list).toContain('EXISTS')
+
+    // Only a card EXPECTED of them, on both sides. The list once left this out,
+    // so a PAN set aside for contract staff counted as missing: the tile said
+    // 1 and the list it opened said 202. Read inside each side's own ID-card
+    // clause - the summary says NotRequiredAt in a dozen other places.
+    const tile = between(squash(summary), '(SELECT COUNT(DISTINCT d.EmployeeId)', 'AS MissingMandatory')
+    expect(tile).toContain("dt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
+    expect(tile).toContain('d.NotRequiredAt IS NULL')
+    const idCard = between(squash(list), "EXISTS ( SELECT 1 FROM dbo.EmployeeDocuments AS d INNER JOIN dbo.DocumentTypes AS dt", 'd.OriginalFilePath IS NULL')
+    expect(idCard).toContain("dt.DocumentCode IN ('AADHAAR_CARD', 'PAN_CARD')")
+    expect(idCard).toContain('d.NotRequiredAt IS NULL')
   })
 
   it('opens Pending employee signature on the employees who have never signed', async () => {
