@@ -8,7 +8,6 @@ import {
   DOCUMENT_STATUS_LABEL,
   MAX_DOCUMENT_SIZE_BYTES,
   PERMISSIONS,
-  SIGNATURE_STATUS,
   deriveDeadline,
   type EmployeeDocument,
 } from '@asps-dms/shared'
@@ -27,6 +26,7 @@ import {
 } from '../../components/ui/icons.js'
 import { useAuth } from '../auth/useAuth.js'
 import { employeeKeys } from '../employees/api.js'
+import { signButton } from './signButton.js'
 import { describeStampDecision } from './stampDecisionText.js'
 import { ApiError } from '../../lib/apiError.js'
 import { formatBytes, formatDate, formatDateTime } from '../../lib/format.js'
@@ -280,59 +280,20 @@ function ChecklistRow({
   // Skipping is a decision someone makes, not a failure: plenty of documents
   // need no signature, and 'Skipped' says a person decided that, where leaving
   // it awaiting review for ever says only that nobody got to it.
-  // Positioning a signature needs a file to position it on, and a signature
-  // status that is still open: a document already signed is re-signed by
-  // saving its placements again, not by a second pass over the same button.
-  const canSign =
-    can(PERMISSIONS.SIGNATURE_PLACE) &&
-    hasFile &&
-    item.signatureStatus !== SIGNATURE_STATUS.NOT_REQUIRED &&
-    item.signatureStatus !== SIGNATURE_STATUS.SKIPPED
-
   // 'No signature needed' is no longer offered here: the row's five actions are
   // Preview, Download, Replace, Sign and Remove, and skipping was a sixth that
   // existed only in this table. The endpoint is untouched, so it can be put back
   // wherever the office wants it.
   const busy = upload.isPending || remove.isPending
 
-  /**
-   * What the Sign button says and whether it does anything.
-   *
-   * This replaces the two lines that used to sit in the row - a signature word
-   * under the document name and a 'No signature needed' button among the
-   * actions. Both said the same thing twice and cost every row a line. The
-   * state is now readable from the one control somebody would use to change it:
-   *
-   *   needed, not yet done  enabled
-   *   not needed            shown, disabled, and the tooltip says why
-   *   already signed        a tick, and the tooltip says so
-   *
-   * Disabled here means aria-disabled, so the tooltip and the tab stop remain -
-   * see IconButton.
-   */
-  const signature = (() => {
-    const status = item.signatureStatus
-    if (status === SIGNATURE_STATUS.ADDED) {
-      return { show: true, done: true, disabled: true, label: 'Signature added' }
-    }
-    if (status === SIGNATURE_STATUS.NOT_REQUIRED) {
-      return {
-        show: true,
-        done: false,
-        disabled: true,
-        label: 'No signature is needed on this document',
-      }
-    }
-    if (status === SIGNATURE_STATUS.SKIPPED) {
-      return { show: true, done: false, disabled: true, label: 'Signature skipped' }
-    }
-    return {
-      show: canSign,
-      done: false,
-      disabled: !canSign,
-      label: canSign ? 'Sign' : 'You cannot sign this document',
-    }
-  })()
+  // What the Sign button says and whether it does anything: clickable in
+  // every signature state, disabled with no file, not shown to somebody who
+  // cannot sign. See signButton.
+  const signature = signButton({
+    signatureStatus: item.signatureStatus,
+    hasFile,
+    canPlace: can(PERMISSIONS.SIGNATURE_PLACE),
+  })
 
   // Whether stamping on upload stamped this document: three words, no
   // reasons, and nothing at all in report mode. See stampDecisionText.
@@ -558,7 +519,7 @@ function ChecklistRow({
             )}
 
             {/* Signing, said entirely by this one button. */}
-            {signature.show ? (
+            {signature ? (
               <IconButton
                 label={signature.label}
                 icon={signature.done ? <SignedIcon /> : <SignIcon />}

@@ -7,7 +7,9 @@ import {
   PHOTO_DOCUMENT_CODE,
   SIGNER_ROLES,
   SIGNER_ROLE_LABEL,
+  canAddBox,
   normalizeRotation,
+  overLimit,
   toRenderedRect,
   type BoxOccupancy,
   type PageRotation,
@@ -133,7 +135,7 @@ export function PlacementEditorPage() {
   const placements: DraftPlacement[] = useMemo(() => {
     if (drafts !== null) return drafts
     if (!existing.data) return []
-    return existing.data.map((placement) => ({
+    return existing.data.placements.map((placement) => ({
       key: `saved-${placement.signaturePlacementId}`,
       pageNumber: placement.pageNumber,
       pageRotation: normalizeRotation(placement.pageRotation),
@@ -223,6 +225,16 @@ export function PlacementEditorPage() {
 
   const onPage = placements.filter((placement) => placement.pageNumber === pageNumber)
 
+  // How many of each role this page may hold - the template's count, at least
+  // one, never below what is saved. A button the server would refuse is
+  // greyed out with the reason, so a stamped page cannot gain a second
+  // signature from one extra click.
+  const limits = existing.data?.limits ?? []
+  const addable = (signerRole: SignerRole) => canAddBox(placements, limits, pageNumber, signerRole)
+  const fullTitle = (signerRole: SignerRole) =>
+    `Page ${pageNumber} already has its ${SIGNER_ROLE_LABEL[signerRole].toLowerCase()}`
+  const tooMany = overLimit(placements, limits)
+
   if (!Number.isFinite(documentId)) {
     return <Alert title="Not found">That document does not exist.</Alert>
   }
@@ -249,10 +261,22 @@ export function PlacementEditorPage() {
           <div className="flex flex-wrap items-center gap-2">
             {editing ? (
               <>
-                <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}>
+                <Button
+                  variant="secondary"
+                  disabled={!addable(SIGNER_ROLES.EMPLOYEE)}
+                  title={addable(SIGNER_ROLES.EMPLOYEE) ? undefined : fullTitle(SIGNER_ROLES.EMPLOYEE)}
+                  onClick={() => addBox(SIGNER_ROLES.EMPLOYEE)}
+                >
                   Add employee box
                 </Button>
-                <Button variant="secondary" onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}>
+                <Button
+                  variant="secondary"
+                  disabled={!addable(SIGNER_ROLES.AUTHORISER)}
+                  title={
+                    addable(SIGNER_ROLES.AUTHORISER) ? undefined : fullTitle(SIGNER_ROLES.AUTHORISER)
+                  }
+                  onClick={() => addBox(SIGNER_ROLES.AUTHORISER)}
+                >
                   Add my box
                 </Button>
                 {/* The ESIC form only: it is the one that prints a box for the
@@ -261,8 +285,14 @@ export function PlacementEditorPage() {
                 {takesPhoto ? (
                   <Button
                     variant="secondary"
-                    disabled={!hasPhoto}
-                    title={hasPhoto ? undefined : 'This employee has no photograph on file'}
+                    disabled={!hasPhoto || !addable(SIGNER_ROLES.PHOTO)}
+                    title={
+                      !hasPhoto
+                        ? 'This employee has no photograph on file'
+                        : addable(SIGNER_ROLES.PHOTO)
+                          ? undefined
+                          : fullTitle(SIGNER_ROLES.PHOTO)
+                    }
                     onClick={() => addBox(SIGNER_ROLES.PHOTO)}
                   >
                     Add photo box
@@ -271,7 +301,12 @@ export function PlacementEditorPage() {
                 <Button
                   busy={save.isPending}
                   busyLabel="Saving..."
-                  disabled={save.isPending || occupied !== null}
+                  disabled={save.isPending || occupied !== null || tooMany.length > 0}
+                  title={
+                    tooMany.length > 0
+                      ? `Page ${tooMany[0]!.pageNumber} has more ${SIGNER_ROLE_LABEL[tooMany[0]!.signerRole].toLowerCase()} boxes than it can hold`
+                      : undefined
+                  }
                   onClick={() => save.mutate({ acknowledgeOccupied: false })}
                 >
                   Save and stamp

@@ -19,6 +19,7 @@ export * from './utils/coordinates.js'
 export * from './utils/fieldMatch.js'
 export * from './utils/xlsxWrite.js'
 export * from './utils/templateVariant.js'
+export * from './utils/placementLimits.js'
 export * from './utils/joiningDateRule.js'
 
 // Validation schemas

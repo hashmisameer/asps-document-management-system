@@ -109,7 +109,9 @@ export const downloadEmployeeSignature: RequestHandler = async (req, res) => {
 
 export const listPlacements: RequestHandler = async (req, res) => {
   const { documentId } = parseParams(req, documentParamsSchema)
-  res.json({ placements: await signatureService.listPlacements(documentId) })
+  // The limits travel with the placements: the editor greys out an 'Add box'
+  // the server would refuse, and HR cannot read the template to work it out.
+  res.json(await signatureService.listPlacementsWithLimits(documentId))
 }
 
 /**

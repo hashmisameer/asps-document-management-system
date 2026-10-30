@@ -2,6 +2,7 @@ import type {
   BoxOccupancy,
   CheckPlacementsInput,
   EmployeeDocument,
+  PlacementLimit,
   SavePlacementsInput,
   SignaturePlacement,
 } from '@asps-dms/shared'
@@ -109,11 +110,18 @@ export function signatureImageUrl(employeeId: number, version: string | null): s
   return version ? `${base}?v=${encodeURIComponent(version)}` : base
 }
 
-export async function fetchPlacements(documentId: number): Promise<SignaturePlacement[]> {
-  const response = await api.get<{ placements: SignaturePlacement[] }>(
+/**
+ * A document's placements, and how many boxes of each role each page may hold.
+ * The limits come from the server because they come from the type's template,
+ * which HR cannot read.
+ */
+export async function fetchPlacements(
+  documentId: number,
+): Promise<{ placements: SignaturePlacement[]; limits: PlacementLimit[] }> {
+  const response = await api.get<{ placements: SignaturePlacement[]; limits: PlacementLimit[] }>(
     `/documents/${documentId}/placements`,
   )
-  return response.data.placements
+  return response.data
 }
 
 /**

@@ -39,6 +39,8 @@ const db = vi.hoisted(() => ({
   stampSignature: vi.fn(),
   assessBoxes: vi.fn(),
   redecideForEmployee: vi.fn(),
+  listTemplate: vi.fn(),
+  findActiveUserSignature: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -71,6 +73,16 @@ vi.mock('../../src/repositories/employee.repository.js', () => ({
 vi.mock('../../src/repositories/employeeSignature.repository.js', () => ({
   findActiveByEmployee: db.findActiveSignature,
   replaceActive: db.replaceActiveSignature,
+}))
+
+vi.mock('../../src/repositories/userSignature.repository.js', () => ({
+  findActiveByUser: db.findActiveUserSignature,
+}))
+
+// The type's template, for how many boxes of a role a page may hold. Empty
+// unless a test says otherwise: one of each role per page.
+vi.mock('../../src/repositories/documentTypePlacement.repository.js', () => ({
+  listForType: db.listTemplate,
 }))
 
 vi.mock('../../src/repositories/signaturePlacement.repository.js', () => ({
@@ -215,6 +227,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.insertAudit.mockResolvedValue(undefined)
   db.findDocument.mockResolvedValue(documentRecord)
+  db.listTemplate.mockResolvedValue([])
+  db.listPlacements.mockResolvedValue([])
+  db.findActiveUserSignature.mockResolvedValue({
+    relativePath: 'user-signatures/3/stamp.png',
+    mimeType: 'image/png',
+  })
   db.findPhoto.mockResolvedValue(null)
   db.findStoredFile.mockResolvedValue(storedFile)
   db.findActiveSignature.mockResolvedValue(signatureRecord)
@@ -356,7 +374,12 @@ describe('savePlacements over something already there', () => {
         5,
         {
           acknowledgeOccupied: false,
-          placements: [placement, { ...placement, y: 0.5 }, { ...placement, y: 0.3 }],
+          // Three boxes a page may hold: an employee box on each page, an HR box.
+          placements: [
+            placement,
+            { ...placement, pageNumber: 2, y: 0.5 },
+            { ...placement, signerRole: 'Authoriser' as const, y: 0.3 },
+          ],
         },
         hr,
         context,
@@ -872,5 +895,130 @@ describe('uploadSignature', () => {
         context,
       ),
     ).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+/**
+ * Never a second signature where a page already has its own.
+ *
+ * The editor opens on every document now, stamped ones included, so the
+ * server refuses a set holding more boxes of a role on a page than the page
+ * may hold: the template's own count, at least one, never below what the
+ * document already carries. Refused before anything is read or painted, and
+ * whatever the signature status.
+ */
+describe('savePlacements: one signature per box the page has', () => {
+  const at = (signerRole: 'Employee' | 'Authoriser', x: number) => ({ ...placement, signerRole, x })
+  const templateRow = (signerRole: 'Employee' | 'Authoriser') => ({
+    signerRole,
+    pageNumber: 1,
+    variant: { pageCount: 2, widthPt: 595, heightPt: 842 },
+  })
+
+  it('refuses a second employee signature on a page that has one, and paints nothing', async () => {
+    db.listPlacements.mockResolvedValue([{ ...at('Employee', 0.1), signaturePlacementId: 1 }])
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [at('Employee', 0.1), at('Employee', 0.5)] },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Page 1 already has its employee signature; a second one cannot be added.',
+    })
+    expect(db.stampSignature).not.toHaveBeenCalled()
+    expect(db.replacePlacements).not.toHaveBeenCalled()
+    expect(db.findActiveSignature).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    SIGNATURE_STATUS.ADDED,
+    SIGNATURE_STATUS.NOT_REQUIRED,
+    SIGNATURE_STATUS.SKIPPED,
+  ])('refuses it on a document that is %s as well', async (signatureStatus) => {
+    db.findDocument.mockResolvedValue({ ...documentRecord, signatureStatus })
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [at('Employee', 0.1), at('Employee', 0.5)] },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 })
+    expect(db.stampSignature).not.toHaveBeenCalled()
+  })
+
+  it('saves a page with as many HR boxes as its template draws, and refuses one more', async () => {
+    // The ESIC form's page 1: one HR box beside the employee, one under the photograph.
+    db.listTemplate.mockResolvedValue([templateRow('Authoriser'), templateRow('Authoriser')])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [at('Authoriser', 0.1), at('Authoriser', 0.6)] },
+      hr,
+      context,
+    )
+    expect(db.stampSignature).toHaveBeenCalledTimes(1)
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        {
+          acknowledgeOccupied: false,
+          placements: [at('Authoriser', 0.1), at('Authoriser', 0.4), at('Authoriser', 0.7)],
+        },
+        hr,
+        context,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Page 1 can hold 2 hr signature boxes, and this would put 3 on it.',
+    })
+  })
+
+  it('still saves a document holding more than its template, exactly as it is', async () => {
+    // Placed by hand before the rule: two employee boxes on page 1.
+    db.listPlacements.mockResolvedValue([
+      { ...at('Employee', 0.1), signaturePlacementId: 1 },
+      { ...at('Employee', 0.5), signaturePlacementId: 2 },
+    ])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [at('Employee', 0.1), at('Employee', 0.5)] },
+      hr,
+      context,
+    )
+    expect(db.stampSignature).toHaveBeenCalledTimes(1)
+  })
+
+  it('still removes every box, whatever is saved', async () => {
+    db.listPlacements.mockResolvedValue([{ ...at('Employee', 0.1), signaturePlacementId: 1 }])
+
+    await expect(
+      signatureService.savePlacements(5, { acknowledgeOccupied: false, placements: [] }, hr, context),
+    ).resolves.toBeDefined()
+  })
+})
+
+describe('listPlacementsWithLimits', () => {
+  it('returns the placements with the limits the editor greys its buttons by', async () => {
+    db.listPlacements.mockResolvedValue([{ ...placement, signaturePlacementId: 1 }])
+    db.listTemplate.mockResolvedValue([
+      { signerRole: 'Authoriser', pageNumber: 1, variant: { pageCount: 2, widthPt: 595, heightPt: 842 } },
+      { signerRole: 'Authoriser', pageNumber: 1, variant: { pageCount: 2, widthPt: 595, heightPt: 842 } },
+    ])
+
+    const result = await signatureService.listPlacementsWithLimits(5)
+
+    expect(result.placements).toHaveLength(1)
+    expect(result.limits).toEqual([
+      { pageNumber: 1, signerRole: 'Authoriser', max: 2 },
+      { pageNumber: 1, signerRole: 'Employee', max: 1 },
+    ])
   })
 })

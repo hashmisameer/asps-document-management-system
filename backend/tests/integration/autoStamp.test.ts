@@ -979,6 +979,55 @@ describe('a template with two boxes of one role, end to end', () => {
     )
     expect(status.recordset[0]?.SignatureStatus).toBe('Added')
   })
+
+  it('re-saves a stamped ESIC form as it is, and refuses a second employee signature on it', async () => {
+    const { documentId } = await stampedEsic()
+
+    // What the editor loads: the four placements, and how many of each role
+    // the page may hold - the template's two HR boxes, one of the others.
+    const loaded = await agent.get(`/api/documents/${documentId}/placements`)
+    expect(loaded.status).toBe(200)
+    expect(loaded.body.limits).toEqual(
+      expect.arrayContaining([
+        { pageNumber: 1, signerRole: 'Authoriser', max: 2 },
+        { pageNumber: 1, signerRole: 'Employee', max: 1 },
+        { pageNumber: 1, signerRole: 'Photo', max: 1 },
+      ]),
+    )
+    const asSaved = (loaded.body.placements as Record<string, unknown>[]).map((p) => ({
+      pageNumber: p.pageNumber,
+      x: p.x,
+      y: p.y,
+      width: p.width,
+      height: p.height,
+      pageRotation: p.pageRotation,
+      signerRole: p.signerRole,
+      method: 'Manual',
+      detectionMethod: 'Manual',
+      confidence: null,
+    }))
+
+    // Opened and saved unchanged: both HR boxes included, nothing refused.
+    const resaved = await agent
+      .put(`/api/documents/${documentId}/placements`)
+      .send({ placements: asSaved, acknowledgeOccupied: false })
+    expect(resaved.status).toBe(200)
+
+    const before = await placementsOf(documentId)
+    const fileBefore = await processedFileOf(documentId)
+
+    // One extra click: a second employee box on the same page.
+    const extra = { ...asSaved.find((p) => p.signerRole === 'Employee')!, y: 0.6 }
+    const refused = await agent
+      .put(`/api/documents/${documentId}/placements`)
+      .send({ placements: [...asSaved, extra], acknowledgeOccupied: true })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error.message).toBe(
+      'Page 1 already has its employee signature; a second one cannot be added.',
+    )
+    expect(await placementsOf(documentId)).toEqual(before)
+    expect(await processedFileOf(documentId)).toEqual(fileBefore)
+  })
 })
 
 /** The signed copy's path and bytes on disk, to show a run did not repaint it. */

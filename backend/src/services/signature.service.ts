@@ -10,18 +10,22 @@ import {
   canTransitionSignature,
   isSignatureRole,
   normalizeRotation,
+  overLimit,
+  placementLimits,
   type AuditAction,
   type AuthUser,
   type BoxOccupancy,
   type CheckPlacementsInput,
   type DetectionMethod,
   type EmployeeDocument,
+  type PlacementLimit,
   type PlacementMethod,
   type SavePlacementsInput,
   type SignaturePlacement,
   type SignatureStatus,
   type SignerRole,
 } from '@asps-dms/shared'
+import * as documentTypePlacementRepository from '../repositories/documentTypePlacement.repository.js'
 import * as employeeDocumentRepository from '../repositories/employeeDocument.repository.js'
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeSignatureRepository from '../repositories/employeeSignature.repository.js'
@@ -285,9 +289,26 @@ export async function openSignature(
   return { stream: storage.openStoredFile(record.relativePath), mimeType: record.mimeType }
 }
 
-export async function listPlacements(documentId: number): Promise<SignaturePlacement[]> {
-  await documentService.getById(documentId)
-  return signaturePlacementRepository.listForDocument(documentId)
+/**
+ * A document's placements, with how many boxes of each role each page may
+ * hold - which the editor needs to know before HR clicks, and cannot work
+ * out itself: the template is the administrator's, and HR cannot read it.
+ */
+export async function listPlacementsWithLimits(
+  documentId: number,
+): Promise<{ placements: SignaturePlacement[]; limits: PlacementLimit[] }> {
+  const document = await documentService.getById(documentId)
+  const placements = await signaturePlacementRepository.listForDocument(documentId)
+  return { placements, limits: await limitsFor(document, placements) }
+}
+
+/** See placementLimits: the template's count, at least one, never below what is saved. */
+async function limitsFor(
+  document: Pick<EmployeeDocument, 'documentTypeId' | 'pageCount'>,
+  saved: readonly Pick<SignaturePlacement, 'pageNumber' | 'signerRole'>[],
+): Promise<PlacementLimit[]> {
+  const templateRows = await documentTypePlacementRepository.listForType(document.documentTypeId)
+  return placementLimits(templateRows, document.pageCount, saved)
 }
 
 function toOccupancy(assessment: BoxAssessment, index: number, role: SignerRole): BoxOccupancy {
@@ -379,6 +400,30 @@ export async function savePlacements(
       source: 'editor',
     })
     return documentService.getById(documentId)
+  }
+
+  // Never a second signature where a page already has its own. The editor
+  // opens on stamped documents, so one extra 'Add box' must not be able to put
+  // the employee's signature on a page twice. The editor stops the click; this
+  // stops anybody calling the API directly, and runs whatever the status.
+  const saved = await signaturePlacementRepository.listForDocument(documentId)
+  const tooMany = overLimit(
+    input.placements.map((placement) => ({
+      pageNumber: placement.pageNumber,
+      signerRole: placement.signerRole ?? SIGNER_ROLES.EMPLOYEE,
+    })),
+    await limitsFor(document, saved),
+  )
+  if (tooMany.length > 0) {
+    const first = tooMany[0]!
+    const role = SIGNER_ROLE_LABEL[first.signerRole].toLowerCase()
+    throw new ConflictError(
+      first.max === 1
+        ? `Page ${first.pageNumber} already has its ${role}; a second one cannot be added.`
+        : `Page ${first.pageNumber} can hold ${first.max} ${role} boxes, and this would put ${first.count} on it.`,
+      API_ERROR_CODES.CONFLICT,
+      { details: { tooMany } },
+    )
   }
 
   // Only the signatures this set actually calls for. A document that carries an
