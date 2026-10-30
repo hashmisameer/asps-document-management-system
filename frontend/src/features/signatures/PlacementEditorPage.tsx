@@ -32,6 +32,7 @@ import {
 } from './api.js'
 import { describeOccupancy, notEmpty, occupancyTitle } from './occupancyText.js'
 import {
+  documentViewer,
   moveRect,
   newPlacement,
   resizeRect,
@@ -84,6 +85,7 @@ export function PlacementEditorPage() {
   const [pageCount, setPageCount] = useState(0)
   const [rotation, setRotation] = useState<PageRotation>(0)
   const [rendered, setRendered] = useState<RenderedSize | null>(null)
+  const [imageFailed, setImageFailed] = useState(false)
   const [drafts, setDrafts] = useState<DraftPlacement[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -201,6 +203,8 @@ export function PlacementEditorPage() {
       setEditing(false)
       await queryClient.invalidateQueries({ queryKey: signatureKeys.placements(documentId) })
       await queryClient.invalidateQueries({ queryKey: employeeKeys.all })
+      // A picture that has just been signed now previews as its signed PDF.
+      await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
     },
     onError: (error: unknown) => {
       setSaved(false)
@@ -224,6 +228,7 @@ export function PlacementEditorPage() {
   }
 
   const onPage = placements.filter((placement) => placement.pageNumber === pageNumber)
+  const viewer = document.data ? documentViewer(document.data) : 'pdf'
 
   // How many of each role this page may hold - the template's count, at least
   // one, never below what is saved. A button the server would refuse is
@@ -447,13 +452,41 @@ export function PlacementEditorPage() {
 
       <div className="mt-3 inline-block rounded-card border border-slate-200 bg-white p-3 shadow-sm">
         <div className="relative inline-block">
+          {viewer === 'image' && imageFailed ? (
+            <p className="p-8 text-sm text-status-rejected">
+              This file could not be displayed. It may be damaged - replace it and try again.
+            </p>
+          ) : viewer === 'image' ? (
+            // One page, never rotated by a /Rotate: the browser turns the
+            // picture by its EXIF note, as the stamp and the occupancy check do.
+            <img
+              src={documentFileUrl.preview(documentId)}
+              alt={document.data?.documentName ?? 'Document'}
+              width={720}
+              className="block select-none"
+              draggable={false}
+              onLoad={(event) => {
+                setImageFailed(false)
+                setPageCount(1)
+                setRotation(0)
+                setRendered({
+                  width: event.currentTarget.clientWidth,
+                  height: event.currentTarget.clientHeight,
+                })
+              }}
+              onError={() => {
+                setRendered(null)
+                setImageFailed(true)
+              }}
+            />
+          ) : (
           <Document
             file={documentFileUrl.preview(documentId)}
             onLoadSuccess={(pdf) => setPageCount(pdf.numPages)}
             loading={<p className="p-8 text-sm text-slate-500">Loading document...</p>}
             error={
               <p className="p-8 text-sm text-status-rejected">
-                This file could not be displayed. Only PDFs can be signed here.
+                This file could not be displayed. It may be damaged - replace it and try again.
               </p>
             }
           >
@@ -471,6 +504,7 @@ export function PlacementEditorPage() {
               }}
             />
           </Document>
+          )}
 
           {rendered && editing
             ? onPage.map((placement) => (

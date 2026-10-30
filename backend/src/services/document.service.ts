@@ -30,6 +30,8 @@ import type {
   DocumentListRecord,
   EmployeeDocumentRecord,
 } from '../repositories/employeeDocument.repository.js'
+import { Readable } from 'node:stream'
+import sharp from 'sharp'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors.js'
@@ -787,6 +789,13 @@ export async function openForDelivery(
     ? 'application/pdf'
     : (location.mimeType ?? 'application/octet-stream')
 
+  // A TIFF cannot be shown by Chrome, Edge or Firefox - the eye button simply
+  // downloaded it, and the signing screen could not draw it. So a PREVIEW of
+  // one is served as a PNG, the right way up by its EXIF note as everything
+  // else in the app reads pictures. Converted on the way out and never stored:
+  // the file kept is the one HR uploaded, and a DOWNLOAD is still exactly that.
+  const previewAsPng = intent === 'preview' && !servingProcessed && mimeType === 'image/tiff'
+
   if (!(await storage.storedFileExists(relativePath))) {
     // The row says there is a file and the store disagrees. That is an
     // operational problem - a restore that missed the volume, most likely - and
@@ -808,8 +817,21 @@ export async function openForDelivery(
       employeeCode: location.employeeCode,
       documentName: location.documentName,
       servedProcessedFile: location.processedFilePath !== null,
+      ...(previewAsPng ? { servedAs: 'image/png' } : {}),
     },
   })
+
+  if (previewAsPng) {
+    const png = await sharp(await storage.readStoredFile(relativePath), { failOn: 'error' })
+      .rotate()
+      .png()
+      .toBuffer()
+    return {
+      stream: Readable.from(png),
+      mimeType: 'image/png',
+      fileName: deliveryFileName(location.employeeCode, location.documentName, 'preview.png'),
+    }
+  }
 
   return {
     stream: storage.openStoredFile(relativePath),

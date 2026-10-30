@@ -30,11 +30,20 @@ export interface PreparedImage {
  * A JPEG photograph as the DMS can use it.
  *
  * Left byte for byte as it was when nothing is wrong with it. Re-encoded when
- * something is: a PROGRESSIVE JPEG, which pdf-lib cannot embed and so could
- * never be stamped or printed; an EXIF rotation, which pdf-lib does not read
- * and would draw sideways; or a file over the upload limit, which is shrunk
- * to fit rather than left behind. A re-encode is baseline, the right way up,
- * and under the limit.
+ * something is: an EXIF rotation, which pdf-lib does not read and would draw
+ * sideways; a file over the upload limit, which is shrunk to fit rather than
+ * left behind; or a PROGRESSIVE JPEG. A re-encode is baseline, the right way
+ * up, and under the limit.
+ *
+ * WHY PROGRESSIVE IS RE-ENCODED - not the reason this used to give. pdf-lib
+ * DOES embed a progressive JPEG: checked against pdf-lib 1.17.1, which embeds,
+ * draws, saves and reloads one without complaint. What a7ce029 recorded was a
+ * real photograph pdf-lib refused with a 415, blamed on its being progressive;
+ * what was actually wrong with that file was not kept. The re-encode stays
+ * because it is what fixed it: every JPEG that reaches pdf-lib is then one
+ * sharp has decoded and written fresh as plain baseline, whatever oddity the
+ * original carried. Progressive is the cheap signal that a file came from
+ * somewhere other than an ordinary camera or scanner, not the fault itself.
  */
 export async function preparePhoto(source: Buffer): Promise<PreparedImage> {
   const meta = await sharp(source, { failOn: 'error' }).metadata()
@@ -71,4 +80,51 @@ export async function preparePhoto(source: Buffer): Promise<PreparedImage> {
 export async function prepareForPdf(source: Buffer, mimeType: string): Promise<PreparedImage> {
   if (mimeType !== 'image/jpeg') return { buffer: source, progressive: false, converted: false }
   return preparePhoto(source)
+}
+
+/** A document image as the stamper draws it. */
+export interface UprightImage {
+  buffer: Buffer
+  mimeType: 'image/jpeg' | 'image/png'
+  /** Its size the right way up, in pixels. */
+  widthPx: number
+  heightPx: number
+}
+
+/**
+ * A DOCUMENT that is a picture - a phone photo or scan of an Aadhaar or PAN
+ * card - the right way up, in a form pdf-lib embeds.
+ *
+ * THE RIGHT WAY UP BY THE SAME RULE EVERYWHERE: sharp's rotate(), which reads
+ * the EXIF orientation. It is what the browser shows HR in the editor, what
+ * the occupancy check measures (toGrey with orient), and what preparePhoto
+ * does to a photograph. Without it the stamper drew the raw pixels, which on a
+ * phone photo are usually on their side, so a box placed where HR saw it
+ * landed somewhere else on the signed copy, with no error.
+ *
+ * A JPEG or PNG that is already upright and unremarkable is passed through
+ * untouched - no second round of JPEG loss. A rotated or progressive JPEG is
+ * re-encoded baseline (see preparePhoto). WebP and TIFF, which the upload
+ * accepts and pdf-lib does not read, become PNG; a multi-page TIFF is read
+ * from its first page, as the identity check reads it.
+ */
+export async function uprightDocumentImage(source: Buffer, mimeType: string): Promise<UprightImage> {
+  const meta = await sharp(source, { failOn: 'error' }).metadata()
+  const rotated = (meta.orientation ?? 1) !== 1
+  const upright = (width: number, height: number) =>
+    (meta.orientation ?? 1) >= 5 ? { widthPx: height, heightPx: width } : { widthPx: width, heightPx: height }
+  const size = upright(meta.width ?? 0, meta.height ?? 0)
+
+  if (mimeType === 'image/jpeg') {
+    if (!rotated && meta.isProgressive !== true) return { buffer: source, mimeType, ...size }
+    const buffer = await sharp(source, { failOn: 'error' })
+      .rotate()
+      .jpeg({ progressive: false, quality: 92 })
+      .toBuffer()
+    return { buffer, mimeType: 'image/jpeg', ...size }
+  }
+  if (mimeType === 'image/png' && !rotated) return { buffer: source, mimeType, ...size }
+
+  const buffer = await sharp(source, { failOn: 'error' }).rotate().png().toBuffer()
+  return { buffer, mimeType: 'image/png', ...size }
 }

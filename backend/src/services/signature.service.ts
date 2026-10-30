@@ -77,10 +77,11 @@ export async function getSignatureSummary(employeeId: number): Promise<EmployeeS
 /**
  * Measures the image by embedding it exactly as the stamper will.
  *
- * This is not only about recording the pixel size: pdf-lib cannot embed a
- * progressive JPEG, and finding that out here - while someone is looking at an
- * upload form - is far better than finding it out later, when they are trying
- * to sign a document and the failure appears to be about the document.
+ * This is not only about recording the pixel size: an image pdf-lib will not
+ * embed is better found here - while someone is looking at an upload form -
+ * than later, when they are trying to sign a document and the failure appears
+ * to be about the document. (Not because it is progressive: pdf-lib embeds a
+ * progressive JPEG. See preparePhoto for what the re-encode before this is for.)
  */
 async function measureSignature(
   buffer: Buffer,

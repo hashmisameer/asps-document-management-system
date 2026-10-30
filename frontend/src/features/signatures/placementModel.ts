@@ -123,3 +123,25 @@ export function resizeRect(
   )
   return { ...rect, width, height }
 }
+
+/**
+ * How the editor shows a document: pdf.js for a PDF, the browser's own <img>
+ * for a picture.
+ *
+ * A picture is the common case for an Aadhaar or PAN card - a phone photo or a
+ * scan - and pdf.js cannot open one, which is why the editor used to answer
+ * 'Only PDFs can be signed here' to a perfectly signable card. Once it has a
+ * signed copy that copy is what the preview serves, and it is always a PDF.
+ *
+ * The <img> shows the picture the right way up by its EXIF note, which is the
+ * rule the stamp and the occupancy check use - so the box lands where it was
+ * drawn. A TIFF, which a browser cannot show, is previewed as a PNG by the
+ * server, so it is a picture here too.
+ */
+export function documentViewer(document: {
+  mimeType: string | null
+  hasProcessedFile: boolean
+}): 'pdf' | 'image' {
+  if (document.hasProcessedFile) return 'pdf'
+  return document.mimeType?.startsWith('image/') ? 'image' : 'pdf'
+}

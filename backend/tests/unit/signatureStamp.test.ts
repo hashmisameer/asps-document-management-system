@@ -1,6 +1,15 @@
 import { PDFDocument, degrees } from 'pdf-lib'
+import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
-import { fitInside, toDrawParams, stampSignature } from '../../src/services/signatureStamp.service.js'
+import { uprightDocumentImage } from '../../src/services/imagePrep.service.js'
+import { openPdf, renderPage } from '../../src/services/pdfRaster.service.js'
+import {
+  IMAGE_PAGE_MAX_PT,
+  fitInside,
+  imagePageSize,
+  toDrawParams,
+  stampSignature,
+} from '../../src/services/signatureStamp.service.js'
 
 /**
  * Drawing a signature onto a page.
@@ -330,5 +339,144 @@ describe('stampSignature', () => {
       statusCode: 415,
       message: expect.stringContaining('photograph'),
     })
+  })
+})
+
+/**
+ * An image document, the right way up.
+ *
+ * A phone photo's pixels are usually stored on their side with an EXIF note
+ * saying which way to turn them. The browser obeys the note, so HR places the
+ * box on the upright picture; the occupancy check reads it upright too. The
+ * stamp drew the raw pixels, so the signature landed somewhere else on the
+ * signed copy, with no error. These draw a real picture and look at the
+ * signed page.
+ */
+describe('stamping an image document', () => {
+  /** The picture as HR sees it: 200 wide, 300 tall, a blue mark in the bottom-right corner. */
+  async function uprightCard(): Promise<Buffer> {
+    const blue = await sharp({
+      create: { width: 40, height: 40, channels: 3, background: '#0000ff' },
+    })
+      .png()
+      .toBuffer()
+    return sharp({ create: { width: 200, height: 300, channels: 3, background: '#ffffff' } })
+      .composite([{ input: blue, left: 150, top: 250 }])
+      .png()
+      .toBuffer()
+  }
+
+  /**
+   * The same picture as a phone stores it: the pixels turned a quarter left,
+   * with EXIF orientation 6 - 'turn me a quarter right to view'.
+   */
+  async function asPhoneStoresIt(upright: Buffer): Promise<Buffer> {
+    return sharp(upright).rotate(270).jpeg({ quality: 95 }).withMetadata({ orientation: 6 }).toBuffer()
+  }
+
+  /** A solid red signature, so where it landed can be seen. */
+  const redSignature = () =>
+    sharp({ create: { width: 60, height: 20, channels: 3, background: '#ff0000' } })
+      .png()
+      .toBuffer()
+
+  /** The colour at a point given as fractions of the rendered page. */
+  async function colourAt(pdf: Buffer, fx: number, fy: number): Promise<[number, number, number]> {
+    const doc = await openPdf(pdf)
+    const png = await renderPage(await doc.getPage(1), 1)
+    const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true })
+    const x = Math.min(info.width - 1, Math.floor(fx * info.width))
+    const y = Math.min(info.height - 1, Math.floor(fy * info.height))
+    const at = (y * info.width + x) * info.channels
+    return [data[at] ?? 0, data[at + 1] ?? 0, data[at + 2] ?? 0]
+  }
+
+  const isRed = ([r, g, b]: [number, number, number]) => r > 200 && g < 60 && b < 60
+  const isBlue = ([r, g, b]: [number, number, number]) => b > 200 && r < 60 && g < 60
+
+  it('puts the signature where HR placed it on the upright picture, from an EXIF-rotated JPEG', async () => {
+    const stored = await asPhoneStoresIt(await uprightCard())
+    // The precondition: stored sideways, upright only by its EXIF note.
+    const raw = await sharp(stored).metadata()
+    expect([raw.width, raw.height, raw.orientation]).toEqual([300, 200, 6])
+
+    // HR draws the box at the top-left of the upright picture.
+    const box = { x: 0.05, y: 0.05, width: 0.4, height: 0.15 }
+    const output = await stampSignature({
+      source: stored,
+      sourceMimeType: 'image/jpeg',
+      signatures: { Employee: { data: await redSignature(), mimeType: 'image/png' } },
+      placements: [{ pageNumber: 1, rect: box, pageRotation: 0 }],
+    })
+
+    // The signed page is the upright picture: portrait, 2:3.
+    const page = (await PDFDocument.load(output)).getPage(0).getSize()
+    expect(page.height / page.width).toBeCloseTo(1.5, 2)
+    // The signature is in the box HR drew ...
+    expect(isRed(await colourAt(output, 0.25, 0.125))).toBe(true)
+    // ... and the picture is the right way up around it: the blue mark is in
+    // the bottom-right corner, where HR saw it, and nowhere near the box.
+    expect(isBlue(await colourAt(output, 0.87, 0.9))).toBe(true)
+    expect(isRed(await colourAt(output, 0.87, 0.9))).toBe(false)
+  })
+
+  it('makes no page larger than A4, keeping the picture’s own proportions', async () => {
+    expect(imagePageSize(4000, 3000)).toEqual({ width: IMAGE_PAGE_MAX_PT, height: IMAGE_PAGE_MAX_PT * 0.75 })
+    expect(imagePageSize(3000, 4000)).toEqual({ width: IMAGE_PAGE_MAX_PT * 0.75, height: IMAGE_PAGE_MAX_PT })
+    // A small scan is left at its own size, never blown up.
+    expect(imagePageSize(600, 400)).toEqual({ width: 600, height: 400 })
+  })
+
+  it('signs a phone photo on an A4-sized page, not one a metre wide', async () => {
+    const photo = await sharp({ create: { width: 4000, height: 3000, channels: 3, background: '#eeeeee' } })
+      .jpeg()
+      .toBuffer()
+    const output = await stampSignature({
+      source: photo,
+      sourceMimeType: 'image/jpeg',
+      signatures: { Employee: { data: PNG_1X1, mimeType: 'image/png' } },
+      placements: [{ pageNumber: 1, rect: TOP_LEFT_SQUARE, pageRotation: 0 }],
+    })
+    const page = (await PDFDocument.load(output)).getPage(0).getSize()
+    expect(page.width).toBeCloseTo(IMAGE_PAGE_MAX_PT, 2)
+    expect(page.height).toBeCloseTo(IMAGE_PAGE_MAX_PT * 0.75, 2)
+  })
+
+  it.each([
+    ['WebP', 'image/webp', (s: sharp.Sharp) => s.webp()],
+    ['TIFF', 'image/tiff', (s: sharp.Sharp) => s.tiff()],
+  ] as const)('signs a %s document, which the upload accepts', async (_name, mimeType, encode) => {
+    const source = await encode(
+      sharp({ create: { width: 200, height: 300, channels: 3, background: '#ffffff' } }),
+    ).toBuffer()
+    const output = await stampSignature({
+      source,
+      sourceMimeType: mimeType,
+      signatures: { Employee: { data: await redSignature(), mimeType: 'image/png' } },
+      placements: [{ pageNumber: 1, rect: { x: 0.05, y: 0.05, width: 0.4, height: 0.15 }, pageRotation: 0 }],
+    })
+    expect(isRed(await colourAt(output, 0.25, 0.125))).toBe(true)
+  })
+})
+
+describe('uprightDocumentImage', () => {
+  it('passes an upright baseline JPEG through byte for byte - no second round of loss', async () => {
+    const jpeg = await sharp({ create: { width: 30, height: 20, channels: 3, background: '#808080' } })
+      .jpeg({ progressive: false })
+      .toBuffer()
+    const upright = await uprightDocumentImage(jpeg, 'image/jpeg')
+    expect(upright.buffer.equals(jpeg)).toBe(true)
+    expect([upright.widthPx, upright.heightPx]).toEqual([30, 20])
+  })
+
+  it('turns a rotated JPEG upright, by its EXIF note, and says its upright size', async () => {
+    const jpeg = await sharp({ create: { width: 30, height: 20, channels: 3, background: '#808080' } })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer()
+    const upright = await uprightDocumentImage(jpeg, 'image/jpeg')
+    const meta = await sharp(upright.buffer).metadata()
+    expect([meta.width, meta.height, meta.orientation ?? 1]).toEqual([20, 30, 1])
+    expect([upright.widthPx, upright.heightPx]).toEqual([20, 30])
   })
 })

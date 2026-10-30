@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib'
+import sharp from 'sharp'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   API_ERROR_CODES,
@@ -692,6 +693,50 @@ describe('openForDelivery', () => {
         metadataJson: expect.stringContaining('"servedProcessedFile":false'),
       }),
     )
+  })
+
+  it('previews a TIFF as a PNG, the right way up, because no office browser can show one', async () => {
+    // Stored sideways with an EXIF note, as a scanner app may write it.
+    const tiff = await sharp({ create: { width: 30, height: 20, channels: 3, background: '#808080' } })
+      .tiff()
+      .withMetadata({ orientation: 6 })
+      .toBuffer()
+    db.findStoredFile.mockResolvedValue({
+      ...location,
+      originalFilePath: 'documents/42/card.tiff',
+      mimeType: 'image/tiff',
+    })
+    db.readStoredFile.mockResolvedValue(tiff)
+
+    const delivery = await documentService.openForDelivery(5, 'preview', hr, context)
+
+    expect(delivery.mimeType).toBe('image/png')
+    expect(delivery.fileName).toBe('EMP001 - PAN Card.png')
+    const chunks: Buffer[] = []
+    for await (const chunk of delivery.stream as AsyncIterable<Buffer>) chunks.push(Buffer.from(chunk))
+    const meta = await sharp(Buffer.concat(chunks)).metadata()
+    expect([meta.format, meta.width, meta.height]).toEqual(['png', 20, 30])
+    // Converted on the way out and never stored: the original is untouched.
+    expect(db.openStoredFile).not.toHaveBeenCalled()
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataJson: expect.stringContaining('"servedAs":"image/png"') }),
+    )
+  })
+
+  it('downloads a TIFF exactly as it was uploaded', async () => {
+    db.findStoredFile.mockResolvedValue({
+      ...location,
+      originalFilePath: 'documents/42/card.tiff',
+      mimeType: 'image/tiff',
+    })
+    db.openStoredFile.mockReturnValue('stream')
+
+    const delivery = await documentService.openForDelivery(5, 'download', hr, context)
+
+    expect(delivery.mimeType).toBe('image/tiff')
+    expect(delivery.fileName).toBe('EMP001 - PAN Card.tiff')
+    expect(db.openStoredFile).toHaveBeenCalledWith('documents/42/card.tiff')
+    expect(db.readStoredFile).not.toHaveBeenCalled()
   })
 
   it('says the file is missing from the store rather than reporting "not found"', async () => {

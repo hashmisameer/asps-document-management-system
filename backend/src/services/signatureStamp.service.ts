@@ -9,6 +9,7 @@ import {
   type SignerRole,
 } from '@asps-dms/shared'
 import { BadRequestError, ConflictError, UnsupportedMediaTypeError } from '../utils/errors.js'
+import { uprightDocumentImage } from './imagePrep.service.js'
 
 /**
  * Drawing a signature onto a document.
@@ -169,9 +170,9 @@ async function embedSignature(
   try {
     return mimeType === 'image/png' ? await pdf.embedPng(image) : await pdf.embedJpg(image)
   } catch (error) {
-    // pdf-lib cannot read a progressive JPEG. That is worth saying plainly,
-    // and about the right image: "signature could not be embedded" would send
-    // HR looking at the document, or at a signature when it is the photograph.
+    // An image pdf-lib will not embed. That is worth saying plainly, and about
+    // the right image: "signature could not be embedded" would send HR looking
+    // at the document, or at a signature when it is the photograph.
     throw new UnsupportedMediaTypeError(
       role === SIGNER_ROLES.PHOTO
         ? "That photograph cannot be embedded in a PDF. Replace it on the employee's record and try again."
@@ -181,19 +182,43 @@ async function embedSignature(
   }
 }
 
+/** A4's long side in points: the largest an image document's page is made. */
+export const IMAGE_PAGE_MAX_PT = 841.89
+
+/**
+ * The page an image document is drawn on: the image's own proportions, so a
+ * box HR placed as a fraction of the picture is the same fraction of the page,
+ * and no larger than A4 on its long side. One point per pixel made a 4000 x
+ * 3000 phone photo a page 1.4 metres wide, which prints as a speck; a small
+ * scan is left at its own size rather than blown up.
+ */
+export function imagePageSize(widthPx: number, heightPx: number): { width: number; height: number } {
+  const scale = Math.min(1, IMAGE_PAGE_MAX_PT / Math.max(widthPx, heightPx))
+  return { width: widthPx * scale, height: heightPx * scale }
+}
+
 /**
  * Builds a one-page PDF around an image document.
  *
- * The page is the image's own pixel size in points, so the signature keeps the
- * proportions HR placed it with. Everything after this point treats an image
- * document and a PDF document identically.
+ * THE RIGHT WAY UP FIRST. A phone photo's pixels are usually stored on their
+ * side with an EXIF note saying which way to turn them; the browser obeys the
+ * note, so HR places the box on the upright picture, and the occupancy check
+ * measures the upright picture too. pdf-lib ignores the note. Drawing the raw
+ * pixels put the signature somewhere else on the signed copy, with no error -
+ * the failure this module exists to prevent. uprightDocumentImage turns it by
+ * the same rule the other two use. Everything after this point treats an
+ * image document and a PDF document identically.
  */
 async function pdfFromImage(source: Buffer, mimeType: string): Promise<PDFDocument> {
+  const upright = await uprightDocumentImage(source, mimeType)
   const pdf = await PDFDocument.create()
   const image =
-    mimeType === 'image/png' ? await pdf.embedPng(source) : await pdf.embedJpg(source)
-  const page = pdf.addPage([image.width, image.height])
-  page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height })
+    upright.mimeType === 'image/png'
+      ? await pdf.embedPng(upright.buffer)
+      : await pdf.embedJpg(upright.buffer)
+  const { width, height } = imagePageSize(image.width, image.height)
+  const page = pdf.addPage([width, height])
+  page.drawImage(image, { x: 0, y: 0, width, height })
   return pdf
 }
 
@@ -211,10 +236,17 @@ async function loadSource(source: Buffer, mimeType: string): Promise<PDFDocument
       )
     }
   }
-  if (mimeType === 'image/png' || mimeType === 'image/jpeg') {
+  // Every picture the upload accepts: pdf-lib reads PNG and JPEG itself, and
+  // uprightDocumentImage turns WebP and TIFF into PNG first.
+  if (
+    mimeType === 'image/png' ||
+    mimeType === 'image/jpeg' ||
+    mimeType === 'image/webp' ||
+    mimeType === 'image/tiff'
+  ) {
     return pdfFromImage(source, mimeType)
   }
-  throw new UnsupportedMediaTypeError('Only a PDF, PNG or JPEG document can be signed.')
+  throw new UnsupportedMediaTypeError('Only a PDF or a picture (JPG, PNG, WebP, TIFF) can be signed.')
 }
 
 /**
