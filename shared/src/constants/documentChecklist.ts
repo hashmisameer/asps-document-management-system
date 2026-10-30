@@ -17,12 +17,20 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  * go overdue. It does NOT mean it must be in hand before the employee record can
  * be created; nothing is.
  *
- * EVERY DOCUMENT HAS A DEADLINE, since 2026-09-17. Four are due in a week,
- * four in twelve days, and the confirmation letter six calendar months after
- * joining. A null deadline is still allowed by the shape - a document that is
- * collected but never falls due - and none of the nine uses it now. The
- * identity cards and the two statutory forms had none, and were chased by
- * hand; the office asked for dates on them so they are chased like the rest.
+ * EVERY DOCUMENT IT CHASES HAS A DEADLINE, since 2026-09-17. Four are due in
+ * a week, four in twelve days, and the confirmation letter six calendar months
+ * after joining. The identity cards and the two statutory forms had none, and
+ * were chased by hand; the office asked for dates on them so they are chased
+ * like the rest. The one with none is Full and Final Settlement, which is not
+ * chased at all - see below.
+ *
+ * FULL AND FINAL SETTLEMENT (2026-10-30, migration 0041) is a leaver's
+ * document, and it is the one that works differently. It STARTS SET ASIDE on
+ * every checklist (startsNotRequired), so nothing counts it until HR marks it
+ * required for the employee whose FNF has arrived. And it is COLLECTED AFTER
+ * LEAVING (collectedAfterLeaving): it can be marked required and uploaded for
+ * somebody who has already gone, and once it is, the documents list and the
+ * reports show it - see LISTED_DOCUMENT in employeeScope.ts.
  *
  * CHANGING SOMETHING HERE DOES NOT MOVE ANYBODY'S EXISTING DEADLINE. A due date
  * is written onto the employee's row when they are created, from this list as it
@@ -34,6 +42,9 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  * the date that applied to it.
  */
 
+/** Full and Final Settlement: the code its report page and its rules are keyed by. */
+export const FNF_DOCUMENT_CODE = 'FNF'
+
 export interface ChecklistRule {
   /** The code that identifies this document for ever. */
   documentCode: string
@@ -42,6 +53,23 @@ export interface ChecklistRule {
   /** Null together with the unit: a document that is collected but never due. */
   deadlineValue: number | null
   deadlineUnit: DeadlineUnit | null
+  /**
+   * Created set aside on every new checklist - 'Not required' until HR marks it
+   * required for the employee it applies to. Read ONLY when a checklist is
+   * created, never by a count: the counts read the row's NotRequiredAt, as they
+   * do for a document HR set aside by hand. The row records no person, because
+   * none decided (0041). Absent means false.
+   */
+  startsNotRequired?: boolean
+  /**
+   * Collected from somebody who has LEFT. Everything else stops at the last
+   * working day - a leaver cannot bring a document in - so the checklist hides
+   * upload and 'Mark as required' for a leaver, and the lists leave leavers out.
+   * A type with this set is the exception, in the checklist and in the lists
+   * that show documents (documents list, reports), but not in the ones that
+   * chase them (dashboard, overdue, the daily reminder). Absent means false.
+   */
+  collectedAfterLeaving?: boolean
 }
 
 export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
@@ -113,6 +141,17 @@ export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
     deadlineValue: 6,
     deadlineUnit: DEADLINE_UNITS.MONTH,
   },
+  {
+    /* Last. Whatever management holds for somebody who has left: set aside on
+       every checklist until it arrives, never dated, never chased. */
+    documentCode: FNF_DOCUMENT_CODE,
+    documentName: 'Full and Final Settlement',
+    isMandatory: false,
+    deadlineValue: null,
+    deadlineUnit: null,
+    startsNotRequired: true,
+    collectedAfterLeaving: true,
+  },
 ]
 
 const BY_CODE: ReadonlyMap<string, ChecklistRule> = new Map(
@@ -136,3 +175,8 @@ export function checklistRuleFor(documentCode: string): ChecklistRule | undefine
 export const CHECKLIST_DOCUMENT_CODES: readonly string[] = DOCUMENT_CHECKLIST.map(
   (rule) => rule.documentCode,
 )
+
+/** The types collected from somebody who has left: FNF. For the SQL that has to name them. */
+export const COLLECTED_AFTER_LEAVING_CODES: readonly string[] = DOCUMENT_CHECKLIST.filter(
+  (rule) => rule.collectedAfterLeaving === true,
+).map((rule) => rule.documentCode)

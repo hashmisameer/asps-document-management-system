@@ -242,9 +242,12 @@ function ChecklistRow({
         ? `${DOCUMENT_STATUS_LABEL[item.status]} · manually confirmed`
         : DOCUMENT_STATUS_LABEL[item.status]
   const hasFile = item.originalFileName !== null
+  // A leaver can bring nothing in, so their checklist is closed - except a
+  // document collected after leaving (FNF), which only a leaver ever has.
+  const open = !employeeHasLeft || item.collectedAfterLeaving
 
   const canUpload =
-    !employeeHasLeft &&
+    open &&
     can(PERMISSIONS.DOCUMENT_UPLOAD) &&
     (!hasFile || can(PERMISSIONS.DOCUMENT_REPLACE))
 
@@ -261,7 +264,7 @@ function ChecklistRow({
    */
   const canSetNotRequired =
     can(PERMISSIONS.DEADLINE_UPDATE) &&
-    !employeeHasLeft &&
+    open &&
     // Only where the office has opened this type. PAN, Form 16 and the
     // appointment letter are statutory - nobody here decides they do not apply
     // to somebody - and the row that was marked before a type was closed can
@@ -343,6 +346,13 @@ function ChecklistRow({
           {/* Who decided, and when. A document that quietly stopped being
               chased with nobody's name against it is not a decision on the
               record - it is a gap that looks like one. */}
+          {/* Set aside by the checklist itself, not by a person (FNF): no name,
+              because nobody looked at this employee and decided. */}
+          {notRequired && !item.notRequiredByName ? (
+            <p className="mt-1 max-w-56 text-xs text-slate-500">
+              Not required - mark as required when it arrives
+            </p>
+          ) : null}
           {notRequired && item.notRequiredByName ? (
             <p className="mt-1 max-w-56 text-xs text-slate-500">
               Marked by {item.notRequiredByName}
@@ -534,7 +544,7 @@ function ChecklistRow({
                 confirmation below it is not new - taking a file off has always
                 been asked about first. */}
             <span className="ml-2 inline-flex">
-              {hasFile && !employeeHasLeft && can(PERMISSIONS.DOCUMENT_REPLACE) ? (
+              {hasFile && open && can(PERMISSIONS.DOCUMENT_REPLACE) ? (
                 <IconButton
                   label="Remove"
                   icon={<TrashIcon />}

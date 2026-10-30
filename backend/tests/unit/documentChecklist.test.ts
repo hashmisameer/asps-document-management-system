@@ -92,7 +92,7 @@ describe('the document list', () => {
     )
   })
 
-  it('is the nine the office keeps, and nothing else', () => {
+  it('is the ten the office keeps, Full and Final Settlement last, and nothing else', () => {
     expect(types.map((type) => type.documentName)).toEqual([
       'Appointment Letter',
       'Bio Data Form',
@@ -103,7 +103,17 @@ describe('the document list', () => {
       'Payment of Gratuity',
       'Form No. 16',
       'Confirmation Letter',
+      'Full and Final Settlement',
     ])
+  })
+
+  it('starts FNF set aside and collects it after leaving - and no other type', () => {
+    // A leaver's document: on every checklist, set aside until it arrives, and
+    // open on a leaver's checklist where everything else is closed.
+    const fnf = DOCUMENT_CHECKLIST.find((rule) => rule.documentCode === 'FNF')
+    expect(fnf).toMatchObject({ startsNotRequired: true, collectedAfterLeaving: true })
+    const others = DOCUMENT_CHECKLIST.filter((rule) => rule.documentCode !== 'FNF')
+    expect(others.some((rule) => rule.startsNotRequired || rule.collectedAfterLeaving)).toBe(false)
   })
 
   it('has no Service Card, which the office retired in 0029', () => {
@@ -126,17 +136,20 @@ describe('the document list', () => {
     const optional = types.filter((type) => !type.isMandatory).map((type) => type.documentCode)
 
     // PF and ESIC are filed with the government rather than collected from the
-    // employee, so an employee is not incomplete for want of them.
-    expect(optional).toEqual(['PF_FORM', 'ESIC_FORM'])
+    // employee, so an employee is not incomplete for want of them; FNF is a
+    // leaver's, set aside until it arrives.
+    expect(optional).toEqual(['PF_FORM', 'ESIC_FORM', 'FNF'])
   })
 
-  it('gives every document a deadline, as the office decided on 2026-09-17', () => {
+  it('gives every document it chases a deadline, as the office decided on 2026-09-17', () => {
     // The cards and the two statutory forms had none and were chased by hand;
-    // 0034 gave them dates so they are chased like the rest.
+    // 0034 gave them dates so they are chased like the rest. FNF alone has
+    // none: it is not chased, and a leaver who joined in 2023 must not go
+    // straight into the overdue reminder the moment it is marked required.
     const withoutDeadline = types
       .filter((type) => type.deadlineValue === null)
       .map((type) => type.documentCode)
-    expect(withoutDeadline).toEqual([])
+    expect(withoutDeadline).toEqual(['FNF'])
 
     const days = (code: string) => `${byCode(code).deadlineValue} ${byCode(code).deadlineUnit}`
     for (const code of ['APPOINTMENT_LETTER', 'BIO_DATA', 'AADHAAR_CARD', 'PAN_CARD']) {

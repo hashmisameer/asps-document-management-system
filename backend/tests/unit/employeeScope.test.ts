@@ -50,7 +50,7 @@ const employees = await import('../../src/repositories/employee.repository.js')
 const documents = await import('../../src/repositories/employeeDocument.repository.js')
 const reports = await import('../../src/repositories/report.repository.js')
 const reminders = await import('../../src/repositories/reminder.repository.js')
-const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE, EFFECTIVE_LEFT } = await import(
+const { COUNTABLE_DOCUMENT, COUNTABLE_EMPLOYEE, EFFECTIVE_LEFT, LISTED_DOCUMENT } = await import(
   '../../src/repositories/employeeScope.js'
 )
 
@@ -156,14 +156,20 @@ describe('the document tiles and the documents list', () => {
     }
   })
 
-  it('leaves out the people the dashboard leaves out', async () => {
+  it('leaves out the people the dashboard leaves out - but for a leaver\'s FNF', async () => {
     // Somebody who has left cannot bring a document in, so their outstanding
     // paperwork is not counted on the dashboard - and must not appear in the
-    // list either, or the list would be longer than the tile.
-    const list = await documentListSql('pending')
+    // list either, or the list would be longer than the tile. The one
+    // exception is a type collected after leaving (FNF), which only a leaver
+    // has; the tiles that open this list are overdue and due-soon, which FNF
+    // never is, so they still agree.
+    const list = squash(await documentListSql('pending'))
 
     expect(list).toContain('e.IsActive = 1')
-    expect(list).toContain('(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today)')
+    expect(list).toContain(
+      "(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today OR d.DocumentTypeId IN" +
+        " (SELECT DocumentTypeId FROM dbo.DocumentTypes WHERE DocumentCode IN ('FNF')))",
+    )
     expect(list).toContain('d.IsActive = 1')
   })
 
@@ -336,6 +342,12 @@ describe('one definition of who is countable', () => {
    * the shared fragment. A new query that forgets fails here rather than in the
    * office, six weeks later, when somebody asks why a man who left in March is
    * on the chase list.
+   *
+   * Two scopes, each named here, so a reader that moves from one to the other
+   * fails rather than slips. CHASING documents reads COUNTABLE_DOCUMENT and
+   * never shows a leaver. SHOWING documents reads LISTED_DOCUMENT, which shows
+   * a leaver's document only when its type is collected after leaving (FNF) -
+   * see employeeScope.ts for why the two groups differ.
    */
   const readers: [string, () => Promise<unknown>, string][] = [
     ['the dashboard', () => dashboard.getSummary(7), COUNTABLE_EMPLOYEE],
@@ -343,9 +355,9 @@ describe('one definition of who is countable', () => {
       'the documents list',
       () =>
         documents.listAll({ page: 1, pageSize: 25, sortBy: 'dueDate', sortDir: 'asc', state: 'all' }),
-      COUNTABLE_DOCUMENT,
+      LISTED_DOCUMENT,
     ],
-    ['the by-document report', () => reports.byDocumentType(), COUNTABLE_DOCUMENT],
+    ['the by-document report', () => reports.byDocumentType(), LISTED_DOCUMENT],
     [
       'the outstanding report',
       () => reports.outstanding({ onlyOverdue: false, onlyMandatory: false }),
@@ -363,7 +375,7 @@ describe('one definition of who is countable', () => {
           page: 1,
           pageSize: 25,
         }),
-      COUNTABLE_DOCUMENT,
+      LISTED_DOCUMENT,
     ],
     [
       'the printed chase list',
@@ -375,13 +387,17 @@ describe('one definition of who is countable', () => {
           sortBy: 'daysOverdue',
           sortDir: 'asc',
         }),
-      COUNTABLE_DOCUMENT,
+      LISTED_DOCUMENT,
     ],
     ["the daily digest's spreadsheet", () => reminders.findPendingDocuments(), COUNTABLE_DOCUMENT],
   ]
 
   for (const [name, run, fragment] of readers) {
-    it(`${name} counts only employees who are here`, async () => {
+    const scope =
+      fragment === LISTED_DOCUMENT
+        ? 'shows employees who are here, and a leaver\'s FNF'
+        : 'counts only employees who are here'
+    it(`${name} ${scope}`, async () => {
       await run().catch(() => undefined)
 
       expect(lastSql(), name).toContain(squash(fragment))
@@ -554,5 +570,20 @@ describe('documents nobody is asked for', () => {
       await run().catch(() => undefined)
       expect(lastSql(), name).toContain(NOT_REQUIRED)
     }
+  })
+})
+
+describe('the scope that shows documents', () => {
+  it('is the chasing scope with one exception: a type collected after leaving', () => {
+    // Everything COUNTABLE_DOCUMENT requires, and the last-working-day clause
+    // widened by the FNF type alone - not by anything a caller sends.
+    const listed = squash(LISTED_DOCUMENT)
+    expect(listed).toContain('d.IsActive = 1 AND d.NotRequiredAt IS NULL AND e.IsActive = 1')
+    expect(listed).toContain(
+      "(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today OR d.DocumentTypeId IN" +
+        " (SELECT DocumentTypeId FROM dbo.DocumentTypes WHERE DocumentCode IN ('FNF')))",
+    )
+    // The chasing scope still leaves every leaver out.
+    expect(squash(COUNTABLE_DOCUMENT)).not.toContain('FNF')
   })
 })

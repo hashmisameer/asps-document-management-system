@@ -102,6 +102,8 @@ function documentType(overrides: Partial<DocumentType> = {}): DocumentType {
     isActive: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,
+    startsNotRequired: false,
+    collectedAfterLeaving: false,
     deadlineValue: 10,
     deadlineUnit: 'DAY',
     sortOrder: 10,
@@ -169,6 +171,7 @@ function checklistRecord(overrides: Partial<EmployeeDocumentRecord> = {}): Emplo
     isMandatory: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,
+    collectedAfterLeaving: false,
     originalFileName: null,
     fileSizeBytes: null,
     mimeType: null,
@@ -233,12 +236,36 @@ describe('create', () => {
     expect(db.createChecklist).toHaveBeenCalledWith(
       42,
       [
-        { documentTypeId: 1, dueDate: '2026-09-11' },
-        { documentTypeId: 2, dueDate: '2026-10-01' },
-        { documentTypeId: 3, dueDate: null },
+        { documentTypeId: 1, dueDate: '2026-09-11', notRequired: false },
+        { documentTypeId: 2, dueDate: '2026-10-01', notRequired: false },
+        { documentTypeId: 3, dueDate: null, notRequired: false },
       ],
       expect.anything(),
     )
+  })
+
+  it('creates a type that starts set aside already set aside - FNF on every new checklist', async () => {
+    db.listActiveTypes.mockResolvedValue([
+      documentType(),
+      documentType({
+        documentTypeId: 11,
+        documentCode: 'FNF',
+        deadlineValue: null,
+        deadlineUnit: null,
+        startsNotRequired: true,
+        collectedAfterLeaving: true,
+      }),
+    ])
+
+    await employeeService.create(input, admin, context)
+
+    // Twenty to thirty employees a day: without this every new checklist would
+    // show FNF outstanding. No deadline, so marking it required later never
+    // makes it overdue.
+    expect(db.createChecklist.mock.calls[0]?.[1]).toEqual([
+      { documentTypeId: 1, dueDate: '2026-09-11', notRequired: false },
+      { documentTypeId: 11, dueDate: null, notRequired: true },
+    ])
   })
 
   it('reads the document types inside the same transaction as the insert', async () => {

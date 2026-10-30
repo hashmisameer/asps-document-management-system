@@ -90,6 +90,7 @@ function document(
     isMandatory: true,
     requiresSignature: false,
     canBeMarkedNotRequired: false,
+    collectedAfterLeaving: false,
     originalFileName: null,
     fileSizeBytes: null,
     mimeType: null,

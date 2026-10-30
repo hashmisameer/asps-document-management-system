@@ -1,5 +1,5 @@
 import { createRequest, sql } from '../database/pool.js'
-import { COUNTABLE_DOCUMENT } from './employeeScope.js'
+import { COUNTABLE_DOCUMENT, LISTED_DOCUMENT } from './employeeScope.js'
 import {
   todayDateOnly,
   parseDateOnly,
@@ -21,6 +21,11 @@ import {
  * Both count ACTIVE employees and active checklist rows only. An archived
  * employee has left; their outstanding paperwork is a number nobody can ever
  * bring down, and leaving it in a report makes every total permanently wrong.
+ *
+ * The by-document table and each type's page under it include a leaver's
+ * document of a type collected after leaving (FNF), and must agree with each
+ * other; the who-is-outstanding table does not, because it is a chase list.
+ * See LISTED_DOCUMENT.
  */
 
 const MAX_ROWS = 1000
@@ -57,7 +62,7 @@ export async function byDocumentType(): Promise<DocumentTypeReportRow[]> {
       FROM    dbo.EmployeeDocuments AS d
       INNER JOIN dbo.Employees AS e ON e.EmployeeId = d.EmployeeId
       INNER JOIN dbo.DocumentTypes AS dt ON dt.DocumentTypeId = d.DocumentTypeId
-      WHERE   ${COUNTABLE_DOCUMENT}
+      WHERE   ${LISTED_DOCUMENT}
       GROUP BY dt.DocumentTypeId, dt.DocumentName, dt.IsMandatory, dt.SortOrder
       ORDER BY dt.SortOrder
     `)
@@ -352,9 +357,11 @@ function documentEmployeeShape(
   filter: DocumentEmployeeFilter,
 ): { where: string; orderBy: string } {
   const conditions = [
-    // Only the people who are still here. Somebody who has left cannot bring a
-    // document in, and listing them gives HR a name they cannot act on.
-    COUNTABLE_DOCUMENT,
+    // Only the people who are still here - somebody who has left cannot bring
+    // a document in - except for a type collected after leaving (FNF), whose
+    // people have all left. The same scope as the by-document row this page
+    // is opened from, so the two agree.
+    LISTED_DOCUMENT,
     'd.DocumentTypeId = @documentTypeId',
   ]
 

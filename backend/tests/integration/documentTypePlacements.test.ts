@@ -299,7 +299,7 @@ describe('placement templates, in the database', () => {
     expect(byCode.GRATUITY_FORM).toMatchObject({ status: 'unset', variants: [] })
     expect(byCode.AADHAAR_CARD).toMatchObject({ status: 'scanned', variants: [] })
     expect(byCode.PAN_CARD).toMatchObject({ status: 'scanned' })
-    expect(summaries).toHaveLength(9)
+    expect(summaries).toHaveLength(10)
   })
 
   it('keeps whether MMC fills a box, and has it off when nobody said', async () => {

@@ -1,4 +1,9 @@
-import { IDENTITY_CARD_DOCUMENT_CODES, parseDateOnly, todayDateOnly } from '@asps-dms/shared'
+import {
+  COLLECTED_AFTER_LEAVING_CODES,
+  IDENTITY_CARD_DOCUMENT_CODES,
+  parseDateOnly,
+  todayDateOnly,
+} from '@asps-dms/shared'
 import { sql } from '../database/pool.js'
 
 /**
@@ -96,6 +101,47 @@ export const COUNTABLE_DOCUMENT = `d.IsActive = 1 AND ${EXPECTED_DOCUMENT} AND $
 export const IDENTITY_CARD_CODES_SQL = IDENTITY_CARD_DOCUMENT_CODES.map(
   (code) => `'${code}'`,
 ).join(', ')
+
+/**
+ * A document of a type collected from somebody who has LEFT: FNF.
+ *
+ * By type id through a subquery on the code, so a query that does not join
+ * dbo.DocumentTypes can still ask it. The codes come from the shared constant,
+ * never from a caller.
+ */
+const COLLECTED_AFTER_LEAVING_TYPE =
+  COLLECTED_AFTER_LEAVING_CODES.length === 0
+    ? '1 = 0'
+    : `d.DocumentTypeId IN (SELECT DocumentTypeId FROM dbo.DocumentTypes
+                            WHERE DocumentCode IN (${COLLECTED_AFTER_LEAVING_CODES.map((code) => `'${code}'`).join(', ')}))`
+
+/**
+ * The document rows the lists that SHOW documents hold: COUNTABLE_DOCUMENT,
+ * and a leaver's row too when its type is collected after leaving.
+ *
+ * TWO GROUPS, ON PURPOSE - this is not one of them forgetting the other.
+ *
+ *   SHOWING documents - the documents list, the reports page's By-document
+ *   table, and each type's own page under it - read THIS. FNF exists only for
+ *   people who have left; a list that dropped leavers would never show one,
+ *   however many arrived. And the By-document row and the page it opens must
+ *   read the same scope, or the row says one number and the page shows
+ *   another: the 'Missing an ID card' bug (03212bf) again, with different
+ *   numbers.
+ *
+ *   CHASING documents - the dashboard tiles, overdue, the daily reminder and
+ *   its spreadsheet, the outstanding-by-employee report - keep reading
+ *   COUNTABLE_DOCUMENT and leave every leaver out, FNF included. Chasing
+ *   somebody who has gone is pointless, and FNF has no deadline anyway, so it
+ *   could never be overdue or due soon. The two tiles that open the documents
+ *   list are overdue and due-soon, which an FNF row cannot be, so this
+ *   difference cannot make a tile and the list it opens disagree.
+ *
+ * A set-aside FNF row is out of both: EXPECTED_DOCUMENT is in each.
+ */
+export const LISTED_DOCUMENT =
+  `d.IsActive = 1 AND ${EXPECTED_DOCUMENT} AND e.IsActive = 1` +
+  ` AND (e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today OR ${COLLECTED_AFTER_LEAVING_TYPE})`
 
 /**
  * Binds the `@today` every fragment above reads.

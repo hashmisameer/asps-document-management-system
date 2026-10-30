@@ -57,6 +57,11 @@
 
    DeadlineValue / DeadlineUnit are the DEFAULT deadline applied to new joiners
    for this document type. NULL means the document has no submission deadline.
+
+   Full and Final Settlement was added on 2026-10-30 (migration 0041): the one
+   document with no deadline, set aside on every checklist until it arrives.
+   0041 also sets the flags this MERGE does not write, CanBeMarkedNotRequired
+   among them.
    ============================================================================= */
 
 SET NOCOUNT ON;
@@ -97,7 +102,12 @@ USING (VALUES
     -- Six months from joining, not days: confirmation follows the probation
     -- period. A short target month is clamped - 31 August is due 28 February.
     ('CONFIRMATION_LETTER', N'Confirmation Letter', 1, 1, 6, 'MONTH', 100,
-     N'EmployeeName,EmployeeCode,JoiningDate')
+     N'EmployeeName,EmployeeCode,JoiningDate'),
+
+    -- Full and Final Settlement (0041): a leaver's document, set aside on
+    -- every checklist until it arrives. No deadline, no signature, no check.
+    ('FNF',                N'Full and Final Settlement', 0, 0, NULL, NULL, 110,
+     NULL)
 ) AS source (DocumentCode, DocumentName, IsMandatory, RequiresSignature,
              DeadlineValue, DeadlineUnit, SortOrder, RequiredFields)
     ON target.DocumentCode = source.DocumentCode

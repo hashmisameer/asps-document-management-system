@@ -114,11 +114,14 @@ describe('what the printed list selects', () => {
     expect(captured.inputs.get('documentTypeId')).toBe(5)
   })
 
-  it('never lists somebody who has left', async () => {
+  it('never lists somebody who has left - but for a type collected after leaving', async () => {
     await allEmployeesForDocumentType({ ...FILTERS, documentTypeId: 5 })
 
-    expect(captured.sql).toContain(
-      '(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today)',
+    // The same scope as the by-document row the page is opened from: a
+    // leaver's FNF shows, nobody else who has left does.
+    expect(captured.sql.replace(/\s+/g, ' ')).toContain(
+      "(e.LastWorkingDate IS NULL OR e.LastWorkingDate >= @today OR d.DocumentTypeId IN" +
+        " (SELECT DocumentTypeId FROM dbo.DocumentTypes WHERE DocumentCode IN ('FNF')))",
     )
   })
 

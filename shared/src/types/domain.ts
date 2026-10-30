@@ -277,6 +277,10 @@ export interface DocumentType {
    * an UPDATE rather than a deployment.
    */
   canBeMarkedNotRequired: boolean
+  /** Created set aside on a new checklist (FNF). From the checklist; see documentChecklist.ts. */
+  startsNotRequired: boolean
+  /** Collected from somebody who has left (FNF). From the checklist; see documentChecklist.ts. */
+  collectedAfterLeaving: boolean
   createdAt: string
   updatedAt: string
 }
@@ -362,6 +366,11 @@ export interface EmployeeDocument {
    * courtesy, not a control.
    */
   canBeMarkedNotRequired: boolean
+  /**
+   * A document collected from somebody who has left (FNF): the checklist still
+   * offers upload and 'Mark as required' on it after the last working day.
+   */
+  collectedAfterLeaving: boolean
 
   originalFileName: string | null
   fileSizeBytes: number | null

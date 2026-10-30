@@ -125,6 +125,10 @@ export async function create(
         documentTypes.map((type) => ({
           documentTypeId: type.documentTypeId,
           dueDate: computeDueDate(input.joiningDate, type.deadlineValue, type.deadlineUnit),
+          // FNF: set aside on every new checklist until HR marks it required
+          // for the one employee whose settlement arrives. The only reader of
+          // startsNotRequired - no count looks at it.
+          notRequired: type.startsNotRequired,
         })),
         tx,
       )

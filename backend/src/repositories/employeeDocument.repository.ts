@@ -1,6 +1,7 @@
 import {
   DEADLINE_UNITS,
   DEFAULT_DUE_SOON_THRESHOLD_DAYS,
+  checklistRuleFor,
   DOCUMENT_STATUS,
   SIGNATURE_STATUS,
   formatDateOnly,
@@ -23,7 +24,7 @@ import {
 } from '@asps-dms/shared'
 import { createRequest, sql } from '../database/pool.js'
 import { escapeLike } from '../utils/sqlLike.js'
-import { COUNTABLE_DOCUMENT } from './employeeScope.js'
+import { LISTED_DOCUMENT } from './employeeScope.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -247,6 +248,7 @@ function toRecord(row: EmployeeDocumentRow): EmployeeDocumentRecord {
     isMandatory: row.IsMandatory,
     requiresSignature: row.RequiresSignature,
     canBeMarkedNotRequired: row.CanBeMarkedNotRequired,
+    collectedAfterLeaving: checklistRuleFor(row.DocumentCode)?.collectedAfterLeaving ?? false,
     originalFileName: row.OriginalFileName,
     // BIGINT arrives as a string from tedious when it exceeds the safe integer
     // range; a file size never does, but Number() keeps the type honest.
@@ -276,6 +278,8 @@ export interface ChecklistItem {
   documentTypeId: number
   /** Computed by the shared deadline rules, or null when the type has none. */
   dueDate: string | null
+  /** Created set aside, by the checklist rather than a person (FNF). */
+  notRequired?: boolean
 }
 
 /**
@@ -310,14 +314,20 @@ export async function createChecklist(
       sql.Date,
       item.dueDate === null ? null : parseDateOnly(item.dueDate),
     )
-    return `(@employeeId, @typeId${index}, @status, @signatureStatus, @dueDate${index})`
+    // A type that starts set aside (FNF) is set aside by the checklist, so the
+    // row records the moment and no person: nobody looked at this employee and
+    // decided. NotRequiredBy stays NULL - which 0041 allows for exactly this.
+    const setAside = item.notRequired ? 'SYSUTCDATETIME()' : 'NULL'
+    return `(@employeeId, @typeId${index}, @status, @signatureStatus, @dueDate${index}, ${setAside})`
   })
 
+  // Literals only: the one value that is not a bound parameter is one of two
+  // fixed SQL words chosen above.
   const VALUES_CLAUSE = tuples.join(', ')
 
   const result = await request.query(`
       INSERT INTO dbo.EmployeeDocuments
-          (EmployeeId, DocumentTypeId, Status, SignatureStatus, DueDate)
+          (EmployeeId, DocumentTypeId, Status, SignatureStatus, DueDate, NotRequiredAt)
       VALUES ${VALUES_CLAUSE}`)
 
   return result.rowsAffected[0] ?? 0
@@ -862,6 +872,13 @@ export async function setNotRequired(
   notRequired: boolean,
   actorId: number,
 ): Promise<boolean> {
+  // A person who sets a document aside is ALWAYS recorded. The database no
+  // longer insists on it (0041 lets a row set aside by the checklist carry no
+  // name), so this is where it is insisted on: without an actor there is
+  // nothing to write, and the write does not happen.
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw new Error('Setting a document aside needs the person doing it.')
+  }
   const request = await createRequest()
   const result = await request
     .input('documentId', sql.Int, documentId)
@@ -1252,6 +1269,8 @@ interface DocumentListRow {
  *
  * Counted against ACTIVE employees who have not left, exactly as the dashboard
  * counts them: paperwork nobody can bring in is not outstanding, it is over.
+ * The one exception is a type collected after leaving (FNF) - see
+ * LISTED_DOCUMENT for why this list shows a leaver's and the dashboard does not.
  */
 export async function listAll(
   query: DocumentListQuery,
@@ -1263,10 +1282,10 @@ export async function listAll(
     .input('offset', sql.Int, (query.page - 1) * query.pageSize)
     .input('pageSize', sql.Int, query.pageSize)
 
-  // Nobody who has left, and nothing on an archived record: the same scope
-  // every count on the dashboard uses, which is what makes a tile and this
-  // list agree on the number.
-  const conditions = [COUNTABLE_DOCUMENT]
+  // Nobody who has left, and nothing on an archived record - except a leaver's
+  // FNF once it is marked required. The two tiles that open this list are
+  // overdue and due-soon, which FNF never is, so they still agree with it.
+  const conditions = [LISTED_DOCUMENT]
 
   if (query.state !== 'all') conditions.push(DOCUMENT_STATE_SQL[query.state])
 

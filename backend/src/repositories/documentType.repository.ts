@@ -120,6 +120,8 @@ function toDocumentType(row: DocumentTypeRow): DocumentType {
     refuseOnCheckFailure: row.RefuseOnCheckFailure,
     requiredAtCreation: row.RequiredAtCreation,
     canBeMarkedNotRequired: row.CanBeMarkedNotRequired,
+    startsNotRequired: rule?.startsNotRequired ?? false,
+    collectedAfterLeaving: rule?.collectedAfterLeaving ?? false,
     createdAt: row.CreatedAt.toISOString(),
     updatedAt: row.UpdatedAt.toISOString(),
   }
