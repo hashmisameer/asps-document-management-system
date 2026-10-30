@@ -272,7 +272,7 @@ export type PreviewIdentityInput = z.infer<typeof previewIdentitySchema>
  * Paged on the server: 568 employees against ten document types is not a list
  * to send whole so a screen can show twenty-five of it.
  */
-export const documentEmployeesQuerySchema = z.object({
+const documentEmployeesShape = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   /**
@@ -284,12 +284,40 @@ export const documentEmployeesQuerySchema = z.object({
   outstandingOnly: booleanQueryParam.default(true),
   onlyOverdue: booleanQueryParam.default(false),
   department: z.string().trim().max(100).optional(),
+  /**
+   * When the document was UPLOADED, as office days, both ends included. The
+   * question it answers is which documents ARRIVED - so a row with no file
+   * has no upload date and cannot match, and setting a range lists sent-in
+   * rows whatever outstandingOnly and onlyOverdue say (the server enforces
+   * it, so the list, the PDF and the spreadsheet agree). Offered on FNF's
+   * page; accepted for any type.
+   */
+  uploadedFrom: dateOnlySchema.optional(),
+  uploadedTo: dateOnlySchema.optional(),
   sortBy: z
-    .enum(['employeeName', 'employeeCode', 'department', 'designation', 'dueDate', 'daysOverdue'])
+    .enum([
+      'employeeName',
+      'employeeCode',
+      'department',
+      'designation',
+      'dueDate',
+      'daysOverdue',
+      'uploadedAt',
+    ])
     .default('daysOverdue'),
   /** Oldest overdue first: the person waited on longest is read first. */
   sortDir: z.enum(['asc', 'desc']).default('asc'),
 })
+
+/** A range that ends before it starts matches nothing, and is a typing slip. */
+function fromBeforeTo<T extends { uploadedFrom?: string | undefined; uploadedTo?: string | undefined }>(
+  value: T,
+): boolean {
+  return !value.uploadedFrom || !value.uploadedTo || value.uploadedFrom <= value.uploadedTo
+}
+const RANGE_ORDER = { message: "'Received from' is after 'to'", path: ['uploadedTo'] }
+
+export const documentEmployeesQuerySchema = documentEmployeesShape.refine(fromBeforeTo, RANGE_ORDER)
 
 export type DocumentEmployeesQuery = z.infer<typeof documentEmployeesQuerySchema>
 
@@ -302,9 +330,11 @@ export type DocumentEmployeesQuery = z.infer<typeof documentEmployeesQuerySchema
  * it hands a department head a sheet that silently leaves the other sixteen
  * people off it.
  */
-export const printDocumentEmployeesQuerySchema = documentEmployeesQuerySchema.omit({
-  page: true,
-  pageSize: true,
-})
+export const printDocumentEmployeesQuerySchema = documentEmployeesShape
+  .omit({
+    page: true,
+    pageSize: true,
+  })
+  .refine(fromBeforeTo, RANGE_ORDER)
 
 export type PrintDocumentEmployeesQuery = z.infer<typeof printDocumentEmployeesQuerySchema>

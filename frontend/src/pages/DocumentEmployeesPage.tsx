@@ -8,7 +8,9 @@ import { Select } from '../components/ui/Select.js'
 import { ApiError } from '../lib/apiError.js'
 import { downloadXlsx } from '../lib/xlsx.js'
 import { saveBlob } from '../lib/download.js'
-import { formatDate } from '../lib/format.js'
+import { FNF_DOCUMENT_CODE } from '@asps-dms/shared'
+import { DateField } from '../components/ui/DateField.js'
+import { formatDate, formatDateTime } from '../lib/format.js'
 import { employeeKeys, fetchFacets } from '../features/employees/api.js'
 import { documentTypeKeys, listDocumentTypes } from '../features/employees/api.js'
 import {
@@ -45,25 +47,40 @@ export function DocumentEmployeesPage() {
   const [outstandingOnly, setOutstandingOnly] = useState(true)
   const [onlyOverdue, setOnlyOverdue] = useState(false)
   const [department, setDepartment] = useState('')
+  // When the document was uploaded, as office days. FNF's page only - see below.
+  const [uploadedFrom, setUploadedFrom] = useState('')
+  const [uploadedTo, setUploadedTo] = useState('')
   const [sortBy, setSortBy] = useState<DocumentEmployeeSortKey>('daysOverdue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [page, setPage] = useState(1)
-
-  const filters: DocumentEmployeeFilters = {
-    outstandingOnly,
-    onlyOverdue,
-    ...(department ? { department } : {}),
-    sortBy,
-    sortDir,
-    page,
-    pageSize: PAGE_SIZE,
-  }
 
   const types = useQuery({
     queryKey: documentTypeKeys.all,
     queryFn: () => listDocumentTypes(),
     staleTime: 5 * 60 * 1000,
   })
+  const type = types.data?.find((t) => t.documentTypeId === documentTypeId)
+
+  // The upload-date filter is FNF's alone for now: 'which FNF documents were
+  // put in yesterday'. Known from the type's code, never its name.
+  const filtersByUpload = type?.documentCode === FNF_DOCUMENT_CODE
+  // A range lists what ARRIVED, so it brings the sent-in rows with it and
+  // sets the 'still to come' filters aside. The server applies the same rule;
+  // sending it from here as well keeps the screen honest about what it shows.
+  const range = filtersByUpload && Boolean(uploadedFrom || uploadedTo)
+
+  const filters: DocumentEmployeeFilters = {
+    outstandingOnly: range ? false : outstandingOnly,
+    onlyOverdue: range ? false : onlyOverdue,
+    ...(department ? { department } : {}),
+    ...(range && uploadedFrom ? { uploadedFrom } : {}),
+    ...(range && uploadedTo ? { uploadedTo } : {}),
+    sortBy,
+    sortDir,
+    page,
+    pageSize: PAGE_SIZE,
+  }
+
   const facets = useQuery({ queryKey: employeeKeys.facets(), queryFn: fetchFacets })
 
   const list = useQuery({
@@ -86,7 +103,6 @@ export function DocumentEmployeesPage() {
     onSuccess: ({ blob, fileName }) => saveBlob(blob, fileName),
   })
 
-  const type = types.data?.find((t) => t.documentTypeId === documentTypeId)
   // A document nobody is obliged to send cannot be late. Its rows still list,
   // because the office asked to see them - they simply never read as overdue.
   const tracksOverdue = type?.isMandatory ?? true
@@ -122,6 +138,7 @@ export function DocumentEmployeesPage() {
         { header: 'Designation', value: (r) => r.designation ?? '', width: 20 },
         { header: 'Status', value: (r) => (tracksOverdue ? r.state : r.state === 'Received' ? 'Received' : 'Pending') },
         { header: 'Due', value: (r) => (r.dueDate ? formatDate(r.dueDate) : ''), width: 12 },
+        { header: 'Received on', value: (r) => (r.receivedAt ? formatDateTime(r.receivedAt) : ''), width: 18 },
         {
           header: 'Days overdue',
           value: (r) => (tracksOverdue && r.daysOverdue !== null && r.daysOverdue > 0 ? r.daysOverdue : null),
@@ -165,8 +182,8 @@ export function DocumentEmployeesPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             {total} {total === 1 ? 'employee' : 'employees'}
-            {outstandingOnly ? ' outstanding' : ''}
-            {onlyOverdue ? ', overdue only' : ''}
+            {range ? ' - received in the dates chosen' : outstandingOnly ? ' outstanding' : ''}
+            {!range && onlyOverdue ? ', overdue only' : ''}
           </p>
         </div>
 
@@ -209,29 +226,64 @@ export function DocumentEmployeesPage() {
           />
         </div>
 
-        <label className="flex items-center gap-2 py-2 text-sm text-slate-700">
+        {filtersByUpload ? (
+          <>
+            <div className="w-40">
+              <DateField
+                label="Received from"
+                value={uploadedFrom}
+                onChange={(event) => {
+                  setUploadedFrom(event.target.value)
+                  setPage(1)
+                }}
+              />
+            </div>
+            <div className="w-40">
+              <DateField
+                label="to"
+                value={uploadedTo}
+                onChange={(event) => {
+                  setUploadedTo(event.target.value)
+                  setPage(1)
+                }}
+              />
+            </div>
+          </>
+        ) : null}
+
+        <label
+          className="flex items-center gap-2 py-2 text-sm text-slate-700"
+          // Said rather than left to be guessed: a box that will not move and
+          // does not say why reads as a broken page.
+          title={range ? 'A date range shows documents that arrived, so it includes them' : undefined}
+        >
           <input
             type="checkbox"
-            checked={!outstandingOnly}
+            checked={range || !outstandingOnly}
+            disabled={range}
             onChange={(event) => {
               setOutstandingOnly(!event.target.checked)
               setPage(1)
             }}
-            className="h-4 w-4 rounded border-slate-300"
+            className="h-4 w-4 rounded border-slate-300 disabled:opacity-60"
           />
           Include employees who have sent it
         </label>
 
         {tracksOverdue ? (
-          <label className="flex items-center gap-2 py-2 text-sm text-slate-700">
+          <label
+            className="flex items-center gap-2 py-2 text-sm text-slate-700"
+            title={range ? 'A date range shows documents that arrived, which are never overdue' : undefined}
+          >
             <input
               type="checkbox"
-              checked={onlyOverdue}
+              checked={!range && onlyOverdue}
+              disabled={range}
               onChange={(event) => {
                 setOnlyOverdue(event.target.checked)
                 setPage(1)
               }}
-              className="h-4 w-4 rounded border-slate-300"
+              className="h-4 w-4 rounded border-slate-300 disabled:opacity-60"
             />
             Overdue only
           </label>
@@ -271,6 +323,7 @@ export function DocumentEmployeesPage() {
               <SortableHeader label="Designation" sortKey="designation" active={sortBy} dir={sortDir} onSort={sortOn} />
               <th scope="col" className="px-4 py-2 font-medium">Status</th>
               <SortableHeader label="Due" sortKey="dueDate" active={sortBy} dir={sortDir} onSort={sortOn} />
+              <SortableHeader label="Received on" sortKey="uploadedAt" active={sortBy} dir={sortDir} onSort={sortOn} />
               {tracksOverdue ? (
                 <SortableHeader
                   label="Days overdue"
@@ -318,6 +371,9 @@ export function DocumentEmployeesPage() {
                 <td className="px-4 py-2 text-slate-700">
                   {row.dueDate ? formatDate(row.dueDate) : '—'}
                 </td>
+                <td className="px-4 py-2 whitespace-nowrap text-slate-700">
+                  {row.receivedAt ? formatDateTime(row.receivedAt) : '—'}
+                </td>
                 {tracksOverdue ? (
                   <td className="px-4 py-2 text-right tabular-nums text-slate-700">
                     {row.daysOverdue !== null && row.daysOverdue > 0 ? row.daysOverdue : '—'}
@@ -328,7 +384,7 @@ export function DocumentEmployeesPage() {
 
             {list.data && list.data.rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
                   Nobody matches these filters.
                 </td>
               </tr>
@@ -336,7 +392,7 @@ export function DocumentEmployeesPage() {
 
             {list.isLoading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
                   Loading...
                 </td>
               </tr>

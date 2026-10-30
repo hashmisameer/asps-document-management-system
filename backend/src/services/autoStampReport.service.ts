@@ -7,6 +7,7 @@ import {
   type StampOutcome,
 } from '@asps-dms/shared'
 import type { StampDecisionReportRow } from '../repositories/stampDecision.repository.js'
+import { formatOfficeDateTime, officeDayStart } from '../utils/officeTime.js'
 import type { RedecideOutcome } from './autoStampRun.service.js'
 
 /**
@@ -34,24 +35,14 @@ export function parseSince(text: string, now: Date = new Date()): Date | null {
     return new Date(now.getTime() - amount * ms)
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(text.trim())) {
-    const at = new Date(`${text.trim()}T00:00:00`)
+    const at = officeDayStart(text.trim())
     return Number.isNaN(at.getTime()) ? null : at
   }
   return null
 }
 
-function pad(value: number): string {
-  return String(value).padStart(2, '0')
-}
-
 /** '18/09/2026 09:41', the office's own clock. */
-function when(iso: string): string {
-  const at = new Date(iso)
-  return (
-    `${pad(at.getDate())}/${pad(at.getMonth() + 1)}/${at.getFullYear()} ` +
-    `${pad(at.getHours())}:${pad(at.getMinutes())}`
-  )
-}
+const when = formatOfficeDateTime
 
 /** One decision's lines: the document, what was decided, and each box. */
 export function formatDecision(row: StampDecisionReportRow): string[] {

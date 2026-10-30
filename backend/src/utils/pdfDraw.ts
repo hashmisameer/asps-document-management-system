@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { formatOfficeDateTime } from './officeTime.js'
 
 /**
  * The drawing this system's printed pages are built from.
@@ -219,11 +220,7 @@ export function formatDate(dateOnly: string | null | undefined): string {
 
 /** The moment a sheet was produced, in the server's own time - the office's. */
 export function formatTimestamp(at: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0')
-  return (
-    `${pad(at.getDate())}/${pad(at.getMonth() + 1)}/${at.getFullYear()} ` +
-    `${pad(at.getHours())}:${pad(at.getMinutes())}`
-  )
+  return formatOfficeDateTime(at.toISOString())
 }
 
 /** 'YYYY-MM-DD' for a file name, from the printer's own calendar rather than UTC. */

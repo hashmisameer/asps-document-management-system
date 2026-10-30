@@ -4,6 +4,7 @@ import * as documentTypeRepository from '../repositories/documentType.repository
 import * as reportRepository from '../repositories/report.repository.js'
 import type { DocumentEmployeeRow } from '../repositories/report.repository.js'
 import { NotFoundError } from '../utils/errors.js'
+import { formatOfficeDateTime } from '../utils/officeTime.js'
 import {
   A4_LANDSCAPE,
   DASH,
@@ -52,6 +53,16 @@ export interface DocumentListReport {
   tracksOverdue: boolean
   rows: readonly DocumentEmployeeRow[]
   filters: PrintDocumentEmployeesQuery
+  /**
+   * A type collected after leaving (FNF): its list holds people who have
+   * left, and the sheet must not say 'Current employees only' over them.
+   */
+  includesLeavers?: boolean
+}
+
+/** Whether these filters set an upload-date range - which lists what arrived. */
+export function hasUploadRange(filters: PrintDocumentEmployeesQuery): boolean {
+  return Boolean(filters.uploadedFrom || filters.uploadedTo)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -99,8 +110,9 @@ export function summaryLine(report: DocumentListReport): string {
   const people = (count: number): string => `${count} ${count === 1 ? 'employee' : 'employees'}`
 
   // When employees who have already sent it are included, 'outstanding' would
-  // be the wrong word for the whole list, so the count says both.
-  const body = report.filters.outstandingOnly
+  // be the wrong word for the whole list, so the count says both. A date range
+  // always includes them (it lists what arrived).
+  const body = report.filters.outstandingOnly && !hasUploadRange(report.filters)
     ? `${people(outstanding)} outstanding`
     : `${people(rows.length)}, ${outstanding} outstanding`
 
@@ -113,18 +125,33 @@ export function summaryLine(report: DocumentListReport): string {
  * A list of 12 people looks exactly like a list of everybody, and a department
  * head who is not told this is only CUTTING will read it as the whole factory.
  */
-export function filterLine(filters: PrintDocumentEmployeesQuery): string {
+export function filterLine(
+  filters: PrintDocumentEmployeesQuery,
+  options: { includesLeavers?: boolean } = {},
+): string {
   const parts = [filters.department ? `Department: ${filters.department}` : 'All departments']
 
-  if (filters.onlyOverdue) parts.push('Overdue only')
+  // A range lists what ARRIVED in it, so it overrides the two 'still to come'
+  // filters - as the server applies it.
+  if (hasUploadRange(filters)) parts.push(`Received ${rangeWords(filters)}`)
+  else if (filters.onlyOverdue) parts.push('Overdue only')
   else if (filters.outstandingOnly) parts.push('Outstanding only')
   else parts.push('Including those who have sent it')
 
-  // Not a filter, but the same kind of fact about what this sheet is: it never
-  // holds anybody who has left.
-  parts.push('Current employees only')
+  // Not a filter, but the same kind of fact about what this sheet is: who it
+  // can hold. Nobody who has left - except on a type collected after leaving,
+  // whose people have all left.
+  parts.push(options.includesLeavers ? 'Including employees who have left' : 'Current employees only')
 
   return parts.join('  ·  ')
+}
+
+/** '29/10/2026 to 30/10/2026', 'from 29/10/2026', 'up to 30/10/2026'. */
+function rangeWords(filters: PrintDocumentEmployeesQuery): string {
+  const { uploadedFrom: from, uploadedTo: to } = filters
+  if (from && to) return from === to ? `on ${formatDate(from)}` : `${formatDate(from)} to ${formatDate(to)}`
+  if (from) return `from ${formatDate(from)}`
+  return `up to ${formatDate(to)}`
 }
 
 /** 'PF_Form_pending_2026-09-03.pdf'. */
@@ -133,7 +160,13 @@ export function listFileName(
   filters: PrintDocumentEmployeesQuery,
   generatedAt: Date,
 ): string {
-  const which = filters.onlyOverdue ? 'overdue' : filters.outstandingOnly ? 'pending' : 'all'
+  const which = hasUploadRange(filters)
+    ? 'received'
+    : filters.onlyOverdue
+      ? 'overdue'
+      : filters.outstandingOnly
+        ? 'pending'
+        : 'all'
   const stem = fileNamePart(documentName) || 'Document'
   return `${stem}_${which}_${fileNameDate(generatedAt)}.pdf`
 }
@@ -145,11 +178,14 @@ export function listFileName(
 /** Column widths, left to right. They add up to the landscape content width. */
 const COLUMNS = [
   { title: 'Employee ID', width: 88, align: 'left' },
-  { title: 'Name', width: 196, align: 'left' },
-  { title: 'Department', width: 136, align: 'left' },
-  { title: 'Designation', width: 146, align: 'left' },
+  { title: 'Name', width: 144, align: 'left' },
+  { title: 'Department', width: 112, align: 'left' },
+  { title: 'Designation', width: 126, align: 'left' },
   { title: 'Status', width: 66, align: 'left' },
   { title: 'Due date', width: 72, align: 'left' },
+  // Date and time, the office's clock: when the file on it now was uploaded.
+  // Wide enough for all of '29/10/2026 10:30' - narrower cut it to '10:...'.
+  { title: 'Received on', width: 96, align: 'left' },
   { title: 'Days', width: 65.89, align: 'right' },
 ] as const
 
@@ -226,7 +262,7 @@ function drawHeading(sheet: Sheet, report: DocumentListReport, meta: PrintMeta):
     font: sheet.fonts.bold,
     size: 11,
   })
-  draw(sheet.page, filterLine(report.filters), {
+  draw(sheet.page, filterLine(report.filters, { includesLeavers: report.includesLeavers ?? false }), {
     x: sheet.margin,
     y: top - 46,
     font: sheet.fonts.regular,
@@ -310,6 +346,10 @@ export async function renderDocumentList(
       { text: row.designation ?? DASH, font: sheet.fonts.regular },
       { text: status, font: emphasis },
       { text: formatDate(row.dueDate), font: sheet.fonts.regular },
+      {
+        text: row.receivedAt ? formatOfficeDateTime(row.receivedAt) : DASH,
+        font: sheet.fonts.regular,
+      },
       { text: rowDays(row, report.tracksOverdue), font: emphasis },
     ]
 
@@ -374,6 +414,7 @@ export async function printDocumentList(
       tracksOverdue: type.isMandatory,
       rows,
       filters,
+      includesLeavers: type.collectedAfterLeaving,
     },
     { generatedAt, generatedBy: actor.fullName },
   )

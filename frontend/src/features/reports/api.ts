@@ -100,6 +100,8 @@ export interface DocumentEmployeeRow {
   dueDate: string | null
   /** Positive when overdue, negative when still due, null with no deadline. */
   daysOverdue: number | null
+  /** When the file on it now was uploaded (ISO, UTC); null with no file. */
+  receivedAt: string | null
 }
 
 export type DocumentEmployeeSortKey =
@@ -109,11 +111,15 @@ export type DocumentEmployeeSortKey =
   | 'designation'
   | 'dueDate'
   | 'daysOverdue'
+  | 'uploadedAt'
 
 export interface DocumentEmployeeFilters {
   outstandingOnly?: boolean
   onlyOverdue?: boolean
   department?: string
+  /** Office days 'YYYY-MM-DD', both included: when the file was uploaded. */
+  uploadedFrom?: string
+  uploadedTo?: string
   sortBy?: DocumentEmployeeSortKey
   sortDir?: 'asc' | 'desc'
   page?: number

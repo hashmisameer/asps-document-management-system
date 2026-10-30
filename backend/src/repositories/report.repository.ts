@@ -1,6 +1,8 @@
 import { createRequest, sql } from '../database/pool.js'
 import { COUNTABLE_DOCUMENT, LISTED_DOCUMENT } from './employeeScope.js'
+import { officeDayStart } from '../utils/officeTime.js'
 import {
+  addDays,
   todayDateOnly,
   parseDateOnly,
   formatDateOnly,
@@ -303,6 +305,8 @@ export interface DocumentEmployeeRow {
   dueDate: string | null
   /** Positive when overdue, negative when still due, null with no deadline. */
   daysOverdue: number | null
+  /** When the file that is on it now was uploaded, UTC; null with no file. */
+  receivedAt: string | null
 }
 
 export const DOCUMENT_EMPLOYEE_SORT_KEYS = [
@@ -312,6 +316,7 @@ export const DOCUMENT_EMPLOYEE_SORT_KEYS = [
   'designation',
   'dueDate',
   'daysOverdue',
+  'uploadedAt',
 ] as const
 
 export type DocumentEmployeeSortKey = (typeof DOCUMENT_EMPLOYEE_SORT_KEYS)[number]
@@ -326,6 +331,7 @@ const DOCUMENT_EMPLOYEE_SORT_COLUMNS: Readonly<Record<DocumentEmployeeSortKey, s
   // The oldest overdue first is the default, and it is the same column read the
   // other way: a due date further in the past is more days overdue.
   daysOverdue: 'd.DueDate',
+  uploadedAt: 'd.UploadedAt',
 }
 
 /** What decides WHICH employees this list holds, and in what order. */
@@ -335,6 +341,9 @@ export interface DocumentEmployeeFilter {
   outstandingOnly: boolean
   onlyOverdue: boolean
   department?: string
+  /** Office days 'YYYY-MM-DD', both ends included: when the file was uploaded. */
+  uploadedFrom?: string
+  uploadedTo?: string
   sortBy: DocumentEmployeeSortKey
   sortDir: 'asc' | 'desc'
 }
@@ -365,9 +374,27 @@ function documentEmployeeShape(
     'd.DocumentTypeId = @documentTypeId',
   ]
 
-  if (filter.outstandingOnly) conditions.push('d.OriginalFilePath IS NULL')
-  if (filter.onlyOverdue) {
-    conditions.push('d.OriginalFilePath IS NULL AND d.DueDate IS NOT NULL AND d.DueDate < @today')
+  // A date range asks which documents ARRIVED. A row with no file has no
+  // upload date and cannot match, so the range lists sent-in rows and the two
+  // 'still to come' filters are set aside while it is set - here, on the
+  // server, so the list, the printed sheet and the spreadsheet all agree.
+  const range = Boolean(filter.uploadedFrom || filter.uploadedTo)
+  if (range) {
+    conditions.push('d.OriginalFilePath IS NOT NULL')
+    if (filter.uploadedFrom) {
+      conditions.push('d.UploadedAt >= @uploadedFrom')
+      request.input('uploadedFrom', sql.DateTime2, officeDayStart(filter.uploadedFrom))
+    }
+    if (filter.uploadedTo) {
+      // Up to the start of the day after: the whole of the last office day.
+      conditions.push('d.UploadedAt < @uploadedBefore')
+      request.input('uploadedBefore', sql.DateTime2, officeDayStart(addDays(filter.uploadedTo, 1)))
+    }
+  } else {
+    if (filter.outstandingOnly) conditions.push('d.OriginalFilePath IS NULL')
+    if (filter.onlyOverdue) {
+      conditions.push('d.OriginalFilePath IS NULL AND d.DueDate IS NOT NULL AND d.DueDate < @today')
+    }
   }
   if (filter.department) {
     conditions.push('e.Department = @department')
@@ -394,6 +421,7 @@ interface DocumentEmployeeRecord {
   HasFile: number
   DueDate: Date | null
   DaysOverdue: number | null
+  UploadedAt: Date | null
 }
 
 /** The columns both queries select. Written once so the two cannot drift apart. */
@@ -402,7 +430,8 @@ const DOCUMENT_EMPLOYEE_COLUMNS = `
             CASE WHEN d.OriginalFilePath IS NULL THEN 0 ELSE 1 END AS HasFile,
             d.DueDate,
             CASE WHEN d.DueDate IS NULL OR d.OriginalFilePath IS NOT NULL THEN NULL
-                 ELSE DATEDIFF(DAY, d.DueDate, @today) END AS DaysOverdue`
+                 ELSE DATEDIFF(DAY, d.DueDate, @today) END AS DaysOverdue,
+            CASE WHEN d.OriginalFilePath IS NULL THEN NULL ELSE d.UploadedAt END AS UploadedAt`
 
 function toDocumentEmployeeRow(row: DocumentEmployeeRecord): DocumentEmployeeRow {
   return {
@@ -419,6 +448,7 @@ function toDocumentEmployeeRow(row: DocumentEmployeeRecord): DocumentEmployeeRow
           : ('Pending' as const),
     dueDate: row.DueDate === null ? null : formatDateOnly(row.DueDate),
     daysOverdue: row.DaysOverdue,
+    receivedAt: row.UploadedAt === null ? null : row.UploadedAt.toISOString(),
   }
 }
 

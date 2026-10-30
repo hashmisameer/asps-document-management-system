@@ -302,3 +302,103 @@ describe('Full and Final Settlement', () => {
     expect(printed[1]).toMatch(/^FNF: 0 row\(s\) written/)
   })
 })
+
+describe('FNF\'s page, filtered by when the document was uploaded', () => {
+  let agent: Awaited<ReturnType<typeof signIn>>
+  let fnfTypeId = 0
+  let received = 0
+  let awaited = 0
+
+  beforeAll(async () => {
+    await ensureSchema()
+    await resetData()
+    agent = await signIn(app(), await createUser('admin.fnfrange', 'ADMIN'))
+    const type = await (await createRequest()).query<{ DocumentTypeId: number }>(
+      "SELECT DocumentTypeId FROM dbo.DocumentTypes WHERE DocumentCode = 'FNF'",
+    )
+    fnfTypeId = type.recordset[0]?.DocumentTypeId ?? 0
+
+    // Two employees with FNF marked required: one has sent it today, one not.
+    for (const code of ['RNG1', 'RNG2']) {
+      const created = await agent
+        .post('/api/employees')
+        .send({ employeeCode: code, employeeName: 'Ravi Kumar', joiningDate: JOINED })
+      const employeeId = created.body.employee.employeeId as number
+      const row = await (await createRequest())
+        .input('employeeId', employeeId)
+        .input('typeId', fnfTypeId)
+        .query<{ DocumentId: number }>(`SELECT DocumentId FROM dbo.EmployeeDocuments
+            WHERE EmployeeId = @employeeId AND DocumentTypeId = @typeId AND IsActive = 1`)
+      const documentId = row.recordset[0]?.DocumentId as number
+      if (code === 'RNG1') {
+        received = employeeId
+        // Uploading onto the set-aside row marks it required (4fbbd42).
+        const uploaded = await agent
+          .post(`/api/documents/${documentId}/file`)
+          .attach('file', await pdf(), { filename: 'fnf.pdf', contentType: 'application/pdf' })
+        expect(uploaded.status).toBe(200)
+      } else {
+        awaited = employeeId
+        await (await createRequest())
+          .input('documentId', documentId)
+          .query('UPDATE dbo.EmployeeDocuments SET NotRequiredAt = NULL, NotRequiredBy = NULL WHERE DocumentId = @documentId')
+      }
+    }
+  })
+
+  afterAll(async () => {
+    await closeDatabase()
+  })
+
+  const listUrl = (query: string) => `/api/reports/by-document-type/${fnfTypeId}/employees?${query}`
+
+  it('lists what arrived today - and only that, even with outstandingOnly asked for', async () => {
+    const today = todayDateOnly()
+    const response = await agent.get(listUrl(`uploadedFrom=${today}&uploadedTo=${today}&outstandingOnly=true`))
+    expect(response.status).toBe(200)
+    const ids = (response.body.rows as { employeeId: number; receivedAt: string | null }[]).map(
+      (r) => r.employeeId,
+    )
+    expect(ids).toEqual([received])
+    expect(response.body.rows[0].receivedAt).not.toBeNull()
+  })
+
+  it('lists nothing for a day nothing arrived', async () => {
+    const yesterday = addDays(todayDateOnly(), -1)
+    const response = await agent.get(listUrl(`uploadedFrom=${yesterday}&uploadedTo=${yesterday}`))
+    expect(response.status).toBe(200)
+    expect(response.body.rows).toEqual([])
+  })
+
+  it('lists the awaited one again once the range is cleared, with no received date', async () => {
+    const response = await agent.get(listUrl('outstandingOnly=true'))
+    const rows = response.body.rows as { employeeId: number; receivedAt: string | null }[]
+    expect(rows.map((r) => r.employeeId)).toEqual([awaited])
+    expect(rows[0]?.receivedAt).toBeNull()
+  })
+
+  it('gives the spreadsheet and the printed list the same range', async () => {
+    const today = todayDateOnly()
+    const all = await agent.get(
+      `/api/reports/by-document-type/${fnfTypeId}/employees/all?uploadedFrom=${today}&uploadedTo=${today}`,
+    )
+    expect(all.status).toBe(200)
+    expect((all.body.rows as { employeeId: number }[]).map((r) => r.employeeId)).toEqual([received])
+
+    const printed = await agent
+      .get(`/api/reports/by-document-type/${fnfTypeId}/employees/print?uploadedFrom=${today}&uploadedTo=${today}`)
+      .buffer(true)
+      .parse((res, done) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('end', () => done(null, Buffer.concat(chunks)))
+      })
+    expect(printed.status).toBe(200)
+    expect(printed.headers['content-type']).toContain('application/pdf')
+  })
+
+  it('refuses a range that ends before it starts', async () => {
+    const response = await agent.get(listUrl('uploadedFrom=2026-10-30&uploadedTo=2026-10-29'))
+    expect(response.status).toBe(400)
+  })
+})
