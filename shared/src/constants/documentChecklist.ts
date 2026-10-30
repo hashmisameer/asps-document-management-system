@@ -21,10 +21,11 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  * a week, four in twelve days, and the confirmation letter six calendar months
  * after joining. The identity cards and the two statutory forms had none, and
  * were chased by hand; the office asked for dates on them so they are chased
- * like the rest. The one with none is Full and Final Settlement, which is not
- * chased at all - see below.
+ * like the rest. The one with none is FNF, which is not chased at all - see
+ * below.
  *
- * FULL AND FINAL SETTLEMENT (2026-10-30, migration 0041) is a leaver's
+ * FNF - THE FULL AND FINAL SETTLEMENT (2026-10-30, migration 0041; named
+ * 'FNF', as HR calls it, by 0042) is a leaver's
  * document, and it is the one that works differently. It STARTS SET ASIDE on
  * every checklist (startsNotRequired), so nothing counts it until HR marks it
  * required for the employee whose FNF has arrived. And it is COLLECTED AFTER
@@ -42,7 +43,7 @@ import { DEADLINE_UNITS, type DeadlineUnit } from './deadlines.js'
  * the date that applied to it.
  */
 
-/** Full and Final Settlement: the code its report page and its rules are keyed by. */
+/** FNF, the full and final settlement: the code its report page and its rules are keyed by. */
 export const FNF_DOCUMENT_CODE = 'FNF'
 
 export interface ChecklistRule {
@@ -145,7 +146,7 @@ export const DOCUMENT_CHECKLIST: readonly ChecklistRule[] = [
     /* Last. Whatever management holds for somebody who has left: set aside on
        every checklist until it arrives, never dated, never chased. */
     documentCode: FNF_DOCUMENT_CODE,
-    documentName: 'Full and Final Settlement',
+    documentName: 'FNF',
     isMandatory: false,
     deadlineValue: null,
     deadlineUnit: null,

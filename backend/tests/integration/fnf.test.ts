@@ -126,11 +126,11 @@ describe('Full and Final Settlement', () => {
       state: 'all',
       employeeId,
     })
-    expect(list.rows.map((r) => r.documentName)).not.toContain('Full and Final Settlement')
+    expect(list.rows.map((r) => r.documentName)).not.toContain('FNF')
     const byType = await reportRepository.byDocumentType()
     expect(byType.some((r) => r.documentTypeId === fnfTypeId)).toBe(false)
     const pending = await reminderRepository.findPendingDocuments()
-    expect(pending.some((r) => r.documentName === 'Full and Final Settlement')).toBe(false)
+    expect(pending.some((r) => r.documentName === 'FNF')).toBe(false)
   })
 
   it('shows a leaver\'s FNF once marked required and uploaded - and still never chases it', async () => {
@@ -160,7 +160,7 @@ describe('Full and Final Settlement', () => {
       state: 'all',
       employeeId,
     })
-    expect(list.rows.map((r) => r.documentName)).toEqual(['Full and Final Settlement'])
+    expect(list.rows.map((r) => r.documentName)).toEqual(['FNF'])
     const byType = (await reportRepository.byDocumentType()).find(
       (r) => r.documentTypeId === fnfTypeId,
     )

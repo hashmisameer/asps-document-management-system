@@ -92,7 +92,7 @@ describe('the document list', () => {
     )
   })
 
-  it('is the ten the office keeps, Full and Final Settlement last, and nothing else', () => {
+  it('is the ten the office keeps, FNF last, and nothing else', () => {
     expect(types.map((type) => type.documentName)).toEqual([
       'Appointment Letter',
       'Bio Data Form',
@@ -103,7 +103,7 @@ describe('the document list', () => {
       'Payment of Gratuity',
       'Form No. 16',
       'Confirmation Letter',
-      'Full and Final Settlement',
+      'FNF',
     ])
   })
 
