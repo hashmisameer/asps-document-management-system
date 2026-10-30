@@ -188,6 +188,34 @@ describe('Full and Final Settlement', () => {
     expect(outstanding.rows.some((r) => r.employeeId === employeeId)).toBe(false)
   })
 
+  it('uploading onto a set-aside row marks it required - no separate click needed', async () => {
+    // HR has a leaver's FNF in hand and puts it straight in. The file is
+    // evidence it was required after all: the set-aside goes, and the
+    // document shows wherever FNF documents are shown.
+    const employeeId = await employee()
+    await leave(employeeId)
+    const [row] = await fnfRow(employeeId)
+    expect(row?.NotRequiredAt).not.toBeNull()
+
+    const uploaded = await agent
+      .post(`/api/documents/${row?.DocumentId}/file`)
+      .attach('file', await pdf(), { filename: 'fnf.pdf', contentType: 'application/pdf' })
+    expect(uploaded.status).toBe(200)
+
+    const [after] = await fnfRow(employeeId)
+    expect(after).toMatchObject({ NotRequiredAt: null, NotRequiredBy: null })
+    const page = await reportRepository.employeesForDocumentType({
+      documentTypeId: fnfTypeId,
+      outstandingOnly: false,
+      onlyOverdue: false,
+      sortBy: 'employeeName',
+      sortDir: 'asc',
+      page: 1,
+      pageSize: 25,
+    })
+    expect(page.rows.map((r) => r.employeeId)).toContain(employeeId)
+  })
+
   it('never shows a leaver\'s other documents', async () => {
     const employeeId = await employee()
     await leave(employeeId)

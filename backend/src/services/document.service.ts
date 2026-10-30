@@ -412,6 +412,25 @@ export async function uploadFile(
     },
   })
 
+  // The upload took the row off 'not required' (see attachFile). Said as its
+  // own entry, the one 'Mark as required' writes, so the trail of who set it
+  // aside and when it came back reads the same whichever way it came back.
+  if (record.notRequiredAt !== null) {
+    await audit.record({
+      userId: actor.userId,
+      action: AUDIT_ACTIONS.DOCUMENT_MARKED_REQUIRED,
+      entityType: AUDIT_ENTITY_TYPES.DOCUMENT,
+      entityId: documentId,
+      ipAddress: context.ipAddress,
+      metadata: {
+        employeeCode: record.employeeCode,
+        documentName: record.documentName,
+        dueDate: record.dueDate,
+        becauseFileUploaded: true,
+      },
+    })
+  }
+
   // A second entry, on purpose. An override is the event a reviewer looks for,
   // and it should not have to be found by reading the metadata of every upload.
   if (identity.status === 'Overridden') {

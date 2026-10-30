@@ -517,7 +517,9 @@ function ChecklistRow({
                   onChange={handleFile}
                 />
                 <IconButton
-                  label={hasFile ? 'Replace' : 'Upload'}
+                  // Said, because it does more than upload: a file arriving on
+                  // a row set aside marks it required (the server clears it).
+                  label={hasFile ? 'Replace' : notRequired ? 'Upload - this marks it as required' : 'Upload'}
                   icon={hasFile ? <ReplaceIcon /> : <UploadIcon />}
                   busy={upload.isPending}
                   disabled={busy}

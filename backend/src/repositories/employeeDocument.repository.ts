@@ -694,6 +694,13 @@ export interface AttachIdentityCheck {
  * RejectionReason is cleared, because a new file is exactly the answer to a
  * rejection, and CK_EmpDocs_RejectionReason would otherwise leave a stale
  * reason attached to an accepted document.
+ *
+ * And a set-aside is cleared, because a file that has arrived is evidence the
+ * document was required after all - the rule setNotRequired already applies
+ * the other way round, refusing to set aside a row with a file. Left in place,
+ * the file would sit on a row that counts nowhere: a document the office has
+ * and every list denies. In the same statement as the file, so the two can
+ * never disagree.
  */
 export async function attachFile(input: AttachFileInput): Promise<void> {
   const request = await createRequest()
@@ -731,6 +738,8 @@ export async function attachFile(input: AttachFileInput): Promise<void> {
              Status           = @status,
              SignatureStatus  = @signatureStatus,
              RejectionReason  = NULL,
+             NotRequiredAt    = NULL,
+             NotRequiredBy    = NULL,
              UploadedBy       = @uploadedBy,
              UploadedAt       = SYSUTCDATETIME(),
              VerifiedBy       = @verifiedBy,

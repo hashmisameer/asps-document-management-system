@@ -209,6 +209,33 @@ beforeEach(() => {
 })
 
 describe('uploadFile', () => {
+  it('says on the trail that a file arriving on a set-aside row marked it required', async () => {
+    // A file that has arrived is evidence the document was required after all;
+    // attachFile clears the set-aside, and the trail records it as the entry
+    // 'Mark as required' would have written.
+    db.findById.mockResolvedValue(
+      record({ notRequiredAt: '2026-10-01T04:00:00.000Z', notRequiredByName: null }),
+    )
+
+    await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+    const actions = db.insertAudit.mock.calls.map((call) => (call[0] as { action: string }).action)
+    expect(actions).toContain(AUDIT_ACTIONS.DOCUMENT_UPLOADED)
+    expect(db.insertAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AUDIT_ACTIONS.DOCUMENT_MARKED_REQUIRED,
+        metadataJson: expect.stringContaining('"becauseFileUploaded":true'),
+      }),
+    )
+  })
+
+  it('records nothing about being required when the row was never set aside', async () => {
+    await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
+
+    const actions = db.insertAudit.mock.calls.map((call) => (call[0] as { action: string }).action)
+    expect(actions).not.toContain(AUDIT_ACTIONS.DOCUMENT_MARKED_REQUIRED)
+  })
+
   it('stores the file and moves a pending document to Uploaded', async () => {
     await documentService.uploadFile(5, uploadedFile(), uploadInput, hr, context)
 
