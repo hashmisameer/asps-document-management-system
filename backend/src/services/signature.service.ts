@@ -30,6 +30,7 @@ import * as employeeDocumentRepository from '../repositories/employeeDocument.re
 import * as employeeRepository from '../repositories/employee.repository.js'
 import * as employeeSignatureRepository from '../repositories/employeeSignature.repository.js'
 import * as signaturePlacementRepository from '../repositories/signaturePlacement.repository.js'
+import * as userRepository from '../repositories/user.repository.js'
 import * as userSignatureRepository from '../repositories/userSignature.repository.js'
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js'
 import * as audit from './audit.service.js'
@@ -368,6 +369,110 @@ export async function checkPlacements(
   )
 }
 
+/** How close two rectangles must be to be the same box: well under a pixel. */
+const SAME_BOX = 1e-6
+
+/** Whose HR signature a save's HR boxes carry, and whose name it replaced. */
+interface HrSigning {
+  signerUserId: number
+  signature: Awaited<ReturnType<typeof userSignatureRepository.findActiveByUser>>
+  replaced: { userId: number; name: string | null; why: 'moved' | 'mixed' | 'unavailable' }[]
+}
+
+/**
+ * The HR boxes of an editor save, and whose they are.
+ *
+ * KEEPS THE ORIGINAL SIGNER on a box nobody moved, the way stamping on upload
+ * keeps a kept box's signer: the document says who authorised it, and
+ * re-saving an unchanged box must not rewrite that to whoever opened it today.
+ * A box is unmoved when it sits exactly where a saved HR placement sits - same
+ * page, same rectangle - and each saved placement answers for one box only.
+ * Decided from what is saved, never from anything the request says.
+ *
+ * The stamp paints ONE HR image per document, so the boxes keep their signer
+ * only when they all have the same one: every HR box unmoved, every one a
+ * colleague's, the same colleague, still active and still with a signature on
+ * file. Then the image is theirs and so is the name.
+ *
+ * OTHERWISE THE SAVER SIGNS EVERY HR BOX, as before - and never refuses. A
+ * colleague whose boxes were all moved has had them re-placed by the saver
+ * ('moved'); a save that mixes a colleague's untouched box with another
+ * signer's cannot carry two images ('mixed'); a colleague who has left or has
+ * no signature now cannot sign again ('unavailable'). Every saved HR signer
+ * whose name comes off the document is returned for the audit trail, so a
+ * change of name is never silent. A document must not become uneditable
+ * because somebody left.
+ */
+async function hrSigning(
+  placements: SavePlacementsInput['placements'],
+  saved: readonly SignaturePlacement[],
+  actor: AuthUser,
+): Promise<HrSigning> {
+  const savedHr = saved.filter((row) => row.signerRole === SIGNER_ROLES.AUTHORISER)
+  const taken = new Set<number>()
+  const kept = placements
+    .filter((box) => (box.signerRole ?? SIGNER_ROLES.EMPLOYEE) === SIGNER_ROLES.AUTHORISER)
+    .map((box) => {
+      const at = savedHr.findIndex(
+        (row, index) =>
+          !taken.has(index) &&
+          row.pageNumber === box.pageNumber &&
+          Math.abs(row.x - box.x) < SAME_BOX &&
+          Math.abs(row.y - box.y) < SAME_BOX &&
+          Math.abs(row.width - box.width) < SAME_BOX &&
+          Math.abs(row.height - box.height) < SAME_BOX,
+      )
+      if (at < 0) return null
+      taken.add(at)
+      return savedHr[at] ?? null
+    })
+
+  // Colleagues whose untouched boxes are in this save.
+  const others = new Map<number, string | null>()
+  for (const row of kept) {
+    if (row?.signerUserId && row.signerUserId !== actor.userId) {
+      others.set(row.signerUserId, row.signerName)
+    }
+  }
+
+  // Every HR box, without exception, one colleague's: a box of the saver's
+  // own among them is a second signer, and that is 'mixed'.
+  const [colleague] = [...others.keys()]
+  if (others.size === 1 && kept.every((row) => row?.signerUserId === colleague)) {
+    const signerUserId = colleague as number
+    const user = await userRepository.findById(signerUserId)
+    const signature =
+      user && user.isActive ? await userSignatureRepository.findActiveByUser(signerUserId) : null
+    if (signature) return { signerUserId, signature, replaced: [] }
+    return {
+      signerUserId: actor.userId,
+      signature: await userSignatureRepository.findActiveByUser(actor.userId),
+      replaced: replacedBy(savedHr, actor, () => 'unavailable'),
+    }
+  }
+
+  return {
+    signerUserId: actor.userId,
+    signature: await userSignatureRepository.findActiveByUser(actor.userId),
+    replaced: replacedBy(savedHr, actor, (userId) => (others.has(userId) ? 'mixed' : 'moved')),
+  }
+}
+
+/** Every saved HR signer but the saver, once each, with why their name came off. */
+function replacedBy(
+  savedHr: readonly SignaturePlacement[],
+  actor: AuthUser,
+  why: (userId: number) => HrSigning['replaced'][number]['why'],
+): HrSigning['replaced'] {
+  const seen = new Map<number, string | null>()
+  for (const row of savedHr) {
+    if (row.signerUserId && row.signerUserId !== actor.userId) {
+      seen.set(row.signerUserId, row.signerName)
+    }
+  }
+  return [...seen.entries()].map(([userId, name]) => ({ userId, name, why: why(userId) }))
+}
+
 /**
  * Saves the complete set of placements and regenerates the signed document.
  *
@@ -442,12 +547,15 @@ export async function savePlacements(
     )
   }
 
-  // The authorising signature is always the SAVER'S own, never one named by the
-  // request: this mark is what says who signed the document off, so nobody gets
-  // to put a colleague's on it.
-  const authoriserSignature = roles.has(SIGNER_ROLES.AUTHORISER)
-    ? await userSignatureRepository.findActiveByUser(actor.userId)
+  // Whose HR signature the HR boxes carry. Never one named by the request:
+  // this mark is what says who signed the document off, so nobody gets to put
+  // a colleague's on it. It is the SAVER'S own - except where every HR box is
+  // exactly where a colleague already signed it, untouched, in which case the
+  // document still says they authorised it. See hrSigning.
+  const hr = roles.has(SIGNER_ROLES.AUTHORISER)
+    ? await hrSigning(input.placements, saved, actor)
     : null
+  const authoriserSignature = hr?.signature ?? null
   if (roles.has(SIGNER_ROLES.AUTHORISER) && !authoriserSignature) {
     throw new ConflictError(
       'You have no signature on file. Add yours on the signature pad before signing a document off.',
@@ -518,6 +626,11 @@ export async function savePlacements(
       method: placement.method,
       detectionMethod: placement.detectionMethod,
       confidence: placement.confidence ?? null,
+      // Every HR box is one person's: the colleague whose unmoved boxes these
+      // are, or the saver. applyPlacements records it on the row.
+      ...((placement.signerRole ?? SIGNER_ROLES.EMPLOYEE) === SIGNER_ROLES.AUTHORISER && hr
+        ? { signerUserId: hr.signerUserId }
+        : {}),
     })),
     signatures,
     nextStatus: signed ? SIGNATURE_STATUS.ADDED : document.signatureStatus,
@@ -528,6 +641,11 @@ export async function savePlacements(
     // proposed, or moved what detection proposed before accepting it.
     auditAction: placementAction(input),
     auditMetadata: {
+      // Whose name the HR boxes carry when it is not the saver's, and whose
+      // name was replaced by the saver's and why - so 'who authorised this'
+      // can be answered after a re-save, and a change of name is never silent.
+      ...(hr && hr.signerUserId !== actor.userId ? { hrSignedAs: hr.signerUserId } : {}),
+      ...(hr && hr.replaced.length > 0 ? { hrSignerReplaced: hr.replaced } : {}),
       // Boxes that already had something in them and were stamped anyway,
       // with what was measured: the trail can answer 'why is there a
       // signature on top of a signature' with 'HR saw 6.1% ink and said so'.

@@ -1028,6 +1028,71 @@ describe('a template with two boxes of one role, end to end', () => {
     expect(await placementsOf(documentId)).toEqual(before)
     expect(await processedFileOf(documentId)).toEqual(fileBefore)
   })
+
+  it('keeps the HR signer through a colleague’s unchanged re-save, and re-signs a moved box', async () => {
+    const { documentId } = await stampedEsic()
+
+    // A second HR user, with their own signature on file, opens the form.
+    const other = await createUser('hr.second', 'HR')
+    const otherAgent = await signIn(app(), other)
+    const enrolled = await otherAgent
+      .post('/api/me/signature')
+      .field('capture', 'Uploaded')
+      .attach('file', signaturePng(), { filename: 'second.png', contentType: 'image/png' })
+    expect(enrolled.status).toBe(200)
+
+    const loaded = await otherAgent.get(`/api/documents/${documentId}/placements`)
+    const asSaved = (loaded.body.placements as Record<string, unknown>[]).map((p) => ({
+      pageNumber: p.pageNumber,
+      x: p.x,
+      y: p.y,
+      width: p.width,
+      height: p.height,
+      pageRotation: p.pageRotation,
+      signerRole: p.signerRole,
+      method: 'Manual',
+      detectionMethod: 'Manual',
+      confidence: null,
+    }))
+    const hrSigners = async () => {
+      const result = await (await createRequest()).query<{ SignerUserId: number }>(
+        `SELECT SignerUserId FROM dbo.SignaturePlacements
+         WHERE DocumentId = ${documentId} AND SignerRole = 'Authoriser'
+         ORDER BY SignaturePlacementId`,
+      )
+      return result.recordset.map((row) => row.SignerUserId)
+    }
+
+    // Saved unchanged: both HR boxes still say the first HR user authorised it.
+    const resaved = await otherAgent
+      .put(`/api/documents/${documentId}/placements`)
+      .send({ placements: asSaved, acknowledgeOccupied: false })
+    expect(resaved.status).toBe(200)
+    expect(await hrSigners()).toEqual([hr.userId, hr.userId])
+
+    // One HR box moved: the saver signs every HR box, and the trail says whose
+    // name came off and why.
+    let moved = false
+    const oneMoved = asSaved.map((p) => {
+      if (moved || p.signerRole !== 'Authoriser') return p
+      moved = true
+      return { ...p, y: (p.y as number) + 0.02 }
+    })
+    const changed = await otherAgent
+      .put(`/api/documents/${documentId}/placements`)
+      .send({ placements: oneMoved, acknowledgeOccupied: true })
+    expect(changed.status).toBe(200)
+    expect(await hrSigners()).toEqual([other.userId, other.userId])
+
+    const audit = await (await createRequest()).query<{ Metadata: string }>(
+      `SELECT TOP 1 Metadata FROM dbo.AuditLogs
+       WHERE EntityId = '${documentId}' AND Action = 'SIGNATURE_PLACED_MANUALLY'
+       ORDER BY AuditLogId DESC`,
+    )
+    expect(JSON.parse(audit.recordset[0]?.Metadata ?? '{}')).toMatchObject({
+      hrSignerReplaced: [{ userId: hr.userId, why: 'mixed' }],
+    })
+  })
 })
 
 /** The signed copy's path and bytes on disk, to show a run did not repaint it. */

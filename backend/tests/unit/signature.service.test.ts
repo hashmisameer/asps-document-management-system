@@ -41,6 +41,7 @@ const db = vi.hoisted(() => ({
   redecideForEmployee: vi.fn(),
   listTemplate: vi.fn(),
   findActiveUserSignature: vi.fn(),
+  findUser: vi.fn(),
 }))
 
 vi.mock('../../src/database/pool.js', () => ({
@@ -73,6 +74,10 @@ vi.mock('../../src/repositories/employee.repository.js', () => ({
 vi.mock('../../src/repositories/employeeSignature.repository.js', () => ({
   findActiveByEmployee: db.findActiveSignature,
   replaceActive: db.replaceActiveSignature,
+}))
+
+vi.mock('../../src/repositories/user.repository.js', () => ({
+  findById: db.findUser,
 }))
 
 vi.mock('../../src/repositories/userSignature.repository.js', () => ({
@@ -229,6 +234,7 @@ beforeEach(() => {
   db.findDocument.mockResolvedValue(documentRecord)
   db.listTemplate.mockResolvedValue([])
   db.listPlacements.mockResolvedValue([])
+  db.findUser.mockResolvedValue(null)
   db.findActiveUserSignature.mockResolvedValue({
     relativePath: 'user-signatures/3/stamp.png',
     mimeType: 'image/png',
@@ -1020,5 +1026,191 @@ describe('listPlacementsWithLimits', () => {
       { pageNumber: 1, signerRole: 'Authoriser', max: 2 },
       { pageNumber: 1, signerRole: 'Employee', max: 1 },
     ])
+  })
+})
+
+/**
+ * Whose name an HR box carries after an editor save.
+ *
+ * The document says who authorised it, and re-saving an unchanged box must not
+ * rewrite that to whoever opened it today. A box nobody moved keeps its signer
+ * - when every HR box is that one colleague's and they can still sign. Anything
+ * else is re-signed by the saver, and never refused; whoever's name comes off
+ * is named in the audit trail, with why.
+ */
+describe('savePlacements: the HR signer of a box nobody moved', () => {
+  const COLLEAGUE = 9
+  const hrBox = (x: number) => ({ ...placement, signerRole: 'Authoriser' as const, x })
+  const savedHr = (x: number, signerUserId: number, signerName: string) => ({
+    ...hrBox(x),
+    signaturePlacementId: 100 + Math.round(x * 10),
+    documentId: 5,
+    employeeId: 42,
+    signerUserId,
+    signerName,
+    isApplied: true,
+  })
+  const colleagueSignature = { relativePath: 'user-signatures/9/stamp.png', mimeType: 'image/png' }
+  const saverSignature = { relativePath: 'user-signatures/3/stamp.png', mimeType: 'image/png' }
+
+  /** The HR signer recorded on each saved HR row, in order. */
+  const recordedHrSigners = () => {
+    const rows = db.replacePlacements.mock.calls.at(-1)?.[2] as {
+      signerRole: string
+      signerUserId: number | null
+    }[]
+    return rows.filter((row) => row.signerRole === 'Authoriser').map((row) => row.signerUserId)
+  }
+
+  /** The placement audit entry's metadata. */
+  const placedAudit = () => {
+    const entry = db.insertAudit.mock.calls
+      .map((call) => call[0] as { action: string; metadataJson: string })
+      .find((audit) => audit.action === AUDIT_ACTIONS.SIGNATURE_PLACED_MANUALLY)
+    return JSON.parse(entry?.metadataJson ?? '{}') as Record<string, unknown>
+  }
+
+  beforeEach(() => {
+    // Two HR boxes on the page, as on the ESIC form.
+    db.listTemplate.mockResolvedValue([
+      { signerRole: 'Authoriser', pageNumber: 1, variant: { pageCount: 2, widthPt: 595, heightPt: 842 } },
+      { signerRole: 'Authoriser', pageNumber: 1, variant: { pageCount: 2, widthPt: 595, heightPt: 842 } },
+    ])
+    db.findUser.mockImplementation(async (userId: number) =>
+      userId === COLLEAGUE ? { userId, isActive: true } : null,
+    )
+    db.findActiveUserSignature.mockImplementation(async (userId: number) =>
+      userId === COLLEAGUE ? colleagueSignature : userId === hr.userId ? saverSignature : null,
+    )
+  })
+
+  it('keeps a colleague’s name, and their image, on a box nobody moved', async () => {
+    db.listPlacements.mockResolvedValue([savedHr(0.6, COLLEAGUE, 'Other HR')])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [placement, hrBox(0.6)] },
+      hr,
+      context,
+    )
+
+    expect(recordedHrSigners()).toEqual([COLLEAGUE])
+    expect(db.readStoredFile).toHaveBeenCalledWith('user-signatures/9/stamp.png')
+    expect(db.readStoredFile).not.toHaveBeenCalledWith('user-signatures/3/stamp.png')
+    expect(placedAudit()).toMatchObject({ hrSignedAs: COLLEAGUE })
+    expect(placedAudit()).not.toHaveProperty('hrSignerReplaced')
+  })
+
+  it('keeps it on both of the ESIC form’s HR boxes when both are the colleague’s', async () => {
+    db.listPlacements.mockResolvedValue([
+      savedHr(0.1, COLLEAGUE, 'Other HR'),
+      savedHr(0.6, COLLEAGUE, 'Other HR'),
+    ])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [hrBox(0.1), hrBox(0.6)] },
+      hr,
+      context,
+    )
+
+    expect(recordedHrSigners()).toEqual([COLLEAGUE, COLLEAGUE])
+  })
+
+  it('re-signs a box that was moved as the saver, and names whose it was', async () => {
+    db.listPlacements.mockResolvedValue([savedHr(0.6, COLLEAGUE, 'Other HR')])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [hrBox(0.65)] },
+      hr,
+      context,
+    )
+
+    expect(recordedHrSigners()).toEqual([hr.userId])
+    expect(placedAudit()).toMatchObject({
+      hrSignerReplaced: [{ userId: COLLEAGUE, name: 'Other HR', why: 'moved' }],
+    })
+    expect(placedAudit()).not.toHaveProperty('hrSignedAs')
+  })
+
+  it('re-signs every HR box as the saver when the colleague’s sits beside a new one', async () => {
+    db.listPlacements.mockResolvedValue([savedHr(0.6, COLLEAGUE, 'Other HR')])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [hrBox(0.6), hrBox(0.1)] },
+      hr,
+      context,
+    )
+
+    // One HR image per document: two signers cannot both be painted.
+    expect(recordedHrSigners()).toEqual([hr.userId, hr.userId])
+    expect(placedAudit()).toMatchObject({
+      hrSignerReplaced: [{ userId: COLLEAGUE, name: 'Other HR', why: 'mixed' }],
+    })
+  })
+
+  it('never puts the colleague’s name on a box the saver signed themselves', async () => {
+    db.listPlacements.mockResolvedValue([
+      savedHr(0.1, hr.userId, 'Priya Sharma'),
+      savedHr(0.6, COLLEAGUE, 'Other HR'),
+    ])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [hrBox(0.1), hrBox(0.6)] },
+      hr,
+      context,
+    )
+
+    expect(recordedHrSigners()).toEqual([hr.userId, hr.userId])
+    expect(placedAudit()).toMatchObject({
+      hrSignerReplaced: [{ userId: COLLEAGUE, name: 'Other HR', why: 'mixed' }],
+    })
+  })
+
+  it.each([
+    ['whose account is gone', () => db.findUser.mockResolvedValue(null)],
+    ['whose account is deactivated', () => db.findUser.mockResolvedValue({ userId: 9, isActive: false })],
+    [
+      'who has no signature now',
+      () =>
+        db.findActiveUserSignature.mockImplementation(async (userId: number) =>
+          userId === hr.userId ? saverSignature : null,
+        ),
+    ],
+  ])('re-signs as the saver, never refusing, for a colleague %s', async (_why, arrange) => {
+    arrange()
+    db.listPlacements.mockResolvedValue([savedHr(0.6, COLLEAGUE, 'Other HR')])
+
+    await expect(
+      signatureService.savePlacements(
+        5,
+        { acknowledgeOccupied: false, placements: [placement, hrBox(0.6)] },
+        hr,
+        context,
+      ),
+    ).resolves.toBeDefined()
+
+    expect(recordedHrSigners()).toEqual([hr.userId])
+    expect(placedAudit()).toMatchObject({
+      hrSignerReplaced: [{ userId: COLLEAGUE, name: 'Other HR', why: 'unavailable' }],
+    })
+  })
+
+  it('says nothing about a signer when the box was the saver’s own', async () => {
+    db.listPlacements.mockResolvedValue([savedHr(0.6, hr.userId, 'Priya Sharma')])
+
+    await signatureService.savePlacements(
+      5,
+      { acknowledgeOccupied: false, placements: [hrBox(0.6)] },
+      hr,
+      context,
+    )
+
+    expect(recordedHrSigners()).toEqual([hr.userId])
+    expect(placedAudit()).not.toHaveProperty('hrSignedAs')
+    expect(placedAudit()).not.toHaveProperty('hrSignerReplaced')
   })
 })
