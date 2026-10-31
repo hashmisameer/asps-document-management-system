@@ -110,11 +110,15 @@ function readRect(text: string): NormalizedRect {
 /* What is read                                                                */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A PF document to read. No page count here: EmployeeDocuments.PageCount has
+ * never been populated (NULL on every row), and deciding Form 2 from Form 11
+ * by it put every form in the one-page pile. The count is read from the PDF.
+ */
 interface PfDocument {
   documentId: number
   originalFilePath: string
   mimeType: string | null
-  pageCount: number | null
 }
 
 async function pfTypeId(): Promise<number> {
@@ -134,9 +138,8 @@ async function pfDocuments(typeId: number, limit: number | null, only: number | 
     DocumentId: number
     OriginalFilePath: string
     MimeType: string | null
-    PageCount: number | null
   }>(`
-      SELECT d.DocumentId, d.OriginalFilePath, d.MimeType, d.PageCount
+      SELECT d.DocumentId, d.OriginalFilePath, d.MimeType
       FROM   dbo.EmployeeDocuments AS d
       WHERE  d.DocumentTypeId = @typeId
         AND  d.IsActive = 1
@@ -147,7 +150,6 @@ async function pfDocuments(typeId: number, limit: number | null, only: number | 
     documentId: row.DocumentId,
     originalFilePath: row.OriginalFilePath,
     mimeType: row.MimeType,
-    pageCount: row.PageCount,
   }))
   return limit === null ? rows : rows.slice(0, limit)
 }
@@ -159,7 +161,12 @@ interface StampedRect {
   lastAt: Date
 }
 
-/** Every distinct page-1 employee rectangle DMS stamped on a two-page PF form. */
+/**
+ * Every distinct page-1 employee rectangle DMS stamped on a PF form. Not
+ * filtered by PageCount, which is never populated; it does not need to be -
+ * Form 11's page-1 employee box is one MMC fills, never stamped, so every
+ * page-1 employee template placement on a PF form is a Form 2 one.
+ */
 async function stampedPageOneRects(typeId: number): Promise<StampedRect[]> {
   const result = await (await createRequest()).input('typeId', sql.Int, typeId).query<{
     X: number
@@ -177,7 +184,6 @@ async function stampedPageOneRects(typeId: number): Promise<StampedRect[]> {
       FROM   dbo.SignaturePlacements AS p
       INNER JOIN dbo.EmployeeDocuments AS d ON d.DocumentId = p.DocumentId
       WHERE  d.DocumentTypeId = @typeId
-        AND  d.PageCount = 2
         AND  p.PageNumber = 1
         AND  p.SignerRole = 'Employee'
         AND  p.Method = 'Automatic'
@@ -265,11 +271,16 @@ interface PageRead {
   grey: Awaited<ReturnType<typeof toGrey>>
 }
 
-async function readPages(file: Buffer): Promise<[PageRead, PageRead]> {
+/**
+ * The PDF's own page count, and its first two pages read for measuring - only
+ * as many as it has. The count is the PDF's, never a column.
+ */
+async function readPages(file: Buffer): Promise<{ pageCount: number; pages: PageRead[] }> {
   const pdf = await openPdf(file)
   try {
+    const pageCount = pdf.numPages
     const pages: PageRead[] = []
-    for (const pageNumber of [1, 2]) {
+    for (const pageNumber of [1, 2].filter((n) => n <= pageCount)) {
       const page = await pdf.getPage(pageNumber)
       const all = await imagesOnPage(page)
       const background = all.filter((image) => image.pageFraction >= settings.fullPageMin)
@@ -280,7 +291,7 @@ async function readPages(file: Buffer): Promise<[PageRead, PageRead]> {
         grey: await toGrey(await renderPage(page)),
       })
     }
-    return pages as [PageRead, PageRead]
+    return { pageCount, pages }
   } finally {
     await pdf.destroy()
   }
@@ -334,8 +345,12 @@ async function detail(
   boxes: { oldP1: NormalizedRect | null; nowP1: NormalizedRect; p2: NormalizedRect },
 ) {
   const file = await storage.readStoredFile(document.originalFilePath)
-  const pages = await readPages(file)
-  console.log(`#${document.documentId}  ${document.pageCount} page(s)  ${document.mimeType ?? '?'}  (the ORIGINAL upload)`)
+  const { pageCount, pages } = await readPages(file)
+  console.log(
+    `#${document.documentId}  ${pageCount} page(s), read from the PDF  ${document.mimeType ?? '?'}  ` +
+      `(the ORIGINAL upload)` +
+      (pageCount === 2 ? '' : `\n  Not a two-page form (Form 2): the survey does not measure it.`),
+  )
   const show = (label: string, page: PageRead, box: NormalizedRect) => {
     const r = measure(box, page.grey, page.images)
     const ink = inkFraction(page.grey, box, settings)
@@ -430,7 +445,7 @@ async function main(): Promise<void> {
   const oldP1 = oldFlag ? readRect(oldFlag) : null
 
   say('PF_FORM ink survey - READ-ONLY. Reads each ORIGINAL upload; writes nothing.\n')
-  say('Page-1 employee rectangles DMS has stamped on two-page PF forms (newest write per document),')
+  say('Page-1 employee rectangles DMS has stamped on PF forms (newest write per document),')
   say('for information - none is taken as the old box:')
   if (stampedRects.length === 0) say('  none')
   for (const s of stampedRects) {
@@ -481,7 +496,9 @@ async function main(): Promise<void> {
 
   const stamped = await stampedEmployeePages(typeId)
   const readings: DocumentReading[] = []
-  let onePage = 0
+  // How each document was classified, from its own PDF - every outcome
+  // counted, so a mistake like reading a NULL column as 'one page' shows.
+  const byPages = new Map<number, number>()
   let notPdf = 0
   const unreadable: number[] = []
 
@@ -490,13 +507,12 @@ async function main(): Promise<void> {
       notPdf += 1
       continue
     }
-    if (document.pageCount !== 2) {
-      onePage += 1
-      continue
-    }
     try {
       const file = await storage.readStoredFile(document.originalFilePath)
-      const [one, two] = await readPages(file)
+      const { pageCount, pages: read } = await readPages(file)
+      byPages.set(pageCount, (byPages.get(pageCount) ?? 0) + 1)
+      const [one, two] = read
+      if (pageCount !== 2 || !one || !two) continue
       const pages = stamped.get(document.documentId) ?? new Set<number>()
       readings.push({
         documentId: document.documentId,
@@ -540,9 +556,17 @@ async function main(): Promise<void> {
   }
 
   const listIds = flags.has('ids')
+  const pagesWord = (n: number) => `${n} page${n === 1 ? '' : 's'}`
+  const others = [...byPages.entries()]
+    .filter(([n]) => n !== 1 && n !== 2)
+    .sort((a, b) => a[0] - b[0])
+    .map(([n, count]) => `${count} with ${pagesWord(n)}`)
   console.log(
-    `\n${documents.length} PF_FORM document(s) with a file: ${readings.length} two-page measured, ` +
-      `${onePage} one-page (Form 11) not measured, ${notPdf} not a PDF, ${unreadable.length} unreadable` +
+    `\n${documents.length} PF_FORM document(s) with a file, classified by each PDF's own page count:\n` +
+      `  ${byPages.get(2) ?? 0} with 2 pages (Form 2) - measured\n` +
+      `  ${byPages.get(1) ?? 0} with 1 page (Form 11) - not measured\n` +
+      (others.length > 0 ? `  ${others.join(', ')} - not measured\n` : '') +
+      `  ${notPdf} not a PDF, ${unreadable.length} unreadable` +
       (unreadable.length > 0 ? ` (${unreadable.join(' ')})` : ''),
   )
   const scanned = readings.filter((r) => r.pageKinds.includes('scanned')).length
