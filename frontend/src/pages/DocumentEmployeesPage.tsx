@@ -8,7 +8,7 @@ import { Select } from '../components/ui/Select.js'
 import { ApiError } from '../lib/apiError.js'
 import { downloadXlsx } from '../lib/xlsx.js'
 import { saveBlob } from '../lib/download.js'
-import { FNF_DOCUMENT_CODE } from '@asps-dms/shared'
+import { FNF_DOCUMENT_CODE, tracksOverdue as tracksOverdueRule } from '@asps-dms/shared'
 import { DateField } from '../components/ui/DateField.js'
 import { formatDate, formatDateTime } from '../lib/format.js'
 import { employeeKeys, fetchFacets } from '../features/employees/api.js'
@@ -103,9 +103,11 @@ export function DocumentEmployeesPage() {
     onSuccess: ({ blob, fileName }) => saveBlob(blob, fileName),
   })
 
-  // A document nobody is obliged to send cannot be late. Its rows still list,
-  // because the office asked to see them - they simply never read as overdue.
-  const tracksOverdue = type?.isMandatory ?? true
+  // Whether a missed row is Overdue - the 'Overdue only' box, the days column,
+  // the badge and the Excel export all read this one value. Decided by the
+  // shared rule (a type with a deadline can be late; PF and ESIC do, FNF does
+  // not), never by whether the type is mandatory. On until the type loads.
+  const tracksOverdue = type ? tracksOverdueRule(type) : true
 
   /**
    * The list as a spreadsheet.

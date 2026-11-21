@@ -1,5 +1,5 @@
 import type { PDFFont } from 'pdf-lib'
-import type { AuthUser, PrintDocumentEmployeesQuery } from '@asps-dms/shared'
+import { tracksOverdue, type AuthUser, type PrintDocumentEmployeesQuery } from '@asps-dms/shared'
 import * as documentTypeRepository from '../repositories/documentType.repository.js'
 import * as reportRepository from '../repositories/report.repository.js'
 import type { DocumentEmployeeRow } from '../repositories/report.repository.js'
@@ -49,7 +49,11 @@ const MARGIN = 36
 
 export interface DocumentListReport {
   documentName: string
-  /** A type nobody is obliged to send cannot be late, so its rows never read as overdue. */
+  /**
+   * Whether this type's rows can read as overdue - the shared tracksOverdue
+   * rule: a type with a deadline can be late (PF and ESIC included); one with
+   * none (FNF) cannot.
+   */
   tracksOverdue: boolean
   rows: readonly DocumentEmployeeRow[]
   filters: PrintDocumentEmployeesQuery
@@ -72,8 +76,9 @@ export function hasUploadRange(filters: PrintDocumentEmployeesQuery): boolean {
 /**
  * The status this list prints for a row.
  *
- * The same reading the screen gives it: a type that is not mandatory has no
- * deadline to miss, so its outstanding rows say Pending however old they are.
+ * The same reading the screen gives it: a type with no deadline (FNF) has
+ * nothing to miss, so its outstanding rows say Pending however old they are.
+ * Whether it has one is the shared tracksOverdue rule, decided by the caller.
  */
 export function rowStatus(row: DocumentEmployeeRow, tracksOverdue: boolean): string {
   if (row.state === 'Received') return 'Received'
@@ -411,7 +416,8 @@ export async function printDocumentList(
   const pdf = await renderDocumentList(
     {
       documentName: type.documentName,
-      tracksOverdue: type.isMandatory,
+      // The shared rule, as the screen and its Excel export use it.
+      tracksOverdue: tracksOverdue(type),
       rows,
       filters,
       includesLeavers: type.collectedAfterLeaving,

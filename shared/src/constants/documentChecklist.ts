@@ -181,3 +181,24 @@ export const CHECKLIST_DOCUMENT_CODES: readonly string[] = DOCUMENT_CHECKLIST.ma
 export const COLLECTED_AFTER_LEAVING_CODES: readonly string[] = DOCUMENT_CHECKLIST.filter(
   (rule) => rule.collectedAfterLeaving === true,
 ).map((rule) => rule.documentCode)
+
+/**
+ * Whether a document of this type can be LATE - so whether its lists offer
+ * 'Overdue only', show days overdue, and call a missed row Overdue.
+ *
+ * THE DEADLINE DECIDES, NOT WHETHER IT IS MANDATORY. PF and ESIC are optional
+ * and still carry a 12-day deadline, and a date that has passed is overdue
+ * whether or not the document is compulsory; the dashboard, the By-document
+ * table and the daily reminder already count it that way. A type with no
+ * deadline at all - FNF - has nothing to be late against.
+ *
+ * THE ONLY PLACE THIS IS DECIDED: the report page, its Excel export and its
+ * printed list all ask here, so the three cannot disagree.
+ *
+ * A number, not 'not null': if deadlineValue ever failed to reach the caller
+ * the value would be undefined, and the integration test on GET
+ * /api/document-types fails before that ships.
+ */
+export function tracksOverdue(type: { deadlineValue: number | null }): boolean {
+  return typeof type.deadlineValue === 'number'
+}
